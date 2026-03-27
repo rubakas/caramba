@@ -37,4 +37,6 @@
 node_modules
 vendor/bundle
 build
+!bin/build
 dist
+.build-commit
