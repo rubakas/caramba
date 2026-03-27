@@ -1,18 +1,27 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <title>Series Tracker</title>
+    <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
     <link rel="icon" href="/icon.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <%= stylesheet_link_tag :app %>
   </head>
   <body>
     <% if notice.present? %>
-      <div class="flash-notice"><%= notice %></div>
+      <div class="toast" id="toast"><%= notice %></div>
     <% end %>
     <%= yield %>
+    <script>
+      var toast = document.getElementById('toast');
+      if (toast) setTimeout(function() { toast.classList.add('fade-out'); }, 3000);
+    </script>
   </body>
 </html>

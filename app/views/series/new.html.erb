@@ -1,38 +1,36 @@
-<div class="header">
-  <a href="<%= root_path %>" class="header-back">&larr;</a>
-  <h1>ADD SERIES</h1>
-  <nav class="header-nav">
-    <a href="<%= root_path %>" class="nav-link">Browse</a>
-    <a href="<%= history_path %>" class="nav-link">History</a>
-  </nav>
-</div>
-<div class="add-series-page">
-  <div class="add-series-form-container">
-    <h2>Add a New Series</h2>
-    <p class="add-series-help">
-      Point to a folder that contains season sub-folders with MKV files.<br>
+<nav class="topnav">
+  <a href="<%= root_path %>" class="topnav-brand">Series Tracker</a>
+  <div class="topnav-links">
+    <a href="<%= root_path %>" class="topnav-link">Library</a>
+    <a href="<%= history_path %>" class="topnav-link">History</a>
+  </div>
+</nav>
+<main class="add-main">
+  <div class="add-container">
+    <h1 class="page-title">Add Series</h1>
+    <p class="add-help">
+      Point to a folder that contains MKV files with SxxExx naming.<br>
       The series name will be auto-detected from the folder name.
     </p>
-    <p class="add-series-example">
-      Example: <code>/Volumes/Mac Backup/Breaking.Bad.2008.1080p.BluRay.x265</code>
+    <p class="add-example">
+      e.g. <code>/Volumes/Backup/Breaking.Bad.2008.1080p.BluRay.x265</code>
     </p>
     <% if flash[:alert] %>
-      <div class="flash-alert"><%= flash[:alert] %></div>
+      <div class="alert"><%= flash[:alert] %></div>
     <% end %>
-    <%= form_with url: series_index_path, method: :post, class: "add-series-form" do |f| %>
-      <div class="form-group">
+    <%= form_with url: series_index_path, method: :post, class: "add-form" do |f| %>
+      <div class="field">
         <label for="media_path">Media Folder Path</label>
         <input type="text" name="media_path" id="media_path"
                value="<%= params[:media_path] %>"
                placeholder="/path/to/Show.Name.Year..."
-               class="form-input"
-               autofocus
-               required>
+               class="field-input"
+               autofocus required>
       </div>
-      <div class="form-actions">
-        <button type="submit" class="btn-add-series">Scan & Add Series</button>
-        <a href="<%= root_path %>" class="btn-cancel">Cancel</a>
+      <div class="add-actions">
+        <button type="submit" class="btn-primary">Scan & Add</button>
+        <a href="<%= root_path %>" class="btn-ghost">Cancel</a>
       </div>
     <% end %>
   </div>
-</div>
+</main>

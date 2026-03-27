@@ -1,60 +1,48 @@
-<div class="header">
-  <a href="<%= root_path %>" class="header-back">&larr;</a>
-  <h1>SERIES TRACKER</h1>
-  <nav class="header-nav">
-    <a href="<%= root_path %>" class="nav-link">Browse</a>
-    <a href="<%= history_path %>" class="nav-link active">History</a>
-  </nav>
-</div>
-<div class="history-page">
-  <div class="history-stats">
-    <div class="history-stat">
-      <div class="history-stat-value"><%= @total_series %></div>
-      <div class="history-stat-label">Series</div>
-    </div>
-    <div class="history-stat">
-      <div class="history-stat-value"><%= @total_episodes %></div>
-      <div class="history-stat-label">Episodes Played</div>
-    </div>
-    <div class="history-stat">
-      <div class="history-stat-value"><%= (@total_time / 3600.0).round(1) %></div>
-      <div class="history-stat-label">Hours Watched</div>
-    </div>
-    <div class="history-stat">
-      <div class="history-stat-value"><%= @histories.count %></div>
-      <div class="history-stat-label">Total Sessions</div>
-    </div>
+<nav class="topnav">
+  <a href="<%= root_path %>" class="topnav-brand">Series Tracker</a>
+  <div class="topnav-links">
+    <a href="<%= root_path %>" class="topnav-link">Library</a>
+    <a href="<%= history_path %>" class="topnav-link active">History</a>
+  </div>
+</nav>
+<main class="history-main">
+  <h1 class="page-title">Watch History</h1>
+  <div class="stats-row" style="margin-bottom:40px">
+    <div class="stat"><span class="stat-val"><%= @total_series %></span><span class="stat-lbl">Series</span></div>
+    <div class="stat"><span class="stat-val"><%= @total_episodes %></span><span class="stat-lbl">Episodes</span></div>
+    <div class="stat"><span class="stat-val"><%= (@total_time / 3600.0).round(1) %></span><span class="stat-lbl">Hours</span></div>
+    <div class="stat"><span class="stat-val"><%= @histories.count %></span><span class="stat-lbl">Sessions</span></div>
   </div>
   <% if @histories.empty? %>
-    <div class="history-empty">
+    <div class="empty-hero" style="padding:40px 0">
       <h2>No watch history yet</h2>
       <p>Start watching episodes and your history will appear here.</p>
-      <a href="<%= root_path %>" class="btn-back">Browse Series</a>
+      <a href="<%= root_path %>" class="btn-primary">Browse Library</a>
     </div>
   <% else %>
     <% if @today.any? %>
-      <div class="history-section">
+      <section class="history-section">
         <h2 class="history-section-title">Today</h2>
         <% @today.each do |h| %>
           <%= render partial: "history/entry", locals: { h: h } %>
         <% end %>
-      </div>
+      </section>
     <% end %>
     <% if @this_week.any? %>
-      <div class="history-section">
+      <section class="history-section">
         <h2 class="history-section-title">This Week</h2>
         <% @this_week.each do |h| %>
           <%= render partial: "history/entry", locals: { h: h } %>
         <% end %>
-      </div>
+      </section>
     <% end %>
     <% if @older.any? %>
-      <div class="history-section">
+      <section class="history-section">
         <h2 class="history-section-title">Earlier</h2>
         <% @older.each do |h| %>
           <%= render partial: "history/entry", locals: { h: h } %>
         <% end %>
-      </div>
+      </section>
     <% end %>
   <% end %>
-</div>
+</main>
