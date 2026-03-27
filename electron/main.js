@@ -7,13 +7,30 @@ const net = require('net');
 const RAILS_PORT = 4741;
 const RAILS_ENV = 'development';
 
-// In dev mode, Rails root is the project root.
-// In packaged mode, it's inside extraResources/rails.
-function railsRoot() {
+// --- Path helpers ---
+// In dev: project root is one level up from electron/
+// In packaged: everything lives inside Resources/bundle/
+function bundleRoot() {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'rails');
+    return path.join(process.resourcesPath, 'bundle');
+  }
+  return null; // not bundled in dev
+}
+
+function railsRoot() {
+  const bundle = bundleRoot();
+  if (bundle) {
+    return path.join(bundle, 'rails');
   }
   return path.join(__dirname, '..');
+}
+
+function rubyBin() {
+  const bundle = bundleRoot();
+  if (bundle) {
+    return path.join(bundle, 'bin', 'ruby');
+  }
+  return 'ruby'; // use system ruby in dev
 }
 
 let mainWindow = null;
@@ -45,18 +62,48 @@ async function waitForServer(port, timeoutMs = 30000) {
 
 function startRails() {
   const root = railsRoot();
+  const ruby = rubyBin();
+  const bundle = bundleRoot();
+
+  // Build environment
   const env = Object.assign({}, process.env, {
     RAILS_ENV: RAILS_ENV,
     PORT: String(RAILS_PORT),
     RAILS_LOG_TO_STDOUT: '1',
   });
 
-  // Use bin/rails server
+  // In packaged mode, set up paths so the bundled Ruby finds its libs
+  if (bundle) {
+    const rubyVer = '4.0.0';
+    const rubyArch = 'arm64-darwin25';
+
+    // Ruby stdlib search path
+    const stdlibDir = path.join(bundle, 'lib', 'ruby', rubyVer);
+    const archDir = path.join(stdlibDir, rubyArch);
+    env.RUBYLIB = [stdlibDir, archDir].join(':');
+
+    // Default gems (bundler, etc.)
+    const defaultGemsDir = path.join(bundle, 'lib', 'ruby', 'gems', rubyVer);
+    env.GEM_HOME = defaultGemsDir;
+    env.GEM_PATH = [defaultGemsDir, path.join(bundle, 'vendor_bundle', 'ruby', rubyVer)].join(':');
+
+    // Bundler config for vendored gems
+    env.BUNDLE_PATH = path.join(bundle, 'vendor_bundle');
+    env.BUNDLE_WITHOUT = 'development:test';
+
+    // Ensure bundled dylibs are found
+    const dylibPath = path.join(bundle, 'dylib');
+    env.DYLD_LIBRARY_PATH = [dylibPath, path.join(bundle, 'lib'), env.DYLD_LIBRARY_PATH].filter(Boolean).join(':');
+  }
+
+  // Use bin/rails from the Rails app
   const railsBin = path.join(root, 'bin', 'rails');
+  const args = [railsBin, 'server', '-p', String(RAILS_PORT), '-b', '127.0.0.1'];
 
-  console.log(`[Electron] Starting Rails server at ${root} on port ${RAILS_PORT}`);
+  console.log(`[Electron] Starting Rails (${RAILS_ENV}) at ${root} on port ${RAILS_PORT}`);
+  console.log(`[Electron] Ruby: ${ruby}`);
 
-  railsProcess = spawn(railsBin, ['server', '-p', String(RAILS_PORT), '-b', '127.0.0.1'], {
+  railsProcess = spawn(ruby, args, {
     cwd: root,
     env: env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -85,10 +132,8 @@ function startRails() {
 function stopRails() {
   if (!railsProcess) return;
   console.log('[Electron] Stopping Rails server...');
-  // Send SIGTERM; Rails/Puma handles graceful shutdown
   railsProcess.kill('SIGTERM');
 
-  // Force-kill after 5 seconds if still alive
   setTimeout(() => {
     if (railsProcess) {
       console.log('[Electron] Force-killing Rails server');
@@ -131,7 +176,6 @@ function createWindow() {
 // --- App Lifecycle ---
 
 app.on('ready', async () => {
-  // Check if Rails is already running (dev mode with manual server)
   const alreadyRunning = await isPortInUse(RAILS_PORT);
 
   if (alreadyRunning) {

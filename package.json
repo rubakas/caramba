@@ -4,10 +4,9 @@
   "description": "Series Tracker — Apple TV+ style episode tracker",
   "main": "electron/main.js",
   "scripts": {
-    "electron": "electron .",
     "start": "electron .",
-    "pack": "electron-builder --mac",
-    "dist": "electron-builder --mac --publish never"
+    "bundle": "script/bundle-ruby",
+    "dist": "script/bundle-ruby && electron-builder --mac --publish never"
   },
   "build": {
     "appId": "com.cupatea.series-tracker",
@@ -15,24 +14,15 @@
     "mac": {
       "category": "public.app-category.entertainment",
       "target": "dmg",
-      "icon": "public/icon.png"
+      "icon": "public/icon.icns"
     },
     "files": [
-      "electron/**/*",
-      "!node_modules/.cache"
+      "electron/**/*"
     ],
     "extraResources": [
       {
-        "from": ".",
-        "to": "rails",
-        "filter": [
-          "**/*",
-          "!node_modules/**",
-          "!.git/**",
-          "!tmp/**",
-          "!log/**",
-          "!storage/**"
-        ]
+        "from": "build/bundle",
+        "to": "bundle"
       }
     ]
   },

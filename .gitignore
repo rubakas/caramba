@@ -36,3 +36,5 @@
 # Dependencies
 node_modules
 vendor/bundle
+build
+dist
