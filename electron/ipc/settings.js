@@ -22,6 +22,13 @@ function register() {
     syncConfig.setSyncFolder(folder || null)
 
     if (folder) {
+      // If a synced DB already exists in the folder, load it instead of overwriting
+      const syncPath = path.join(folder, 'series_tracker.sqlite3')
+      if (fs.existsSync(syncPath) && fs.statSync(syncPath).size > 0) {
+        dbSync.load()
+        dbSync.startPeriodicSync()
+        return { success: true, message: 'Found existing database in sync folder — loaded it.' }
+      }
       dbSync.dump()
       dbSync.startPeriodicSync()
       return { success: true, message: 'Sync folder set. Database will sync every 30 seconds.' }
