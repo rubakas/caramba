@@ -50,11 +50,21 @@ bin/dev
 bin/build              # Mac + Linux
 bin/build --mac        # Mac only
 bin/build --linux      # Linux only
+bin/build --publish    # Mac + Linux + publish to GitHub Releases
+bin/build --mac --publish  # Mac + publish
 ```
 
 The build script auto-increments the patch version in `package.json` on each new commit. If HEAD matches the last built commit (stored in `.build-commit`), the version stays the same for idempotent rebuilds.
 
 Output goes to `dist/` — look for `.dmg`, `.AppImage`, or `.deb` files.
+
+### Publishing
+
+Pass `--publish` to upload built artifacts to GitHub Releases via the `gh` CLI:
+
+- Creates a new release tagged `vMAJOR.MINOR.PATCH` with the latest commit message as notes
+- If the release already exists (idempotent rebuild), overwrites the assets
+- Requires `gh` to be installed and authenticated (`gh auth login`)
 
 ## Project Structure
 

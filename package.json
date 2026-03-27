@@ -2,6 +2,7 @@
   "name": "caramba",
   "version": "1.0.1",
   "description": "Caramba — Apple TV+ style episode tracker",
+  "author": "Vladyslav <vladyslav@hey.com>",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -18,7 +19,10 @@
       "icon": "public/icon.icns"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "AudioVideo",
       "icon": "public/icon.png"
     },

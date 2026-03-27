@@ -6,9 +6,11 @@
 # The last-built commit hash is stored in .build-commit. If HEAD
 # matches that hash, the version stays the same (idempotent rebuild).
 #
-# Usage: bin/build              # Mac + Linux
-#        bin/build --mac        # Mac only
-#        bin/build --linux      # Linux only
+# Usage: bin/build                        # Mac + Linux, no publish
+#        bin/build --mac                  # Mac only
+#        bin/build --linux                # Linux only
+#        bin/build --publish              # Mac + Linux + publish to GitHub
+#        bin/build --mac --publish        # Mac + publish
 #
 set -euo pipefail
 
@@ -17,9 +19,10 @@ cd "$(dirname "$0")/.."
 BUILD_COMMIT_FILE=".build-commit"
 PACKAGE_JSON="package.json"
 
-# ── 0. Parse platform flags (default: both) ─────────────────────────
+# ── 0. Parse flags (default: both platforms, no publish) ─────────────
 BUILD_MAC=false
 BUILD_LINUX=false
+PUBLISH=false
 
 if [ $# -eq 0 ]; then
   BUILD_MAC=true
@@ -27,11 +30,17 @@ if [ $# -eq 0 ]; then
 else
   for arg in "$@"; do
     case "$arg" in
-      --mac)   BUILD_MAC=true ;;
-      --linux) BUILD_LINUX=true ;;
-      *) echo "Unknown flag: $arg (use --mac, --linux, or both)"; exit 1 ;;
+      --mac)     BUILD_MAC=true ;;
+      --linux)   BUILD_LINUX=true ;;
+      --publish) PUBLISH=true ;;
+      *) echo "Unknown flag: $arg (use --mac, --linux, --publish)"; exit 1 ;;
     esac
   done
+  # If only --publish was passed with no platform, default to both
+  if ! $BUILD_MAC && ! $BUILD_LINUX; then
+    BUILD_MAC=true
+    BUILD_LINUX=true
+  fi
 fi
 
 # ── 1. Version increment ────────────────────────────────────────────
@@ -59,6 +68,9 @@ else
 
   echo "Version $CURRENT_VERSION → $NEW_VERSION ($HEAD_HASH — $HEAD_MSG)"
   CURRENT_VERSION="$NEW_VERSION"
+
+  # Record commit immediately so a failed build doesn't re-bump next run
+  echo "$HEAD_HASH" > "$BUILD_COMMIT_FILE"
 fi
 
 # ── 2. Build React frontend ────────────────────────────────────────
@@ -75,11 +87,50 @@ echo ""
 echo "Building Electron app v$CURRENT_VERSION ($TARGETS)..."
 npx electron-builder $TARGETS --publish never
 
-# ── 4. Record build commit ─────────────────────────────────────────
-echo "$HEAD_HASH" > "$BUILD_COMMIT_FILE"
+# ── 4. Summary ─────────────────────────────────────────────────────
 
 echo ""
 echo "Build complete: v$CURRENT_VERSION"
 ls -lh dist/*.dmg 2>/dev/null || true
 ls -lh dist/*.AppImage 2>/dev/null || true
 ls -lh dist/*.deb 2>/dev/null || true
+
+# ── 5. Publish to GitHub Releases ──────────────────────────────────
+if $PUBLISH; then
+  echo ""
+
+  # Require gh CLI
+  if ! command -v gh &>/dev/null; then
+    echo "Error: gh CLI not found. Install it: brew install gh"
+    exit 1
+  fi
+
+  # Collect artifacts
+  ARTIFACTS=()
+  for f in dist/*.dmg dist/*.AppImage dist/*.deb; do
+    [ -f "$f" ] && ARTIFACTS+=("$f")
+  done
+
+  if [ ${#ARTIFACTS[@]} -eq 0 ]; then
+    echo "Warning: No artifacts found in dist/ — skipping publish."
+    exit 0
+  fi
+
+  TAG="v$CURRENT_VERSION"
+  echo "Publishing $TAG to GitHub Releases..."
+  echo "  Assets: ${ARTIFACTS[*]}"
+
+  # Check if release already exists for this tag
+  if gh release view "$TAG" &>/dev/null; then
+    echo "  Release $TAG already exists — uploading assets (overwrite)..."
+    gh release upload "$TAG" "${ARTIFACTS[@]}" --clobber
+  else
+    gh release create "$TAG" "${ARTIFACTS[@]}" \
+      --title "$TAG" \
+      --notes "$HEAD_MSG" \
+      --latest
+  fi
+
+  echo ""
+  echo "Published: $(gh release view "$TAG" --json url -q '.url')"
+fi
