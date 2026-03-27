@@ -1,12 +1,48 @@
 // Transcoder service: ffmpeg HEVC MKV → H.264+AAC fragmented MP4 via pipe.
 // Uses macOS VideoToolbox for hardware-accelerated decode + encode.
 
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
+const fs = require('fs')
 const { PassThrough } = require('stream')
 
-const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg'
-const FFPROBE_PATH = process.env.FFPROBE_PATH || 'ffprobe'
+// In packaged Electron apps, PATH is minimal (/usr/bin:/bin:/usr/sbin:/sbin).
+// ffmpeg/ffprobe installed via Homebrew won't be found. Resolve the full path.
+function findBinary(name) {
+  // 1. Explicit env var override
+  const envKey = name.toUpperCase() + '_PATH'
+  if (process.env[envKey] && fs.existsSync(process.env[envKey])) {
+    return process.env[envKey]
+  }
+
+  // 2. Common install locations
+  const candidates = [
+    `/opt/homebrew/bin/${name}`,   // Homebrew (Apple Silicon)
+    `/usr/local/bin/${name}`,       // Homebrew (Intel) / manual install
+    `/usr/bin/${name}`,             // System
+  ]
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p
+  }
+
+  // 3. Try `which` with expanded PATH (works in dev, may fail packaged)
+  try {
+    const resolved = execSync(`which ${name}`, {
+      env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` },
+    }).toString().trim()
+    if (resolved && fs.existsSync(resolved)) return resolved
+  } catch {}
+
+  // 4. Fallback to bare name (will fail in spawn if not on PATH)
+  console.warn(`Transcoder: ${name} not found in common locations, falling back to bare name`)
+  return name
+}
+
+const FFMPEG_PATH = findBinary('ffmpeg')
+const FFPROBE_PATH = findBinary('ffprobe')
+
+console.log(`Transcoder: ffmpeg  = ${FFMPEG_PATH}`)
+console.log(`Transcoder: ffprobe = ${FFPROBE_PATH}`)
 
 let activeProcess = null
 let activeStream = null
