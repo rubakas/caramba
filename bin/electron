@@ -1,0 +1,12 @@
+#!/bin/bash
+# Launch the app in Electron (dev mode).
+# Electron's main.js starts the Rails server automatically.
+set -e
+
+cd "$(dirname "$0")/.."
+
+# Kill any stale Rails server on port 4741
+lsof -ti:4741 2>/dev/null | xargs kill -9 2>/dev/null || true
+rm -f tmp/pids/server.pid
+
+exec npx electron .

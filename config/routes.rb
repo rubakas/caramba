@@ -11,6 +11,12 @@ Rails.application.routes.draw do
     end
   end
 
+  resources :movies, param: :slug, only: %i[index show new create destroy] do
+    post 'play', on: :member
+    post 'toggle', on: :member
+    post 'refresh_metadata', on: :member
+  end
+
   get 'playback/status', to: 'playback#status', as: :playback_status
   get 'history', to: 'history#index', as: :history
 

@@ -1,0 +1,100 @@
+<nav class="topnav">
+  <a href="<%= root_path %>" class="topnav-brand">Series Tracker</a>
+  <div class="topnav-links">
+    <a href="<%= root_path %>" class="topnav-link">Library</a>
+    <a href="<%= movies_path %>" class="topnav-link active">Movies</a>
+    <a href="<%= history_path %>" class="topnav-link">History</a>
+  </div>
+</nav>
+<main class="add-main">
+  <div class="add-container">
+    <h1 class="page-title">Add Movies</h1>
+    <p class="add-help">
+      Select one or more MKV files from your Mac.<br>
+      Metadata will be fetched automatically from OMDb.
+    </p>
+    <% if flash[:alert] %>
+      <div class="alert"><%= flash[:alert] %></div>
+    <% end %>
+    <%= form_with url: movies_path, method: :post, class: "add-form", id: "addForm" do |f| %>
+      <div id="hiddenInputs"></div>
+      <%# Electron mode: file picker button %>
+      <div class="field" id="electronPicker" style="display:none">
+        <div class="folder-picker">
+          <button type="button" class="btn-choose-folder" id="chooseBtn">Choose Files...</button>
+          <span class="folder-path" id="fileDisplay">No files selected</span>
+        </div>
+      </div>
+      <%# Browser fallback: text input (comma-separated paths) %>
+      <div class="field" id="browserInput">
+        <label for="file_paths_text">Movie File Paths (one per line)</label>
+        <textarea id="file_paths_text"
+                  placeholder="/path/to/Movie.Name.2022.1080p.mkv"
+                  class="field-input"
+                  rows="4"
+                  autofocus></textarea>
+      </div>
+      <div class="add-actions">
+        <button type="submit" class="btn-primary" id="submitBtn">Add Movies</button>
+      </div>
+    <% end %>
+  </div>
+</main>
+<script>
+  (function() {
+    var hiddenInputs = document.getElementById('hiddenInputs');
+    var electronPicker = document.getElementById('electronPicker');
+    var browserInput = document.getElementById('browserInput');
+    var textArea = document.getElementById('file_paths_text');
+    var chooseBtn = document.getElementById('chooseBtn');
+    var fileDisplay = document.getElementById('fileDisplay');
+    var form = document.getElementById('addForm');
+    var submitBtn = document.getElementById('submitBtn');
+
+    if (window.electronAPI && window.electronAPI.selectFiles) {
+      // Electron mode: show file picker, hide text input, hide submit until files chosen
+      electronPicker.style.display = '';
+      browserInput.style.display = 'none';
+      submitBtn.style.display = 'none';
+
+      chooseBtn.addEventListener('click', function() {
+        window.electronAPI.selectFiles().then(function(filePaths) {
+          if (filePaths && filePaths.length > 0) {
+            // Clear previous hidden inputs
+            hiddenInputs.innerHTML = '';
+            filePaths.forEach(function(p) {
+              var input = document.createElement('input');
+              input.type = 'hidden';
+              input.name = 'file_paths[]';
+              input.value = p;
+              hiddenInputs.appendChild(input);
+            });
+            var names = filePaths.map(function(p) {
+              return p.split('/').pop();
+            });
+            fileDisplay.textContent = names.length + ' file' + (names.length > 1 ? 's' : '') + ' selected';
+            fileDisplay.classList.add('has-path');
+            fileDisplay.title = names.join('\n');
+            submitBtn.style.display = '';
+          }
+        });
+      });
+    } else {
+      // Browser dev mode: parse textarea into hidden inputs on submit
+      form.addEventListener('submit', function() {
+        hiddenInputs.innerHTML = '';
+        var lines = textArea.value.split('\n');
+        lines.forEach(function(line) {
+          line = line.trim();
+          if (line) {
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'file_paths[]';
+            input.value = line;
+            hiddenInputs.appendChild(input);
+          }
+        });
+      });
+    }
+  })();
+</script>

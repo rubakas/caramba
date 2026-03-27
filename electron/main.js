@@ -185,6 +185,19 @@ ipcMain.handle('select-folder', async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle('select-files', async (event, options) => {
+  const filters = (options && options.filters) || [
+    { name: 'Video Files', extensions: ['mkv', 'mp4', 'avi', 'mov', 'm4v'] }
+  ];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    title: 'Select Movie Files',
+    filters: filters,
+  });
+  if (result.canceled) return [];
+  return result.filePaths;
+});
+
 // --- App Lifecycle ---
 
 app.on('ready', async () => {

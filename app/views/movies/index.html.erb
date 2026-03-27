@@ -1,0 +1,105 @@
+<nav class="topnav">
+  <a href="<%= root_path %>" class="topnav-brand">Series Tracker</a>
+  <div class="topnav-links">
+    <a href="<%= root_path %>" class="topnav-link">Library</a>
+    <a href="<%= movies_path %>" class="topnav-link active">Movies</a>
+    <a href="<%= history_path %>" class="topnav-link">History</a>
+  </div>
+  <a href="<%= new_movie_path %>" class="topnav-action">+ Add Movie</a>
+</nav>
+<%# -- Now Playing -- %>
+<div class="now-playing-bar" id="nowPlaying" style="display:none">
+  <div class="np-dot"></div>
+  <span class="np-label">Now Playing</span>
+  <span class="np-title" id="npTitle"></span>
+  <span class="np-time"><span id="npTime">0:00</span> / <span id="npDuration">0:00</span></span>
+  <div class="np-progress">
+    <div class="np-progress-fill" id="npBar" style="width:0%"></div>
+  </div>
+</div>
+<% if @movies.empty? %>
+  <main class="empty-hero">
+    <div class="empty-icon">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+    </div>
+    <h2>No Movies Yet</h2>
+    <p>Add a movie by selecting an MKV file from your Mac.</p>
+    <a href="<%= new_movie_path %>" class="btn-primary">Add Your First Movie</a>
+  </main>
+<% else %>
+  <main class="library">
+    <h2 class="section-title">Movies</h2>
+    <div class="series-grid">
+      <% @movies.each do |m| %>
+        <a href="<%= movie_path(m.slug) %>" class="series-card">
+          <div class="card-poster">
+            <% if m.has_poster? %>
+              <img src="<%= m.poster_url %>" alt="<%= m.title %>" loading="lazy">
+            <% else %>
+              <div class="card-poster-fallback"><%= m.title[0] %></div>
+            <% end %>
+            <div class="card-overlay">
+              <% if m.rating %>
+                <span class="card-rating"><%= m.rating %></span>
+              <% end %>
+              <% if m.in_progress? %>
+                <span class="card-badge-resume">Resume</span>
+              <% end %>
+              <% if m.watched? %>
+                <span class="card-badge-watched">Watched</span>
+              <% end %>
+            </div>
+            <% if m.in_progress? %>
+              <div class="card-progress-track">
+                <div class="card-progress-fill" style="width:<%= m.progress_percent %>%"></div>
+              </div>
+            <% end %>
+          </div>
+          <div class="card-body">
+            <h3 class="card-title"><%= m.title %></h3>
+            <p class="card-meta">
+              <% if m.year %><%= m.year %><% end %>
+              <% if m.runtime_display %> &middot; <%= m.runtime_display %><% end %>
+            </p>
+            <% if m.genres_list.any? %>
+              <div class="card-genres">
+                <%= m.genres_list.first(3).join("  &middot;  ").html_safe %>
+              </div>
+            <% end %>
+          </div>
+        </a>
+      <% end %>
+      <a href="<%= new_movie_path %>" class="series-card card-add">
+        <div class="card-poster">
+          <div class="card-poster-fallback card-add-icon">+</div>
+        </div>
+        <div class="card-body">
+          <h3 class="card-title">Add Movie</h3>
+          <p class="card-meta">From a local file</p>
+        </div>
+      </a>
+    </div>
+  </main>
+<% end %>
+<script>
+  var _wasPlaying = false;
+  setInterval(function() {
+    fetch("/playback/status")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var np = document.getElementById("nowPlaying");
+        if (data.playing) {
+          _wasPlaying = true;
+          np.style.display = "flex";
+          document.getElementById("npTitle").textContent = data.movie_title || data.series_name + " — " + data.episode_code + " " + data.episode_title;
+          document.getElementById("npTime").textContent = data.progress_display;
+          document.getElementById("npDuration").textContent = data.duration_display;
+          document.getElementById("npBar").style.width = (data.position * 100) + "%";
+        } else {
+          np.style.display = "none";
+          if (_wasPlaying) { _wasPlaying = false; window.location.reload(); }
+        }
+      })
+      .catch(function() {});
+  }, 3000);
+</script>

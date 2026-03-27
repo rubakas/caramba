@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_27_100609) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_27_110000) do
   create_table "episodes", force: :cascade do |t|
     t.string "air_date"
     t.string "code"
@@ -30,6 +30,28 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_27_100609) do
     t.boolean "watched", default: false, null: false
     t.index ["series_id", "code"], name: "index_episodes_on_series_id_and_code", unique: true
     t.index ["series_id"], name: "index_episodes_on_series_id"
+  end
+
+  create_table "movies", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "description"
+    t.string "director"
+    t.integer "duration_seconds", default: 0
+    t.string "file_path", null: false
+    t.string "genres"
+    t.string "imdb_id"
+    t.datetime "last_watched_at"
+    t.string "poster_url"
+    t.integer "progress_seconds", default: 0
+    t.float "rating"
+    t.integer "runtime"
+    t.string "slug", null: false
+    t.string "title", null: false
+    t.datetime "updated_at", null: false
+    t.boolean "watched", default: false
+    t.string "year"
+    t.index ["file_path"], name: "index_movies_on_file_path", unique: true
+    t.index ["slug"], name: "index_movies_on_slug", unique: true
   end
 
   create_table "series", force: :cascade do |t|
