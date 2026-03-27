@@ -26,7 +26,6 @@ Track TV series and movies, manage watch progress across devices with DB sync, a
 ## Prerequisites
 
 - **Node.js** >= 18
-- **ffmpeg** with VideoToolbox support (macOS) — `brew install ffmpeg`
 - **VLC** (optional) — for "Open in VLC" feature
 
 ## Getting Started
@@ -37,6 +36,9 @@ npm install
 
 # Rebuild native modules for Electron
 npx electron-rebuild
+
+# Download static ffmpeg + ffprobe (bundled into the app)
+bin/setup-ffmpeg
 
 # Launch in dev mode
 bin/dev
@@ -117,6 +119,10 @@ src/                   React frontend (Vite)
 bin/
   dev                  Dev launcher (vite build + electron)
   build                Production build with auto version increment
+  setup-ffmpeg         Download static ffmpeg/ffprobe for bundling
+
+vendor/                Bundled binaries (gitignored, created by bin/setup-ffmpeg)
+  ffmpeg/              Static ffmpeg + ffprobe
 
 storage/               Local data (gitignored)
   development.sqlite3  SQLite database

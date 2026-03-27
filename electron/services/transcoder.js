@@ -8,14 +8,25 @@ const { PassThrough } = require('stream')
 
 // In packaged Electron apps, PATH is minimal (/usr/bin:/bin:/usr/sbin:/sbin).
 // ffmpeg/ffprobe installed via Homebrew won't be found. Resolve the full path.
+// Priority: bundled binary > env var > common install locations > which fallback
 function findBinary(name) {
-  // 1. Explicit env var override
+  // 1. Bundled binary in extraResources (packaged app)
+  if (process.resourcesPath) {
+    const bundled = path.join(process.resourcesPath, 'ffmpeg', name)
+    if (fs.existsSync(bundled)) return bundled
+  }
+
+  // 2. Bundled binary relative to project root (dev mode)
+  const devBundled = path.join(__dirname, '..', '..', 'vendor', 'ffmpeg', name)
+  if (fs.existsSync(devBundled)) return devBundled
+
+  // 3. Explicit env var override
   const envKey = name.toUpperCase() + '_PATH'
   if (process.env[envKey] && fs.existsSync(process.env[envKey])) {
     return process.env[envKey]
   }
 
-  // 2. Common install locations
+  // 4. Common install locations
   const candidates = [
     `/opt/homebrew/bin/${name}`,   // Homebrew (Apple Silicon)
     `/usr/local/bin/${name}`,       // Homebrew (Intel) / manual install
@@ -25,7 +36,7 @@ function findBinary(name) {
     if (fs.existsSync(p)) return p
   }
 
-  // 3. Try `which` with expanded PATH (works in dev, may fail packaged)
+  // 5. Try `which` with expanded PATH (works in dev, may fail packaged)
   try {
     const resolved = execSync(`which ${name}`, {
       env: { ...process.env, PATH: `${process.env.PATH}:/opt/homebrew/bin:/usr/local/bin` },
@@ -33,7 +44,7 @@ function findBinary(name) {
     if (resolved && fs.existsSync(resolved)) return resolved
   } catch {}
 
-  // 4. Fallback to bare name (will fail in spawn if not on PATH)
+  // 6. Fallback to bare name (will fail in spawn if not on PATH)
   console.warn(`Transcoder: ${name} not found in common locations, falling back to bare name`)
   return name
 }

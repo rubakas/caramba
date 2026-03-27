@@ -1,6 +1,6 @@
 {
   "name": "caramba",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Caramba — Apple TV+ style episode tracker",
   "author": "Vladyslav <vladyslav@hey.com>",
   "main": "electron/main.js",
@@ -34,6 +34,10 @@
       {
         "from": "storage",
         "to": "storage"
+      },
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg"
       }
     ],
     "asar": true
