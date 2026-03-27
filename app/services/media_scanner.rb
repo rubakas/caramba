@@ -72,13 +72,38 @@ class MediaScanner
 
   private
 
-  # Collect [full_path, filename] pairs from all season dirs + root
+  # Collect [full_path, filename] pairs from all season dirs + root.
+  # Also handles "release folder" nesting where an intermediate directory
+  # sits between the root and the season dirs (common with torrent downloads).
   def collect_mkv_files
+    files = collect_from_dir(@media_root)
+
+    # If nothing found at root level, look one level deeper for a release folder
+    # e.g. "The Sopranos/The Sopranos (1999) Season 1-6 S01-S06 (1080p BluRay x265)/Season 1/"
+    if files.empty?
+      Dir.entries(@media_root).each do |entry|
+        subdir = File.join(@media_root, entry)
+        next unless File.directory?(subdir)
+        next if entry.start_with?('.')
+        next if season_dir?(entry)
+
+        nested = collect_from_dir(subdir)
+        if nested.any?
+          files.concat(nested)
+          break # use the first release folder that yields results
+        end
+      end
+    end
+
+    files.sort_by { |_, name| name }
+  end
+
+  # Collect MKV files from a directory: season subdirs + root-level MKVs
+  def collect_from_dir(dir)
     files = []
 
-    # Season subdirs: "Season 1", "Season 01", or dirs containing ".S01."
-    Dir.entries(@media_root).each do |entry|
-      dir_path = File.join(@media_root, entry)
+    Dir.entries(dir).each do |entry|
+      dir_path = File.join(dir, entry)
       next unless File.directory?(dir_path)
       next if entry.start_with?('.')
       next unless season_dir?(entry)
@@ -90,15 +115,15 @@ class MediaScanner
       end
     end
 
-    # Also check root for MKV files (flat structure like City and the City)
-    Dir.entries(@media_root).each do |f|
-      full = File.join(@media_root, f)
+    # Also check for MKV files directly in this dir (flat structure)
+    Dir.entries(dir).each do |f|
+      full = File.join(dir, f)
       next unless File.file?(full) && f.downcase.end_with?('.mkv')
 
       files << [full, f]
     end
 
-    files.sort_by { |_, name| name }
+    files
   end
 
   # Recognise season directories in various formats:

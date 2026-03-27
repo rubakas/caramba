@@ -20,5 +20,10 @@ Rails.application.routes.draw do
   get 'playback/status', to: 'playback#status', as: :playback_status
   get 'history', to: 'history#index', as: :history
 
+  resource :settings, only: %i[show update] do
+    post 'sync_now', on: :member
+    post 'load_from_sync', on: :member
+  end
+
   get 'up' => 'rails/health#show', as: :rails_health_check
 end

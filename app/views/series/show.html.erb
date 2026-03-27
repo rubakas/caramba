@@ -5,6 +5,7 @@
     <a href="<%= movies_path %>" class="topnav-link">Movies</a>
     <a href="<%= series_path(@series.slug) %>" class="topnav-link active">Episodes</a>
     <a href="<%= history_path %>" class="topnav-link">History</a>
+    <a href="<%= settings_path %>" class="topnav-link">Settings</a>
   </div>
   <div class="topnav-actions">
     <%= button_to "Rescan", scan_series_path(@series.slug), class: "topnav-btn" %>
