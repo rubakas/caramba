@@ -1,2 +1,9 @@
-#!/usr/bin/env ruby
-exec "./bin/rails", "server", *ARGV
+#!/bin/bash
+# Dev launch: build React, then start Electron
+set -e
+
+echo "Building React frontend..."
+npx vite build
+
+echo "Starting Electron..."
+npx electron .

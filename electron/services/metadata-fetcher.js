@@ -1,0 +1,92 @@
+// Fetches TV series metadata from TVMaze API.
+// No API key needed. Rate limit: 20 calls/10s.
+
+const db = require('../db')
+
+const BASE_URL = 'https://api.tvmaze.com'
+
+function stripHtml(html) {
+  if (!html) return null
+  let text = html.replace(/<[^>]+>/g, '')
+  text = text.replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+  return text.trim() || null
+}
+
+async function search(query) {
+  const url = `${BASE_URL}/singlesearch/shows?q=${encodeURIComponent(query)}&embed=episodes`
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch (e) {
+    console.warn(`MetadataFetcher: search failed for '${query}' — ${e.message}`)
+    return null
+  }
+}
+
+async function fetchForSeries(seriesId) {
+  const s = db.series.findById(seriesId)
+  if (!s) return false
+
+  const data = await search(s.name)
+  if (!data) return false
+
+  // Update series metadata
+  const posterUrl = data.image?.original || data.image?.medium || null
+  const summary = stripHtml(data.summary)
+
+  db.series.update(seriesId, {
+    tvmaze_id: data.id,
+    poster_url: posterUrl,
+    description: summary,
+    genres: Array.isArray(data.genres) ? data.genres.join(', ') : null,
+    rating: data.rating?.average || null,
+    premiered: data.premiered || null,
+    status: data.status || null,
+    imdb_id: data.externals?.imdb || null,
+  })
+
+  // Update episode metadata
+  const apiEpisodes = data._embedded?.episodes || []
+  if (apiEpisodes.length > 0) {
+    const apiLookup = {}
+    for (const ep of apiEpisodes) {
+      if (ep.season == null || ep.number == null) continue
+      const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.number).padStart(2, '0')}`
+      apiLookup[code] = ep
+    }
+
+    const localEpisodes = db.episodes.forSeries(seriesId)
+    let matched = 0
+    for (const episode of localEpisodes) {
+      const apiEp = apiLookup[episode.code]
+      if (!apiEp) continue
+
+      const attrs = {}
+      const epSummary = stripHtml(apiEp.summary)
+      if (epSummary) attrs.description = epSummary
+      if (apiEp.airdate) attrs.air_date = apiEp.airdate
+      if (apiEp.runtime) attrs.runtime = apiEp.runtime
+      if (apiEp.id) attrs.tvmaze_id = apiEp.id
+
+      if (Object.keys(attrs).length > 0) {
+        db.episodes.updateMetadata(episode.id, attrs)
+        matched++
+      }
+    }
+    console.log(`MetadataFetcher: matched ${matched}/${localEpisodes.length} episodes with TVMaze data`)
+  }
+
+  console.log(`MetadataFetcher: updated series '${s.name}' (TVMaze ID: ${data.id})`)
+  return true
+}
+
+module.exports = { fetchForSeries, search }

@@ -1,59 +1,11 @@
-#!/usr/bin/env bash
-#
-# Build the packaged .app/.dmg with auto version increment.
-#
-# Version format: MAJOR.MINOR.PATCH where PATCH auto-increments.
-# The last-built commit hash is stored in .build-commit. If HEAD
-# matches that hash, the version stays the same (idempotent rebuild).
-#
-# Usage: bin/build
-#
-set -euo pipefail
+#!/bin/bash
+# Build: React + Electron packaging
+set -e
 
-cd "$(dirname "$0")/.."
+echo "Building React frontend..."
+npx vite build
 
-BUILD_COMMIT_FILE=".build-commit"
-PACKAGE_JSON="package.json"
-
-# ── 1. Version increment ────────────────────────────────────────────
-HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
-LAST_HASH=$(cat "$BUILD_COMMIT_FILE" 2>/dev/null || echo "")
-
-CURRENT_VERSION=$(ruby -e "require 'json'; puts JSON.parse(File.read('$PACKAGE_JSON'))['version']")
-
-if [ "$HEAD_HASH" = "$LAST_HASH" ]; then
-  echo "Version $CURRENT_VERSION (same commit: $HEAD_HASH — $HEAD_MSG)"
-else
-  # Bump patch version
-  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-  PATCH=$((PATCH + 1))
-  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-
-  # Update package.json
-  ruby -e "
-    require 'json'
-    pkg = JSON.parse(File.read('$PACKAGE_JSON'))
-    pkg['version'] = '$NEW_VERSION'
-    File.write('$PACKAGE_JSON', JSON.pretty_generate(pkg) + \"\n\")
-  "
-
-  echo "Version $CURRENT_VERSION → $NEW_VERSION ($HEAD_HASH — $HEAD_MSG)"
-  CURRENT_VERSION="$NEW_VERSION"
-fi
-
-# ── 2. Bundle Ruby runtime ──────────────────────────────────────────
-echo ""
-script/bundle-ruby
-
-# ── 3. Build .app + .dmg ────────────────────────────────────────────
-echo ""
-echo "Building Electron app v$CURRENT_VERSION..."
+echo "Packaging Electron app..."
 npx electron-builder --mac --publish never
 
-# ── 4. Record build commit ──────────────────────────────────────────
-echo "$HEAD_HASH" > "$BUILD_COMMIT_FILE"
-
-echo ""
-echo "Build complete: v$CURRENT_VERSION"
-ls -lh dist/*.dmg 2>/dev/null || true
+echo "Done! Check the dist/ folder."
