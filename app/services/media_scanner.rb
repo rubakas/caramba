@@ -15,7 +15,8 @@ class MediaScanner
   end
 
   # Create or find a Series from a folder path, auto-detecting the name,
-  # then scan its episodes. Returns the Series record.
+  # then scan its episodes and fetch metadata from TVMaze.
+  # Returns the Series record.
   def self.add_from_path!(path)
     path = path.strip
     name = Series.name_from_path(path)
@@ -23,7 +24,8 @@ class MediaScanner
     series.name = name if series.new_record?
     series.save!
     scan!(series)
-    series
+    MetadataFetcher.fetch!(series)
+    series.reload
   end
 
   def initialize(series)

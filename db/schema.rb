@@ -10,18 +10,22 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_27_094603) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_27_100609) do
   create_table "episodes", force: :cascade do |t|
+    t.string "air_date"
     t.string "code"
     t.datetime "created_at", null: false
+    t.text "description"
     t.integer "duration_seconds", default: 0
     t.integer "episode_number"
     t.string "file_path"
     t.datetime "last_watched_at"
     t.integer "progress_seconds", default: 0
+    t.integer "runtime"
     t.integer "season_number"
     t.integer "series_id", null: false
     t.string "title"
+    t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
     t.boolean "watched", default: false, null: false
     t.index ["series_id", "code"], name: "index_episodes_on_series_id_and_code", unique: true
@@ -30,10 +34,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_27_094603) do
 
   create_table "series", force: :cascade do |t|
     t.datetime "created_at", null: false
+    t.text "description"
+    t.string "genres"
+    t.string "imdb_id"
     t.string "media_path", null: false
     t.string "name", null: false
     t.string "poster_url"
+    t.string "premiered"
+    t.float "rating"
     t.string "slug", null: false
+    t.string "status"
+    t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
     t.index ["slug"], name: "index_series_on_slug", unique: true
   end

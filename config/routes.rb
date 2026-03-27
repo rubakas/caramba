@@ -3,6 +3,7 @@ Rails.application.routes.draw do
 
   resources :series, param: :slug, only: %i[index show new create destroy] do
     post 'scan', on: :member
+    post 'refresh_metadata', on: :member
 
     resources :episodes, only: [] do
       post 'play', on: :member

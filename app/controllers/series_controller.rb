@@ -1,5 +1,5 @@
 class SeriesController < ApplicationController
-  before_action :set_series, only: %i[show destroy scan]
+  before_action :set_series, only: %i[show destroy scan refresh_metadata]
 
   def index
     @all_series = Series.by_name.includes(:episodes)
@@ -45,6 +45,14 @@ class SeriesController < ApplicationController
   def scan
     count = MediaScanner.scan!(@series)
     redirect_to series_path(@series.slug), notice: "Rescanned #{count} episodes"
+  end
+
+  def refresh_metadata
+    if MetadataFetcher.fetch!(@series)
+      redirect_to series_path(@series.slug), notice: "Metadata updated for '#{@series.name}'"
+    else
+      redirect_to series_path(@series.slug), alert: "Could not find metadata for '#{@series.name}' on TVMaze"
+    end
   end
 
   private

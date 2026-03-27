@@ -9,6 +9,7 @@
   </nav>
   <div class="header-actions">
     <%= button_to "Rescan Files", scan_series_path(@series.slug), class: "scan-btn" %>
+    <%= button_to "Refresh Metadata", refresh_metadata_series_path(@series.slug), class: "scan-btn" %>
     <%= button_to "Remove", series_path(@series.slug), method: :delete, class: "scan-btn remove-btn",
         data: { turbo_confirm: "Remove '#{@series.name}' and all its watch history?" } %>
   </div>
@@ -28,6 +29,43 @@
     <div class="now-playing-bar-fill" id="npBar" style="width:0%"></div>
   </div>
 </div>
+<%# -- Series Metadata Header -- %>
+<% if @series.has_metadata? %>
+  <div class="series-meta-header">
+    <% if @series.has_poster? %>
+      <div class="series-meta-poster">
+        <img src="<%= @series.poster_url %>" alt="<%= @series.name %>" loading="lazy">
+      </div>
+    <% end %>
+    <div class="series-meta-info">
+      <h2 class="series-meta-title"><%= @series.name %></h2>
+      <div class="series-meta-details">
+        <% if @series.premiere_year %>
+          <span><%= @series.premiere_year %></span>
+        <% end %>
+        <% if @series.status.present? %>
+          <span class="series-status-<%= @series.status.downcase %>"><%= @series.status %></span>
+        <% end %>
+        <% if @series.rating %>
+          <span class="meta-rating">&#9733; <%= @series.rating %></span>
+        <% end %>
+        <% if @series.imdb_id.present? %>
+          <a href="https://www.imdb.com/title/<%= @series.imdb_id %>/" target="_blank" class="meta-imdb-link">IMDb</a>
+        <% end %>
+      </div>
+      <% if @series.genres_list.any? %>
+        <div class="series-meta-genres">
+          <% @series.genres_list.each do |genre| %>
+            <span class="genre-tag"><%= genre %></span>
+          <% end %>
+        </div>
+      <% end %>
+      <% if @series.description.present? %>
+        <p class="series-meta-description"><%= @series.description %></p>
+      <% end %>
+    </div>
+  </div>
+<% end %>
 <% if @seasons.empty? %>
   <div class="empty-state">
     <h2>No episodes found</h2>
@@ -68,6 +106,9 @@
           <% end %>
         </div>
         <div class="ep-title"><%= @next_episode.title %></div>
+        <% if @next_episode.description.present? %>
+          <div class="ep-description-banner"><%= truncate(@next_episode.description, length: 120) %></div>
+        <% end %>
       </div>
       <%= button_to play_series_episode_path(@series.slug, @next_episode), class: "continue-play-btn" do %>
         &#9654; <%= @next_episode.in_progress? ? "Resume" : "Play" %>
@@ -144,8 +185,22 @@
             <div class="ep-code">
               <%= ep.code %>
               <% if ep.watched? %><span class="ep-check">&#10003;</span><% end %>
+              <% if ep.air_date.present? %>
+                <span class="ep-air-date"><%= ep.air_date %></span>
+              <% end %>
             </div>
             <div class="ep-title-card"><%= ep.title %></div>
+            <% if ep.description.present? %>
+              <% truncated = truncate(ep.description, length: 100) %>
+              <% if truncated != ep.description %>
+                <div class="ep-description expandable" onclick="this.classList.toggle('expanded')">
+                  <span class="ep-desc-short"><%= truncated %></span>
+                  <span class="ep-desc-full"><%= ep.description %></span>
+                </div>
+              <% else %>
+                <div class="ep-description"><%= ep.description %></div>
+              <% end %>
+            <% end %>
             <% if ep.in_progress? %>
               <div class="ep-progress-row">
                 <div class="ep-progress-bar">

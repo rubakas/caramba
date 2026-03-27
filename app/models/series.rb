@@ -65,6 +65,26 @@ class Series < ApplicationRecord
     episodes.distinct.count(:season_number)
   end
 
+  # Metadata helpers
+
+  def genres_list
+    return [] if genres.blank?
+
+    genres.split(',').map(&:strip).reject(&:blank?)
+  end
+
+  def premiere_year
+    premiered&.slice(0, 4)
+  end
+
+  def has_metadata?
+    tvmaze_id.present?
+  end
+
+  def has_poster?
+    poster_url.present?
+  end
+
   private
 
   def generate_slug

@@ -583,6 +583,165 @@ body {
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #555; }
 
+/* -- Series Metadata Header (show page) -------------------------- */
+.series-meta-header {
+  display: flex;
+  gap: 28px;
+  padding: 24px 40px 20px;
+  align-items: flex-start;
+}
+.series-meta-poster {
+  flex-shrink: 0;
+  width: 140px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+}
+.series-meta-poster img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.series-meta-info {
+  flex: 1;
+  min-width: 0;
+}
+.series-meta-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 8px;
+}
+.series-meta-details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: #888;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.meta-rating {
+  color: #ffd521;
+  font-weight: 700;
+}
+.meta-imdb-link {
+  color: #f5c518;
+  font-weight: 700;
+  font-size: 12px;
+  text-decoration: none;
+  background: rgba(245,197,24,.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: background .15s;
+}
+.meta-imdb-link:hover {
+  background: rgba(245,197,24,.25);
+}
+.series-meta-genres {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.series-meta-description {
+  color: #aaa;
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 700px;
+}
+
+/* -- Genre Tags -------------------------------------------------- */
+.genre-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ccc;
+  background: rgba(255,255,255,.08);
+  padding: 3px 10px;
+  border-radius: 12px;
+  letter-spacing: .3px;
+}
+
+/* -- Series Card Genres ------------------------------------------ */
+.series-card-genres {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.series-card-genres .genre-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+/* -- Rating Badge (on poster) ------------------------------------ */
+.series-rating-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,.75);
+  color: #ffd521;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+}
+
+/* -- Series Status (Running/Ended) ------------------------------- */
+.series-status-running {
+  color: #4caf50;
+  font-weight: 600;
+}
+.series-status-ended {
+  color: #888;
+  font-weight: 600;
+}
+.series-status-to\ be\ determined,
+.series-status-in\ development {
+  color: #ff9800;
+  font-weight: 600;
+}
+
+/* -- Episode Description ----------------------------------------- */
+.ep-description {
+  font-size: 12px;
+  color: #777;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+.ep-description.expandable {
+  cursor: pointer;
+  transition: color .15s;
+}
+.ep-description.expandable:hover { color: #aaa; }
+.ep-desc-full { display: none; }
+.ep-description.expanded .ep-desc-short { display: none; }
+.ep-description.expanded .ep-desc-full { display: inline; }
+.ep-description.expandable::after {
+  content: ' ▸';
+  font-size: 10px;
+  color: #555;
+  transition: color .15s;
+}
+.ep-description.expandable:hover::after { color: #ffd521; }
+.ep-description.expandable.expanded::after { content: ' ▾'; }
+.ep-description-banner {
+  font-size: 13px;
+  color: #888;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* -- Episode Air Date -------------------------------------------- */
+.ep-air-date {
+  font-size: 11px;
+  color: #555;
+  font-weight: 400;
+  margin-left: auto;
+}
+
 /* -- Responsive -------------------------------------------------- */
 @media (max-width: 600px) {
   .header, .continue-banner, .stats, .season-panel { padding-left: 16px; padding-right: 16px; margin-left: 16px; margin-right: 16px; }
@@ -591,4 +750,6 @@ body {
   .series-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); padding: 20px 16px; gap: 16px; }
   .continue-banner { flex-direction: column; align-items: flex-start; }
   .add-series-page { padding: 30px 16px; }
+  .series-meta-header { flex-direction: column; padding: 16px; gap: 16px; }
+  .series-meta-poster { width: 100px; }
 }

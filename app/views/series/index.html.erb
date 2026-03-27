@@ -32,8 +32,8 @@
     <% @all_series.each do |s| %>
       <a href="<%= series_path(s.slug) %>" class="series-card">
         <div class="series-poster">
-          <% if s.poster_url.present? %>
-            <img src="<%= s.poster_url %>" alt="<%= s.name %>">
+          <% if s.has_poster? %>
+            <img src="<%= s.poster_url %>" alt="<%= s.name %>" loading="lazy">
           <% else %>
             <div class="series-poster-placeholder">
               <span class="series-initial"><%= s.name[0] %></span>
@@ -42,12 +42,28 @@
           <% if s.resumable_episode %>
             <div class="series-resume-badge">Resume</div>
           <% end %>
+          <% if s.rating %>
+            <div class="series-rating-badge"><%= s.rating %></div>
+          <% end %>
         </div>
         <div class="series-card-info">
           <div class="series-card-name"><%= s.name %></div>
           <div class="series-card-meta">
-            <%= s.season_count %> seasons &middot; <%= s.total_episodes %> episodes
+            <% if s.premiere_year %>
+              <%= s.premiere_year %> &middot;
+            <% end %>
+            <%= s.season_count %> seasons &middot; <%= s.total_episodes %> ep
+            <% if s.status.present? %>
+              &middot; <span class="series-status-<%= s.status&.downcase %>"><%= s.status %></span>
+            <% end %>
           </div>
+          <% if s.genres_list.any? %>
+            <div class="series-card-genres">
+              <% s.genres_list.first(3).each do |genre| %>
+                <span class="genre-tag"><%= genre %></span>
+              <% end %>
+            </div>
+          <% end %>
           <% if s.watched_episodes > 0 %>
             <div class="series-card-progress">
               <div class="series-progress-bar">
