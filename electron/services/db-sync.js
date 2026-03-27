@@ -1,8 +1,10 @@
 // Database sync: copy local SQLite DB to/from a shared folder.
 // Uses sqlite3 CLI .backup for safe copy while DB is open.
+// All operations are ASYNC to avoid blocking the Electron main process.
 
-const { execSync } = require('child_process')
+const { execFile } = require('child_process')
 const fs = require('fs')
+const fsp = require('fs/promises')
 const path = require('path')
 const db = require('../db')
 const syncConfig = require('./sync-config')
@@ -11,6 +13,7 @@ const SYNC_FILENAME = 'series_tracker.sqlite3'
 const SYNC_INTERVAL = 30000 // 30 seconds
 
 let syncTimer = null
+let syncInProgress = false // guard against overlapping syncs
 
 function syncDbPath() {
   const folder = syncConfig.getSyncFolder()
@@ -18,38 +21,62 @@ function syncDbPath() {
   return path.join(folder, SYNC_FILENAME)
 }
 
-function dump() {
+/**
+ * Dump local DB to sync folder using sqlite3 .backup (async, non-blocking).
+ */
+async function dump() {
   if (!syncConfig.isEnabled()) return false
+  if (syncInProgress) return false
 
   const src = db.getDbPath()
   const dst = syncDbPath()
   if (!dst || !fs.existsSync(src)) return false
 
   const tmp = dst + '.tmp'
+  syncInProgress = true
+
   try {
-    execSync(`sqlite3 "${src}" ".backup '${tmp}'"`, { timeout: 10000 })
-    if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
-      fs.renameSync(tmp, dst)
+    // Run sqlite3 .backup asynchronously
+    await new Promise((resolve, reject) => {
+      execFile('sqlite3', [src, `.backup '${tmp}'`], { timeout: 10000 }, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+
+    // Verify the backup produced a valid file
+    const stat = await fsp.stat(tmp).catch(() => null)
+    if (stat && stat.size > 0) {
+      await fsp.rename(tmp, dst)
       syncConfig.setLastSyncedAt(new Date().toISOString())
       console.log(`DbSync: dumped database to ${dst}`)
       return true
     }
-    try { fs.unlinkSync(tmp) } catch { /* ignore */ }
+
+    await fsp.unlink(tmp).catch(() => {})
     console.warn('DbSync: backup produced empty file')
     return false
   } catch (e) {
-    try { fs.unlinkSync(tmp) } catch { /* ignore */ }
+    await fsp.unlink(tmp).catch(() => {})
     console.warn(`DbSync: dump failed — ${e.message}`)
     return false
+  } finally {
+    syncInProgress = false
   }
 }
 
-function load() {
+/**
+ * Load DB from sync folder, replacing local DB (async, non-blocking).
+ */
+async function load() {
   if (!syncConfig.isEnabled()) return false
+  if (syncInProgress) return false
 
   const src = syncDbPath()
   const dst = db.getDbPath()
   if (!src || !fs.existsSync(src)) return false
+
+  syncInProgress = true
 
   try {
     // Close current DB connection
@@ -57,10 +84,12 @@ function load() {
 
     // Backup current local DB
     const backup = dst + '.backup'
-    if (fs.existsSync(dst)) fs.copyFileSync(dst, backup)
+    if (fs.existsSync(dst)) {
+      await fsp.copyFile(dst, backup)
+    }
 
     // Copy sync DB to local
-    fs.copyFileSync(src, dst)
+    await fsp.copyFile(src, dst)
 
     // Reopen DB (triggers migration)
     db.open()
@@ -69,38 +98,53 @@ function load() {
     console.log(`DbSync: loaded database from ${src}`)
 
     // Clean up backup
-    try { fs.unlinkSync(backup) } catch { /* ignore */ }
+    await fsp.unlink(backup).catch(() => {})
     return true
   } catch (e) {
     console.warn(`DbSync: load failed — ${e.message}`)
-    // Try to restore
+    // Try to restore from backup
     try {
       const backup = dst + '.backup'
       if (fs.existsSync(backup)) {
-        fs.copyFileSync(backup, dst)
+        await fsp.copyFile(backup, dst)
         db.open()
       }
     } catch { /* nothing we can do */ }
     return false
+  } finally {
+    syncInProgress = false
   }
 }
 
-function syncOnStartup() {
+/**
+ * On startup, check if sync folder has a newer DB and load it,
+ * or dump local DB if it's current. Runs async in background — does NOT block app startup.
+ */
+async function syncOnStartup() {
   if (!syncConfig.isEnabled()) return
 
   const localPath = db.getDbPath()
   const remotePath = syncDbPath()
   if (!remotePath) return
 
-  const localMtime = fs.existsSync(localPath) ? fs.statSync(localPath).mtimeMs : 0
-  const remoteMtime = fs.existsSync(remotePath) ? fs.statSync(remotePath).mtimeMs : 0
+  try {
+    const [localStat, remoteStat] = await Promise.all([
+      fsp.stat(localPath).catch(() => null),
+      fsp.stat(remotePath).catch(() => null),
+    ])
 
-  if (fs.existsSync(remotePath) && remoteMtime > localMtime) {
-    console.log('DbSync: sync folder has newer DB, loading...')
-    load()
-  } else if (fs.existsSync(localPath)) {
-    console.log('DbSync: local DB is current, dumping to sync folder...')
-    dump()
+    const localMtime = localStat ? localStat.mtimeMs : 0
+    const remoteMtime = remoteStat ? remoteStat.mtimeMs : 0
+
+    if (remoteStat && remoteMtime > localMtime) {
+      console.log('DbSync: sync folder has newer DB, loading...')
+      await load()
+    } else if (localStat) {
+      console.log('DbSync: local DB is current, dumping to sync folder...')
+      await dump()
+    }
+  } catch (e) {
+    console.warn(`DbSync: startup sync error — ${e.message}`)
   }
 }
 
@@ -108,20 +152,25 @@ function startPeriodicSync() {
   stopPeriodicSync()
   if (!syncConfig.isEnabled()) return
 
-  syncTimer = setInterval(() => {
+  syncTimer = setInterval(async () => {
     try {
       const localPath = db.getDbPath()
       const remotePath = syncDbPath()
       if (!remotePath) return
 
-      const localMtime = fs.existsSync(localPath) ? fs.statSync(localPath).mtimeMs : 0
-      const remoteMtime = fs.existsSync(remotePath) ? fs.statSync(remotePath).mtimeMs : 0
+      const [localStat, remoteStat] = await Promise.all([
+        fsp.stat(localPath).catch(() => null),
+        fsp.stat(remotePath).catch(() => null),
+      ])
 
-      if (fs.existsSync(remotePath) && remoteMtime > localMtime + 2000) {
+      const localMtime = localStat ? localStat.mtimeMs : 0
+      const remoteMtime = remoteStat ? remoteStat.mtimeMs : 0
+
+      if (remoteStat && remoteMtime > localMtime + 2000) {
         console.log('DbSync: sync folder has newer DB, loading...')
-        load()
+        await load()
       } else {
-        dump()
+        await dump()
       }
     } catch (e) {
       console.warn(`DbSync: periodic sync error — ${e.message}`)

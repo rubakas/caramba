@@ -196,8 +196,8 @@ app.whenReady().then(() => {
   // Open database
   db.open()
 
-  // Startup sync check
-  dbSync.syncOnStartup()
+  // Startup sync check (async, fire-and-forget — must not block app startup)
+  dbSync.syncOnStartup().catch(err => console.warn('DbSync: startup sync error —', err.message))
 
   createWindow()
 

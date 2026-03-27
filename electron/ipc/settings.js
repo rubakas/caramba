@@ -14,7 +14,7 @@ function register() {
     }
   })
 
-  ipcMain.handle('settings:setSyncFolder', (_e, folder) => {
+  ipcMain.handle('settings:setSyncFolder', async (_e, folder) => {
     if (folder && !fs.existsSync(folder)) {
       return { error: `Folder does not exist: ${folder}` }
     }
@@ -25,11 +25,11 @@ function register() {
       // If a synced DB already exists in the folder, load it instead of overwriting
       const syncPath = path.join(folder, 'series_tracker.sqlite3')
       if (fs.existsSync(syncPath) && fs.statSync(syncPath).size > 0) {
-        dbSync.load()
+        await dbSync.load()
         dbSync.startPeriodicSync()
         return { success: true, message: 'Found existing database in sync folder — loaded it.' }
       }
-      dbSync.dump()
+      await dbSync.dump()
       dbSync.startPeriodicSync()
       return { success: true, message: 'Sync folder set. Database will sync every 30 seconds.' }
     } else {
@@ -38,15 +38,15 @@ function register() {
     }
   })
 
-  ipcMain.handle('settings:syncNow', () => {
+  ipcMain.handle('settings:syncNow', async () => {
     if (!syncConfig.isEnabled()) {
       return { error: 'No sync folder configured.' }
     }
-    const ok = dbSync.dump()
+    const ok = await dbSync.dump()
     return ok ? { success: true, message: 'Database synced to folder.' } : { error: 'Sync failed.' }
   })
 
-  ipcMain.handle('settings:loadFromSync', () => {
+  ipcMain.handle('settings:loadFromSync', async () => {
     if (!syncConfig.isEnabled()) {
       return { error: 'No sync folder configured.' }
     }
@@ -54,7 +54,7 @@ function register() {
     if (!fs.existsSync(syncPath)) {
       return { error: 'No database found in sync folder.' }
     }
-    const ok = dbSync.load()
+    const ok = await dbSync.load()
     return ok ? { success: true, message: 'Database loaded from sync folder.' } : { error: 'Load failed.' }
   })
 }
