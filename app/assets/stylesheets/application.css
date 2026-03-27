@@ -1,0 +1,351 @@
+/* ============================================================
+   Simpsons Tracker — Netflix-style dark theme
+   ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #141414;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+/* -- Flash notice ------------------------------------------------ */
+.flash-notice {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #ffd521;
+  color: #000;
+  text-align: center;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  z-index: 999;
+  animation: slideDown .3s ease, fadeOut .5s ease 3s forwards;
+}
+@keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+@keyframes fadeOut   { to { opacity: 0; transform: translateY(-100%); } }
+
+/* -- Header ------------------------------------------------------ */
+.header {
+  background: linear-gradient(180deg, rgba(0,0,0,.9) 0%, transparent 100%);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  padding: 16px 40px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.header h1 { font-size: 24px; font-weight: 700; color: #ffd521; letter-spacing: 1px; }
+.header .subtitle { color: #999; font-size: 14px; }
+.header .scan-btn {
+  margin-left: auto;
+  background: #333;
+  color: #ccc;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s;
+  flex-shrink: 0;
+}
+.header .scan-btn:hover { background: #444; color: #fff; }
+
+/* -- Continue Watching Banner ------------------------------------ */
+.continue-banner {
+  margin: 20px 40px 30px;
+  padding: 24px 32px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 12px;
+  border-left: 4px solid #ffd521;
+  transition: transform .15s, box-shadow .15s;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.continue-banner:hover { transform: scale(1.005); box-shadow: 0 8px 30px rgba(255,213,33,.12); }
+
+/* Resume variant — orange/amber accent */
+.continue-banner.resume-banner {
+  background: linear-gradient(135deg, #2a2210 0%, #2e2510 100%);
+  border-left-color: #ff9800;
+  margin-bottom: 10px;
+}
+.continue-banner.resume-banner:hover { box-shadow: 0 8px 30px rgba(255,152,0,.12); }
+.continue-banner.resume-banner .label { color: #ff9800; }
+.resume-play-btn { background: #ff9800 !important; }
+.resume-play-btn:hover { background: #ffb74d !important; }
+.continue-info { flex: 1; }
+.continue-info .label {
+  font-size: 13px;
+  color: #ffd521;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.continue-info .ep-info { font-size: 20px; font-weight: 600; }
+.continue-info .ep-title { color: #aaa; margin-top: 4px; font-size: 14px; }
+.continue-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffd521;
+  color: #000;
+  border: none;
+  padding: 12px 28px;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+  text-decoration: none;
+}
+.continue-play-btn:hover { background: #ffe566; transform: scale(1.03); }
+
+/* -- Empty state ------------------------------------------------- */
+.empty-state {
+  text-align: center;
+  padding: 80px 40px;
+  color: #666;
+}
+.empty-state h2 { color: #ffd521; margin-bottom: 12px; }
+.empty-state .scan-big {
+  display: inline-block;
+  margin-top: 20px;
+  background: #ffd521;
+  color: #000;
+  border: none;
+  padding: 14px 32px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+.empty-state .scan-big:hover { background: #ffe566; }
+
+/* -- Season Picker ----------------------------------------------- */
+.season-picker {
+  display: flex;
+  gap: 6px;
+  padding: 12px 40px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+  position: sticky;
+  top: 56px;
+  z-index: 90;
+  background: #141414;
+  border-bottom: 1px solid #222;
+}
+.season-picker::-webkit-scrollbar { height: 4px; }
+.season-picker::-webkit-scrollbar-track { background: transparent; }
+.season-picker::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+.season-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  background: #1e1e1e;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .1s;
+  flex-shrink: 0;
+  min-width: 52px;
+}
+.season-pill:hover { background: #2a2a2a; transform: translateY(-1px); }
+.season-pill.active { border-color: #ffd521; background: #2a2210; }
+.season-pill-num { font-size: 15px; font-weight: 700; color: #888; }
+.season-pill.active .season-pill-num { color: #ffd521; }
+.season-pill-bar { width: 100%; height: 3px; background: #333; border-radius: 2px; overflow: hidden; }
+.season-pill-fill { height: 100%; background: #ffd521; border-radius: 2px; }
+
+/* -- Season Panel ------------------------------------------------ */
+.season-panel { display: none; margin: 0 40px; padding-bottom: 40px; }
+.season-panel.active { display: block; }
+.season-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0 16px;
+  border-bottom: 1px solid #222;
+  margin-bottom: 16px;
+}
+.season-panel-title { font-size: 22px; font-weight: 700; color: #fff; }
+.season-panel-info { font-size: 13px; color: #666; display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.watched-bar { display: inline-block; width: 80px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; }
+.watched-bar .fill { height: 100%; background: #ffd521; border-radius: 2px; transition: width .3s; }
+
+/* -- Episodes Grid ----------------------------------------------- */
+.episodes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+/* -- Episode Card ------------------------------------------------ */
+.episode-card {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: transform .15s, background .15s, box-shadow .15s;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.episode-card:hover { background: #2a2a2a; transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.episode-card.watched { border-left: 3px solid #ffd521; }
+.episode-card.last-watched { background: #2a2210; border-left: 3px solid #ffd521; }
+.ep-code { font-size: 13px; font-weight: 700; color: #888; display: flex; align-items: center; gap: 8px; }
+.episode-card.watched .ep-code { color: #ffd521; }
+.ep-check { color: #ffd521; font-size: 11px; }
+.ep-title-card { font-size: 14px; font-weight: 500; line-height: 1.4; color: #ddd; }
+.episode-card:hover .ep-title-card { color: #fff; }
+
+/* Card actions row */
+.ep-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ep-actions form { display: inline; }
+.btn-play, .btn-toggle {
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background .15s;
+}
+.btn-play { background: #ffd521; color: #000; }
+.btn-play:hover { background: #ffe566; }
+.btn-toggle { background: #333; color: #aaa; }
+.btn-toggle:hover { background: #444; color: #fff; }
+
+/* -- Stats ------------------------------------------------------- */
+.stats {
+  margin: 0 40px 20px;
+  padding: 16px 0;
+  display: flex;
+  gap: 32px;
+  border-bottom: 1px solid #222;
+  font-size: 13px;
+  color: #666;
+}
+.stats strong { color: #ffd521; }
+
+/* -- Header Nav -------------------------------------------------- */
+.header-nav { display: flex; gap: 4px; margin-left: 16px; }
+.nav-link {
+  color: #888;
+  text-decoration: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color .15s, background .15s;
+}
+.nav-link:hover { color: #fff; background: rgba(255,255,255,.08); }
+.nav-link.active { color: #ffd521; background: rgba(255,213,33,.1); }
+
+/* -- Resume badge ------------------------------------------------ */
+.resume-badge {
+  display: inline-block;
+  font-size: 12px;
+  background: rgba(255,213,33,.15);
+  color: #ffd521;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: 500;
+}
+
+/* -- Now Playing Widget ------------------------------------------ */
+.now-playing {
+  margin: 0 40px 16px;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, #1a2a1a 0%, #162e16 100%);
+  border-radius: 10px;
+  border-left: 4px solid #4caf50;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  animation: pulse-border 2s ease-in-out infinite;
+}
+@keyframes pulse-border { 0%,100% { border-left-color: #4caf50; } 50% { border-left-color: #81c784; } }
+.now-playing-info { flex: 1; }
+.now-playing-label { font-size: 11px; color: #4caf50; text-transform: uppercase; letter-spacing: 2px; font-weight: 600; margin-bottom: 4px; }
+.now-playing-title { font-size: 15px; font-weight: 600; }
+.now-playing-time { font-size: 13px; color: #888; margin-top: 2px; }
+.now-playing-bar { width: 200px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; }
+.now-playing-bar-fill { height: 100%; background: #4caf50; border-radius: 2px; transition: width 1s linear; }
+
+/* -- Episode Progress Bar ---------------------------------------- */
+.ep-progress-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.ep-progress-bar { flex: 1; height: 3px; background: #333; border-radius: 2px; overflow: hidden; }
+.ep-progress-fill { height: 100%; background: #ffd521; border-radius: 2px; transition: width .3s; }
+.ep-progress-fill.complete { background: #4caf50; }
+.ep-progress-text { font-size: 11px; color: #666; white-space: nowrap; }
+.completed-text { color: #4caf50; }
+
+/* -- History Page ------------------------------------------------ */
+.history-page { padding: 20px 40px; }
+.history-stats {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 32px;
+  padding: 24px 0;
+  border-bottom: 1px solid #222;
+}
+.history-stat { text-align: center; }
+.history-stat-value { font-size: 32px; font-weight: 700; color: #ffd521; }
+.history-stat-label { font-size: 13px; color: #888; margin-top: 4px; }
+.history-section { margin-bottom: 32px; }
+.history-section-title { font-size: 16px; font-weight: 600; color: #ffd521; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #222; }
+.history-entry {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #1e1e1e;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: background .15s;
+}
+.history-entry:hover { background: #2a2a2a; }
+.history-entry-code { font-size: 14px; font-weight: 700; color: #ffd521; min-width: 70px; }
+.history-entry-details { flex: 1; }
+.history-entry-title { font-size: 14px; font-weight: 500; color: #ddd; }
+.history-entry-meta { font-size: 12px; color: #666; margin-top: 4px; }
+.history-badge-complete { display: inline-block; background: rgba(76,175,80,.15); color: #4caf50; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+.history-badge-partial { display: inline-block; background: rgba(255,213,33,.15); color: #ffd521; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+.history-entry-action form { display: inline; }
+.history-empty { text-align: center; padding: 60px; color: #666; }
+.history-empty h2 { color: #ffd521; margin-bottom: 8px; }
+.btn-back { display: inline-block; margin-top: 16px; background: #ffd521; color: #000; padding: 10px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; }
+.btn-back:hover { background: #ffe566; }
+
+/* -- Scrollbar --------------------------------------------------- */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #141414; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* -- Responsive -------------------------------------------------- */
+@media (max-width: 600px) {
+  .header, .continue-banner, .stats, .season-panel { padding-left: 16px; padding-right: 16px; margin-left: 16px; margin-right: 16px; }
+  .season-picker { padding-left: 16px; padding-right: 16px; }
+  .episodes-grid { grid-template-columns: 1fr; }
+  .continue-banner { flex-direction: column; align-items: flex-start; }
+}

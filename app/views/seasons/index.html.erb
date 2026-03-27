@@ -1,0 +1,205 @@
+<div class="header">
+  <h1>THE SIMPSONS</h1>
+  <span class="subtitle">Episode Tracker</span>
+  <nav class="header-nav">
+    <a href="<%= root_path %>" class="nav-link active">Browse</a>
+    <a href="<%= history_path %>" class="nav-link">History</a>
+  </nav>
+  <%= button_to "Rescan Files", scan_episodes_path, class: "scan-btn" %>
+</div>
+<%# -- Now Playing Widget (hidden by default, shown via JS when VLC is active) -- %>
+<div class="now-playing" id="nowPlaying" style="display:none">
+  <div class="now-playing-info">
+    <div class="now-playing-label">Now Playing</div>
+    <div class="now-playing-title" id="npTitle"></div>
+    <div class="now-playing-time">
+      <span id="npTime">0:00</span> / <span id="npDuration">0:00</span>
+    </div>
+  </div>
+  <div class="now-playing-bar">
+    <div class="now-playing-bar-fill" id="npBar" style="width:0%"></div>
+  </div>
+</div>
+<% if @seasons.empty? %>
+  <div class="empty-state">
+    <h2>No episodes found</h2>
+    <p>Scan your media folder to get started.</p>
+    <%= button_to "Scan Media Folder", scan_episodes_path, class: "scan-big" %>
+  </div>
+<% else %>
+  <%# -- Resume Episode Banner (partially watched, not finished) -- %>
+  <% if @resume_episode && @resume_episode != @next_episode %>
+    <div class="continue-banner resume-banner">
+      <div class="continue-info">
+        <div class="label">Resume Where You Left Off</div>
+        <div class="ep-info">
+          <%= @resume_episode.code %>
+          <span class="resume-badge"><%= @resume_episode.formatted_progress %> (<%= @resume_episode.progress_percent %>%)</span>
+        </div>
+        <div class="ep-title"><%= @resume_episode.title %></div>
+        <div class="ep-progress-row" style="margin-top:10px;max-width:300px">
+          <div class="ep-progress-bar">
+            <div class="ep-progress-fill" style="width:<%= @resume_episode.progress_percent %>%"></div>
+          </div>
+        </div>
+      </div>
+      <%= button_to play_episode_path(@resume_episode), class: "continue-play-btn resume-play-btn" do %>
+        &#9654; Resume
+      <% end %>
+    </div>
+  <% end %>
+  <%# -- Next Up Banner -- %>
+  <% if @next_episode %>
+    <div class="continue-banner">
+      <div class="continue-info">
+        <div class="label">Next Up</div>
+        <div class="ep-info">
+          <%= @next_episode.code %>
+          <% if @next_episode.in_progress? %>
+            <span class="resume-badge">Resume at <%= @next_episode.formatted_progress %></span>
+          <% end %>
+        </div>
+        <div class="ep-title"><%= @next_episode.title %></div>
+      </div>
+      <%= button_to play_episode_path(@next_episode), class: "continue-play-btn" do %>
+        &#9654; <%= @next_episode.in_progress? ? "Resume" : "Play" %>
+      <% end %>
+    </div>
+  <% elsif @last_watched.nil? %>
+    <% first_ep = @seasons.values.first&.first %>
+    <% if first_ep %>
+      <div class="continue-banner">
+        <div class="continue-info">
+          <div class="label">Start Watching</div>
+          <div class="ep-info"><%= first_ep.code %></div>
+          <div class="ep-title"><%= first_ep.title %></div>
+        </div>
+        <%= button_to play_episode_path(first_ep), class: "continue-play-btn" do %>
+          &#9654; Play
+        <% end %>
+      </div>
+    <% end %>
+  <% else %>
+    <div class="continue-banner">
+      <div class="continue-info">
+        <div class="label">All Done!</div>
+        <div class="ep-info">You've watched everything</div>
+        <div class="ep-title">All <%= @seasons.keys.size %> seasons completed</div>
+      </div>
+    </div>
+  <% end %>
+  <%# -- Stats -- %>
+  <% total = Episode.count; watched_count = Episode.watched.count %>
+  <% total_watch_time = WatchHistory.sum(:progress_seconds) || 0 %>
+  <div class="stats">
+    <span><strong><%= @seasons.keys.size %></strong> seasons</span>
+    <span><strong><%= total %></strong> episodes</span>
+    <span><strong><%= watched_count %></strong> watched (<%= total > 0 ? (watched_count * 100 / total) : 0 %>%)</span>
+    <% if total_watch_time > 0 %>
+      <span><strong><%= (total_watch_time / 3600.0).round(1) %></strong> hours watched</span>
+    <% end %>
+  </div>
+  <%# -- Season Picker -- %>
+  <% active_season = @last_watched&.season_number || @seasons.keys.first %>
+  <div class="season-picker" id="seasonPicker">
+    <% @seasons.each do |season_num, episodes| %>
+      <% watched_in_season = episodes.count(&:watched?) %>
+      <% pct = episodes.any? ? (watched_in_season * 100 / episodes.size) : 0 %>
+      <button
+        class="season-pill<%= ' active' if season_num == active_season %>"
+        data-season="<%= season_num %>"
+        onclick="selectSeason(<%= season_num %>)"
+      >
+        <span class="season-pill-num"><%= season_num %></span>
+        <span class="season-pill-bar"><span class="season-pill-fill" style="width:<%= pct %>%"></span></span>
+      </button>
+    <% end %>
+  </div>
+  <%# -- Season Content Panels -- %>
+  <% @seasons.each do |season_num, episodes| %>
+    <% watched_in_season = episodes.count(&:watched?) %>
+    <% pct = episodes.any? ? (watched_in_season * 100 / episodes.size) : 0 %>
+    <div class="season-panel<%= ' active' if season_num == active_season %>" id="panel-<%= season_num %>">
+      <div class="season-panel-header">
+        <h2 class="season-panel-title">Season <%= season_num %></h2>
+        <span class="season-panel-info">
+          <%= episodes.size %> episodes &middot; <%= watched_in_season %> watched
+          <span class="watched-bar"><span class="fill" style="width:<%= pct %>%"></span></span>
+        </span>
+      </div>
+      <div class="episodes-grid">
+        <% episodes.each do |ep| %>
+          <% card_class = "episode-card" %>
+          <% card_class += " watched" if ep.watched? %>
+          <% card_class += " last-watched" if @last_watched && @last_watched.id == ep.id %>
+          <div class="<%= card_class %>">
+            <div class="ep-code">
+              <%= ep.code %>
+              <% if ep.watched? %><span class="ep-check">&#10003;</span><% end %>
+            </div>
+            <div class="ep-title-card"><%= ep.title %></div>
+            <% if ep.in_progress? %>
+              <div class="ep-progress-row">
+                <div class="ep-progress-bar">
+                  <div class="ep-progress-fill" style="width:<%= ep.progress_percent %>%"></div>
+                </div>
+                <span class="ep-progress-text"><%= ep.formatted_progress %></span>
+              </div>
+            <% elsif ep.finished? && ep.duration_seconds&.positive? %>
+              <div class="ep-progress-row">
+                <div class="ep-progress-bar">
+                  <div class="ep-progress-fill complete" style="width:100%"></div>
+                </div>
+                <span class="ep-progress-text completed-text">Completed</span>
+              </div>
+            <% end %>
+            <div class="ep-actions">
+              <%= button_to play_episode_path(ep), class: "btn-play" do %>
+                &#9654; <%= ep.in_progress? ? "Resume" : "Play" %>
+              <% end %>
+              <%= button_to toggle_episode_path(ep), class: "btn-toggle" do %>
+                <%= ep.watched? ? "Mark unwatched" : "Mark watched" %>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+<% end %>
+<script>
+  function selectSeason(num) {
+    // Update pills
+    document.querySelectorAll('.season-pill').forEach(function(pill) {
+      pill.classList.toggle('active', parseInt(pill.dataset.season) === num);
+    });
+    // Update panels
+    document.querySelectorAll('.season-panel').forEach(function(panel) {
+      panel.classList.toggle('active', panel.id === 'panel-' + num);
+    });
+    // Scroll picker to keep active pill visible
+    var activePill = document.querySelector('.season-pill.active');
+    if (activePill) {
+      activePill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }
+
+  // Poll VLC playback status every 3 seconds
+  setInterval(function() {
+    fetch("/playback/status")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var np = document.getElementById("nowPlaying");
+        if (data.playing) {
+          np.style.display = "flex";
+          document.getElementById("npTitle").textContent = data.episode_code + " — " + data.episode_title;
+          document.getElementById("npTime").textContent = data.progress_display;
+          document.getElementById("npDuration").textContent = data.duration_display;
+          document.getElementById("npBar").style.width = (data.position * 100) + "%";
+        } else {
+          np.style.display = "none";
+        }
+      })
+      .catch(function() {});
+  }, 3000);
+</script>

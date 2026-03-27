@@ -1,0 +1,23 @@
+<div class="history-entry">
+  <div class="history-entry-code"><%= h.episode.code %></div>
+  <div class="history-entry-details">
+    <div class="history-entry-title"><%= h.episode.title %></div>
+    <div class="history-entry-meta">
+      <%= h.started_at.strftime("%b %d, %Y at %H:%M") %>
+      <% if h.progress_seconds&.positive? && h.duration_seconds&.positive? %>
+        &mdash; watched <%= h.progress_percent %>%
+        (<%= format_time(h.progress_seconds) %> / <%= format_time(h.duration_seconds) %>)
+      <% end %>
+      <% if h.finished? %>
+        <span class="history-badge-complete">Completed</span>
+      <% elsif h.progress_seconds&.positive? %>
+        <span class="history-badge-partial">Partial</span>
+      <% end %>
+    </div>
+  </div>
+  <div class="history-entry-action">
+    <%= button_to play_episode_path(h.episode), class: "btn-play" do %>
+      &#9654; <%= h.episode.in_progress? ? "Resume" : "Rewatch" %>
+    <% end %>
+  </div>
+</div>

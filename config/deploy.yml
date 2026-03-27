@@ -1,0 +1,43 @@
+service: simpsons-tracker
+
+image: ghcr.io/cupatea/simpsons-tracker
+
+servers:
+  web:
+    - 167.235.151.15
+
+proxy:
+  ssl: true
+  host: s.cupatea.online
+  app_port: 3000
+
+registry:
+  server: ghcr.io
+  username: cupatea
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+
+env:
+  clear:
+    # Media path inside the container. The server has no media files by default;
+    # MediaScanner gracefully handles missing paths. To serve media from the server,
+    # add a bind mount (e.g. /home/deploy/media:/data/media) to the volumes below.
+    SIMPSONS_MEDIA_PATH: /data/media
+  secret:
+    - RAILS_MASTER_KEY
+
+ssh:
+  user: deploy
+
+volumes:
+  - "simpsons_storage:/rails/storage"
+
+asset_path: /rails/public/assets
+
+aliases:
+  shell: app exec --interactive --reuse "bash"
+  console: app exec --interactive --reuse "bin/rails console"
+  logs: app logs

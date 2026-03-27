@@ -1,0 +1,56 @@
+<div class="header">
+  <h1>THE SIMPSONS</h1>
+  <span class="subtitle">Episode Tracker</span>
+  <nav class="header-nav">
+    <a href="<%= root_path %>" class="nav-link">Browse</a>
+    <a href="<%= history_path %>" class="nav-link active">History</a>
+  </nav>
+</div>
+<div class="history-page">
+  <div class="history-stats">
+    <div class="history-stat">
+      <div class="history-stat-value"><%= @total_episodes %></div>
+      <div class="history-stat-label">Episodes Played</div>
+    </div>
+    <div class="history-stat">
+      <div class="history-stat-value"><%= (@total_time / 3600.0).round(1) %></div>
+      <div class="history-stat-label">Hours Watched</div>
+    </div>
+    <div class="history-stat">
+      <div class="history-stat-value"><%= @histories.count %></div>
+      <div class="history-stat-label">Total Sessions</div>
+    </div>
+  </div>
+  <% if @histories.empty? %>
+    <div class="history-empty">
+      <h2>No watch history yet</h2>
+      <p>Start watching episodes and your history will appear here.</p>
+      <a href="<%= root_path %>" class="btn-back">Browse Episodes</a>
+    </div>
+  <% else %>
+    <% if @today.any? %>
+      <div class="history-section">
+        <h2 class="history-section-title">Today</h2>
+        <% @today.each do |h| %>
+          <%= render partial: "history/entry", locals: { h: h } %>
+        <% end %>
+      </div>
+    <% end %>
+    <% if @this_week.any? %>
+      <div class="history-section">
+        <h2 class="history-section-title">This Week</h2>
+        <% @this_week.each do |h| %>
+          <%= render partial: "history/entry", locals: { h: h } %>
+        <% end %>
+      </div>
+    <% end %>
+    <% if @older.any? %>
+      <div class="history-section">
+        <h2 class="history-section-title">Earlier</h2>
+        <% @older.each do |h| %>
+          <%= render partial: "history/entry", locals: { h: h } %>
+        <% end %>
+      </div>
+    <% end %>
+  <% end %>
+</div>
