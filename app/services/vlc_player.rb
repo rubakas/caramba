@@ -76,8 +76,7 @@ class VlcPlayer
         '--extraintf', 'http',
         '--http-port', VLC_HTTP_PORT.to_s,
         '--http-password', VLC_HTTP_PASSWORD,
-        '--no-http-forward-cookies',
-        '--one-instance'
+        '--no-http-forward-cookies'
       ]
 
       args += ['--start-time', start_time.to_s] if start_time && start_time.to_i > 0
@@ -92,11 +91,11 @@ class VlcPlayer
     # Tell the running VLC instance to play a new file via the HTTP API.
     # Clears the playlist, adds the new file, and plays it.
     def enqueue_and_play(file_path, start_time: nil)
-      encoded_path = URI.encode_www_form_component(file_path)
+      file_uri = "file://#{URI.encode_www_form_component(file_path).gsub('+', '%20')}"
 
       # Clear playlist and add the new file
       request('?command=pl_empty')
-      request("?command=in_play&input=#{encoded_path}")
+      request("?command=in_play&input=#{file_uri}")
 
       # Wait briefly for VLC to start loading the file, then seek if needed
       if start_time && start_time.to_i > 0
