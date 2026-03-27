@@ -1,9 +1,14 @@
 Rails.application.routes.draw do
-  root 'seasons#index'
+  root 'series#index'
 
-  post 'episodes/:id/play', to: 'episodes#play', as: :play_episode
-  post 'episodes/:id/toggle', to: 'episodes#toggle_watched', as: :toggle_episode
-  post 'episodes/scan', to: 'episodes#scan', as: :scan_episodes
+  resources :series, param: :slug, only: %i[index show new create destroy] do
+    post 'scan', on: :member
+
+    resources :episodes, only: [] do
+      post 'play', on: :member
+      post 'toggle', on: :member
+    end
+  end
 
   get 'playback/status', to: 'playback#status', as: :playback_status
   get 'history', to: 'history#index', as: :history

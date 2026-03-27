@@ -1,17 +1,25 @@
 <div class="header">
-  <h1>THE SIMPSONS</h1>
+  <a href="<%= root_path %>" class="header-back">&larr;</a>
+  <h1><%= @series.name.upcase %></h1>
   <span class="subtitle">Episode Tracker</span>
   <nav class="header-nav">
-    <a href="<%= root_path %>" class="nav-link active">Browse</a>
+    <a href="<%= root_path %>" class="nav-link">Browse</a>
+    <a href="<%= series_path(@series.slug) %>" class="nav-link active">Seasons</a>
     <a href="<%= history_path %>" class="nav-link">History</a>
   </nav>
-  <%= button_to "Rescan Files", scan_episodes_path, class: "scan-btn" %>
+  <div class="header-actions">
+    <%= button_to "Rescan Files", scan_series_path(@series.slug), class: "scan-btn" %>
+    <%= button_to "Remove", series_path(@series.slug), method: :delete, class: "scan-btn remove-btn",
+        data: { turbo_confirm: "Remove '#{@series.name}' and all its watch history?" } %>
+  </div>
 </div>
-<%# -- Now Playing Widget (hidden by default, shown via JS when VLC is active) -- %>
+<%# -- Now Playing Widget -- %>
 <div class="now-playing" id="nowPlaying" style="display:none">
   <div class="now-playing-info">
     <div class="now-playing-label">Now Playing</div>
-    <div class="now-playing-title" id="npTitle"></div>
+    <div class="now-playing-title">
+      <span id="npSeries"></span> &mdash; <span id="npTitle"></span>
+    </div>
     <div class="now-playing-time">
       <span id="npTime">0:00</span> / <span id="npDuration">0:00</span>
     </div>
@@ -23,8 +31,8 @@
 <% if @seasons.empty? %>
   <div class="empty-state">
     <h2>No episodes found</h2>
-    <p>Scan your media folder to get started.</p>
-    <%= button_to "Scan Media Folder", scan_episodes_path, class: "scan-big" %>
+    <p>Scan the media folder to load episodes.</p>
+    <%= button_to "Scan Media Folder", scan_series_path(@series.slug), class: "scan-big" %>
   </div>
 <% else %>
   <%# -- Resume Episode Banner (partially watched, not finished) -- %>
@@ -43,7 +51,7 @@
           </div>
         </div>
       </div>
-      <%= button_to play_episode_path(@resume_episode), class: "continue-play-btn resume-play-btn" do %>
+      <%= button_to play_series_episode_path(@series.slug, @resume_episode), class: "continue-play-btn resume-play-btn" do %>
         &#9654; Resume
       <% end %>
     </div>
@@ -61,7 +69,7 @@
         </div>
         <div class="ep-title"><%= @next_episode.title %></div>
       </div>
-      <%= button_to play_episode_path(@next_episode), class: "continue-play-btn" do %>
+      <%= button_to play_series_episode_path(@series.slug, @next_episode), class: "continue-play-btn" do %>
         &#9654; <%= @next_episode.in_progress? ? "Resume" : "Play" %>
       <% end %>
     </div>
@@ -74,7 +82,7 @@
           <div class="ep-info"><%= first_ep.code %></div>
           <div class="ep-title"><%= first_ep.title %></div>
         </div>
-        <%= button_to play_episode_path(first_ep), class: "continue-play-btn" do %>
+        <%= button_to play_series_episode_path(@series.slug, first_ep), class: "continue-play-btn" do %>
           &#9654; Play
         <% end %>
       </div>
@@ -89,8 +97,8 @@
     </div>
   <% end %>
   <%# -- Stats -- %>
-  <% total = Episode.count; watched_count = Episode.watched.count %>
-  <% total_watch_time = WatchHistory.sum(:progress_seconds) || 0 %>
+  <% total = @series.total_episodes; watched_count = @series.watched_episodes %>
+  <% total_watch_time = @series.total_watch_time %>
   <div class="stats">
     <span><strong><%= @seasons.keys.size %></strong> seasons</span>
     <span><strong><%= total %></strong> episodes</span>
@@ -154,10 +162,10 @@
               </div>
             <% end %>
             <div class="ep-actions">
-              <%= button_to play_episode_path(ep), class: "btn-play" do %>
+              <%= button_to play_series_episode_path(@series.slug, ep), class: "btn-play" do %>
                 &#9654; <%= ep.in_progress? ? "Resume" : "Play" %>
               <% end %>
-              <%= button_to toggle_episode_path(ep), class: "btn-toggle" do %>
+              <%= button_to toggle_series_episode_path(@series.slug, ep), class: "btn-toggle" do %>
                 <%= ep.watched? ? "Mark unwatched" : "Mark watched" %>
               <% end %>
             </div>
@@ -169,15 +177,12 @@
 <% end %>
 <script>
   function selectSeason(num) {
-    // Update pills
     document.querySelectorAll('.season-pill').forEach(function(pill) {
       pill.classList.toggle('active', parseInt(pill.dataset.season) === num);
     });
-    // Update panels
     document.querySelectorAll('.season-panel').forEach(function(panel) {
       panel.classList.toggle('active', panel.id === 'panel-' + num);
     });
-    // Scroll picker to keep active pill visible
     var activePill = document.querySelector('.season-pill.active');
     if (activePill) {
       activePill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
@@ -192,7 +197,8 @@
         var np = document.getElementById("nowPlaying");
         if (data.playing) {
           np.style.display = "flex";
-          document.getElementById("npTitle").textContent = data.episode_code + " — " + data.episode_title;
+          document.getElementById("npSeries").textContent = data.series_name || "";
+          document.getElementById("npTitle").textContent = data.episode_code + " " + data.episode_title;
           document.getElementById("npTime").textContent = data.progress_display;
           document.getElementById("npDuration").textContent = data.duration_display;
           document.getElementById("npBar").style.width = (data.position * 100) + "%";

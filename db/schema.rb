@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_03_27_083424) do
+ActiveRecord::Schema[8.1].define(version: 2026_03_27_094603) do
   create_table "episodes", force: :cascade do |t|
     t.string "code"
     t.datetime "created_at", null: false
@@ -20,10 +20,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_27_083424) do
     t.datetime "last_watched_at"
     t.integer "progress_seconds", default: 0
     t.integer "season_number"
+    t.integer "series_id", null: false
     t.string "title"
     t.datetime "updated_at", null: false
     t.boolean "watched", default: false, null: false
-    t.index ["code"], name: "index_episodes_on_code", unique: true
+    t.index ["series_id", "code"], name: "index_episodes_on_series_id_and_code", unique: true
+    t.index ["series_id"], name: "index_episodes_on_series_id"
+  end
+
+  create_table "series", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "media_path", null: false
+    t.string "name", null: false
+    t.string "poster_url"
+    t.string "slug", null: false
+    t.datetime "updated_at", null: false
+    t.index ["slug"], name: "index_series_on_slug", unique: true
   end
 
   create_table "watch_histories", force: :cascade do |t|
@@ -37,5 +49,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_03_27_083424) do
     t.index ["episode_id"], name: "index_watch_histories_on_episode_id"
   end
 
+  add_foreign_key "episodes", "series"
   add_foreign_key "watch_histories", "episodes"
 end

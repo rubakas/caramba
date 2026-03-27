@@ -7,6 +7,7 @@ class PlaybackController < ApplicationController
   def status
     episode_id = session[:current_episode_id]
     history_id = session[:current_history_id]
+    series_slug = session[:current_series_slug]
 
     vlc_status = VlcPlayer.status
 
@@ -51,6 +52,7 @@ class PlaybackController < ApplicationController
       end
       session.delete(:current_episode_id)
       session.delete(:current_history_id)
+      session.delete(:current_series_slug)
       session.delete(:vlc_pid)
     end
 
@@ -60,25 +62,13 @@ class PlaybackController < ApplicationController
       episode_id: episode.id,
       episode_code: episode.code,
       episode_title: episode.title,
+      series_name: episode.series.name,
+      series_slug: series_slug,
       time: vlc_status[:time],
       length: vlc_status[:length],
       position: vlc_status[:position],
-      progress_display: format_time(vlc_status[:time]),
-      duration_display: format_time(vlc_status[:length])
+      progress_display: ApplicationHelper.format_time(vlc_status[:time]),
+      duration_display: ApplicationHelper.format_time(vlc_status[:length])
     }
-  end
-
-  private
-
-  def format_time(seconds)
-    return '0:00' unless seconds&.positive?
-
-    mins, secs = seconds.divmod(60)
-    hours, mins = mins.divmod(60)
-    if hours > 0
-      format('%d:%02d:%02d', hours, mins, secs)
-    else
-      format('%d:%02d', mins, secs)
-    end
   end
 end

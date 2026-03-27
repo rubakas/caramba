@@ -1,0 +1,95 @@
+<div class="header">
+  <h1>SERIES TRACKER</h1>
+  <nav class="header-nav">
+    <a href="<%= root_path %>" class="nav-link active">Browse</a>
+    <a href="<%= history_path %>" class="nav-link">History</a>
+  </nav>
+  <a href="<%= new_series_path %>" class="add-series-btn">+ Add Series</a>
+</div>
+<%# -- Now Playing Widget (hidden by default, shown via JS when VLC is active) -- %>
+<div class="now-playing" id="nowPlaying" style="display:none">
+  <div class="now-playing-info">
+    <div class="now-playing-label">Now Playing</div>
+    <div class="now-playing-title">
+      <span id="npSeries"></span> &mdash; <span id="npTitle"></span>
+    </div>
+    <div class="now-playing-time">
+      <span id="npTime">0:00</span> / <span id="npDuration">0:00</span>
+    </div>
+  </div>
+  <div class="now-playing-bar">
+    <div class="now-playing-bar-fill" id="npBar" style="width:0%"></div>
+  </div>
+</div>
+<% if @all_series.empty? %>
+  <div class="empty-state">
+    <h2>No series added yet</h2>
+    <p>Point to a folder on your Mac to start tracking a show.</p>
+    <a href="<%= new_series_path %>" class="scan-big">+ Add Your First Series</a>
+  </div>
+<% else %>
+  <div class="series-grid">
+    <% @all_series.each do |s| %>
+      <a href="<%= series_path(s.slug) %>" class="series-card">
+        <div class="series-poster">
+          <% if s.poster_url.present? %>
+            <img src="<%= s.poster_url %>" alt="<%= s.name %>">
+          <% else %>
+            <div class="series-poster-placeholder">
+              <span class="series-initial"><%= s.name[0] %></span>
+            </div>
+          <% end %>
+          <% if s.resumable_episode %>
+            <div class="series-resume-badge">Resume</div>
+          <% end %>
+        </div>
+        <div class="series-card-info">
+          <div class="series-card-name"><%= s.name %></div>
+          <div class="series-card-meta">
+            <%= s.season_count %> seasons &middot; <%= s.total_episodes %> episodes
+          </div>
+          <% if s.watched_episodes > 0 %>
+            <div class="series-card-progress">
+              <div class="series-progress-bar">
+                <div class="series-progress-fill" style="width:<%= s.progress_percent %>%"></div>
+              </div>
+              <span class="series-progress-text"><%= s.watched_episodes %>/<%= s.total_episodes %> (<%= s.progress_percent %>%)</span>
+            </div>
+          <% end %>
+        </div>
+      </a>
+    <% end %>
+    <a href="<%= new_series_path %>" class="series-card series-card-add">
+      <div class="series-poster">
+        <div class="series-poster-placeholder series-add-placeholder">
+          <span class="series-add-icon">+</span>
+        </div>
+      </div>
+      <div class="series-card-info">
+        <div class="series-card-name">Add Series</div>
+        <div class="series-card-meta">Point to a folder</div>
+      </div>
+    </a>
+  </div>
+<% end %>
+<script>
+  // Poll VLC playback status every 3 seconds
+  setInterval(function() {
+    fetch("/playback/status")
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var np = document.getElementById("nowPlaying");
+        if (data.playing) {
+          np.style.display = "flex";
+          document.getElementById("npSeries").textContent = data.series_name || "";
+          document.getElementById("npTitle").textContent = data.episode_code + " " + data.episode_title;
+          document.getElementById("npTime").textContent = data.progress_display;
+          document.getElementById("npDuration").textContent = data.duration_display;
+          document.getElementById("npBar").style.width = (data.position * 100) + "%";
+        } else {
+          np.style.display = "none";
+        }
+      })
+      .catch(function() {});
+  }, 3000);
+</script>

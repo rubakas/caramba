@@ -1,5 +1,8 @@
 <div class="history-entry">
-  <div class="history-entry-code"><%= h.episode.code %></div>
+  <div class="history-entry-code">
+    <div class="history-entry-series"><%= h.episode.series.name %></div>
+    <%= h.episode.code %>
+  </div>
   <div class="history-entry-details">
     <div class="history-entry-title"><%= h.episode.title %></div>
     <div class="history-entry-meta">
@@ -16,7 +19,7 @@
     </div>
   </div>
   <div class="history-entry-action">
-    <%= button_to play_episode_path(h.episode), class: "btn-play" do %>
+    <%= button_to play_series_episode_path(h.episode.series.slug, h.episode), class: "btn-play" do %>
       &#9654; <%= h.episode.in_progress? ? "Resume" : "Rewatch" %>
     <% end %>
   </div>

@@ -1,6 +1,6 @@
 <div class="header">
-  <h1>THE SIMPSONS</h1>
-  <span class="subtitle">Episode Tracker</span>
+  <a href="<%= root_path %>" class="header-back">&larr;</a>
+  <h1>SERIES TRACKER</h1>
   <nav class="header-nav">
     <a href="<%= root_path %>" class="nav-link">Browse</a>
     <a href="<%= history_path %>" class="nav-link active">History</a>
@@ -8,6 +8,10 @@
 </div>
 <div class="history-page">
   <div class="history-stats">
+    <div class="history-stat">
+      <div class="history-stat-value"><%= @total_series %></div>
+      <div class="history-stat-label">Series</div>
+    </div>
     <div class="history-stat">
       <div class="history-stat-value"><%= @total_episodes %></div>
       <div class="history-stat-label">Episodes Played</div>
@@ -25,7 +29,7 @@
     <div class="history-empty">
       <h2>No watch history yet</h2>
       <p>Start watching episodes and your history will appear here.</p>
-      <a href="<%= root_path %>" class="btn-back">Browse Episodes</a>
+      <a href="<%= root_path %>" class="btn-back">Browse Series</a>
     </div>
   <% else %>
     <% if @today.any? %>

@@ -1,5 +1,9 @@
 module ApplicationHelper
   def format_time(seconds)
+    ApplicationHelper.format_time(seconds)
+  end
+
+  def self.format_time(seconds)
     return '0:00' unless seconds&.positive?
 
     mins, secs = seconds.divmod(60)

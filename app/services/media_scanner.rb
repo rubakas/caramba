@@ -1,19 +1,39 @@
-# Scans the media root directory for Simpsons season folders and episode files,
-# then upserts them into the episodes table.
+# Scans a series' media directory for season folders and episode files,
+# then upserts them into the episodes table scoped to that series.
+#
+# Supports any show that follows the standard SxxExx naming convention:
+#   Show.Name.S01E01.Episode.Title.1080p.WEBRip.x265.mkv
+#
+# Can also auto-detect the series name from the root folder:
+#   "The.Simpsons.1989.WEBRip.BDRip.H.265-ernzarob" -> "The Simpsons"
 class MediaScanner
-  MEDIA_ROOT = ENV.fetch('SIMPSONS_MEDIA_PATH',
-                         '/Volumes/Mac Backup/The.Simpsons.1989.WEBRip.BDRip.H.265-ernzarob')
+  SEASON_PATTERN  = /\.S(\d+)\./i
+  EPISODE_PATTERN = /\.S(\d+)E(\d+)\.(.+?)\.(?:\d+p)/i
 
-  SEASON_PATTERN = /\.S(\d+)\./
-  EPISODE_PATTERN = /\.S(\d+)E(\d+)\.(.+?)\.(?:\d+p)/
+  def self.scan!(series)
+    new(series).scan!
+  end
 
-  def self.scan!
-    new.scan!
+  # Create or find a Series from a folder path, auto-detecting the name,
+  # then scan its episodes. Returns the Series record.
+  def self.add_from_path!(path)
+    path = path.strip
+    name = Series.name_from_path(path)
+    series = Series.find_or_initialize_by(media_path: path)
+    series.name = name if series.new_record?
+    series.save!
+    scan!(series)
+    series
+  end
+
+  def initialize(series)
+    @series = series
+    @media_root = series.media_path
   end
 
   def scan!
-    unless Dir.exist?(MEDIA_ROOT)
-      Rails.logger.warn("MediaScanner: media root not found: #{MEDIA_ROOT}")
+    unless Dir.exist?(@media_root)
+      Rails.logger.warn("MediaScanner: media root not found: #{@media_root}")
       return 0
     end
 
@@ -23,13 +43,13 @@ class MediaScanner
       season_num = parse_season_number(dir)
       next unless season_num
 
-      season_path = File.join(MEDIA_ROOT, dir)
+      season_path = File.join(@media_root, dir)
       mkv_files(season_path).each do |filename|
         ep = parse_episode(filename)
         next unless ep
 
         full_path = File.join(season_path, filename)
-        episode = Episode.find_or_initialize_by(code: ep[:code])
+        episode = @series.episodes.find_or_initialize_by(code: ep[:code])
         episode.assign_attributes(
           season_number: ep[:season],
           episode_number: ep[:episode],
@@ -41,15 +61,15 @@ class MediaScanner
       end
     end
 
-    Rails.logger.info("MediaScanner: scanned #{count} episodes")
+    Rails.logger.info("MediaScanner: scanned #{count} episodes for '#{@series.name}'")
     count
   end
 
   private
 
   def season_dirs
-    Dir.entries(MEDIA_ROOT)
-       .select { |d| File.directory?(File.join(MEDIA_ROOT, d)) && d.match?(SEASON_PATTERN) }
+    Dir.entries(@media_root)
+       .select { |d| File.directory?(File.join(@media_root, d)) && d.match?(SEASON_PATTERN) }
        .sort_by { |d| parse_season_number(d) || 0 }
   end
 
@@ -68,10 +88,10 @@ class MediaScanner
     match = filename.match(EPISODE_PATTERN)
     return nil unless match
 
-    season = match[1].to_i
+    season  = match[1].to_i
     episode = match[2].to_i
-    title = match[3].tr('.', ' ')
-    code = format('S%02dE%02d', season, episode)
+    title   = match[3].tr('.', ' ')
+    code    = format('S%02dE%02d', season, episode)
 
     { season: season, episode: episode, title: title, code: code }
   end
