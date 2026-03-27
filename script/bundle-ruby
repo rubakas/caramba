@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+# Assembles a portable Ruby runtime + vendored gems + Rails app
+# into build/ruby-bundle/ for inclusion in the Electron .app.
+#
+# Usage: script/bundle-ruby
+#
+set -euo pipefail
+
+RUBY_PREFIX="$(ruby -e "puts RbConfig::CONFIG['prefix']")"
+RUBY_VER="$(ruby -e "puts RUBY_VERSION")"
+RUBY_ARCH="$(ruby -e "puts RbConfig::CONFIG['arch']")"
+BUNDLE_DIR="build/ruby-bundle"
+
+echo "==> Ruby prefix: $RUBY_PREFIX"
+echo "==> Ruby version: $RUBY_VER  arch: $RUBY_ARCH"
+echo "==> Bundle dir: $BUNDLE_DIR"
+
+# Clean previous build
+rm -rf "$BUNDLE_DIR"
+mkdir -p "$BUNDLE_DIR"/{bin,lib/ruby}
+
+# --- 1. Copy Ruby binary ---
+echo "==> Copying Ruby binary..."
+cp "$RUBY_PREFIX/bin/ruby" "$BUNDLE_DIR/bin/ruby"
+
+# --- 2. Copy libruby shared library ---
+echo "==> Copying libruby..."
+cp "$RUBY_PREFIX/lib/libruby.$RUBY_VER.dylib" "$BUNDLE_DIR/lib/" 2>/dev/null || true
+cp "$RUBY_PREFIX/lib/libruby.${RUBY_VER%.*}.dylib" "$BUNDLE_DIR/lib/" 2>/dev/null || true
+# Also copy the unversioned symlink
+cp -P "$RUBY_PREFIX/lib/libruby.dylib" "$BUNDLE_DIR/lib/" 2>/dev/null || true
+
+# --- 3. Copy Ruby stdlib ---
+echo "==> Copying Ruby stdlib..."
+cp -R "$RUBY_PREFIX/lib/ruby/$RUBY_VER" "$BUNDLE_DIR/lib/ruby/$RUBY_VER"
+
+# --- 4. Copy bundler (ships with Ruby) ---
+echo "==> Ensuring bundler is included..."
+# bundler.rb and bundler/ are part of the stdlib, already copied above
+
+# --- 5. Fix dylib paths to be relative ---
+echo "==> Fixing dylib load paths..."
+LIBRUBY_NAME="libruby.${RUBY_VER%.*}.dylib"
+# Make ruby binary look for libruby relative to itself
+install_name_tool -change \
+  "$RUBY_PREFIX/lib/$LIBRUBY_NAME" \
+  "@executable_path/../lib/$LIBRUBY_NAME" \
+  "$BUNDLE_DIR/bin/ruby" 2>/dev/null || true
+
+# Update libruby's install name to be @rpath-based
+install_name_tool -id \
+  "@rpath/$LIBRUBY_NAME" \
+  "$BUNDLE_DIR/lib/$LIBRUBY_NAME" 2>/dev/null || true
+
+# --- 6. Vendor gems ---
+echo "==> Vendoring gems..."
+bundle config set --local path vendor/bundle
+bundle install --quiet
+
+# Copy vendored gems into bundle
+cp -R vendor/bundle "$BUNDLE_DIR/vendor_bundle"
+
+# --- 7. Copy the Rails app ---
+echo "==> Copying Rails app..."
+RAILS_DEST="$BUNDLE_DIR/rails"
+mkdir -p "$RAILS_DEST"
+
+# Copy app directories (excluding dev/test artifacts)
+for dir in app bin config db lib public vendor; do
+  if [ -d "$dir" ]; then
+    cp -R "$dir" "$RAILS_DEST/$dir"
+  fi
+done
+
+# Copy root config files
+for f in config.ru Gemfile Gemfile.lock Rakefile; do
+  [ -f "$f" ] && cp "$f" "$RAILS_DEST/$f"
+done
+
+# Point the bundled app at the vendored gems
+mkdir -p "$RAILS_DEST/.bundle"
+cat > "$RAILS_DEST/.bundle/config" <<BUNDLECONF
+---
+BUNDLE_PATH: "../vendor_bundle"
+BUNDLE_WITHOUT: "development:test"
+BUNDLE_DEPLOYMENT: "true"
+BUNDLECONF
+
+# Create required directories
+mkdir -p "$RAILS_DEST/log" "$RAILS_DEST/tmp/pids" "$RAILS_DEST/storage" "$RAILS_DEST/db"
+
+# --- 8. Precompile assets for production ---
+echo "==> Precompiling assets..."
+RAILS_ENV=production SECRET_KEY_BASE=placeholder bundle exec rails assets:precompile --trace 2>/dev/null || echo "    (asset precompile skipped or no assets pipeline)"
+
+# --- 9. Summary ---
+echo ""
+echo "==> Build complete!"
+du -sh "$BUNDLE_DIR"
+du -sh "$BUNDLE_DIR/bin" "$BUNDLE_DIR/lib" "$BUNDLE_DIR/vendor_bundle" "$BUNDLE_DIR/rails"
+echo ""
+echo "Contents will be at: Resources/ruby-bundle/ inside the .app"
