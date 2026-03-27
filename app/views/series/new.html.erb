@@ -9,28 +9,69 @@
   <div class="add-container">
     <h1 class="page-title">Add Series</h1>
     <p class="add-help">
-      Point to a folder that contains MKV files with SxxExx naming.<br>
+      Choose a folder that contains MKV files with SxxExx naming.<br>
       The series name will be auto-detected from the folder name.
-    </p>
-    <p class="add-example">
-      e.g. <code>/Volumes/Backup/Breaking.Bad.2008.1080p.BluRay.x265</code>
     </p>
     <% if flash[:alert] %>
       <div class="alert"><%= flash[:alert] %></div>
     <% end %>
-    <%= form_with url: series_index_path, method: :post, class: "add-form" do |f| %>
-      <div class="field">
-        <label for="media_path">Media Folder Path</label>
-        <input type="text" name="media_path" id="media_path"
+    <%= form_with url: series_index_path, method: :post, class: "add-form", id: "addForm" do |f| %>
+      <input type="hidden" name="media_path" id="media_path">
+      <%# Electron mode: folder picker button %>
+      <div class="field" id="electronPicker" style="display:none">
+        <div class="folder-picker">
+          <button type="button" class="btn-choose-folder" id="chooseBtn">Choose Folder...</button>
+          <span class="folder-path" id="folderDisplay">No folder selected</span>
+        </div>
+      </div>
+      <%# Browser fallback: text input %>
+      <div class="field" id="browserInput">
+        <label for="media_path_text">Media Folder Path</label>
+        <input type="text" id="media_path_text"
                value="<%= params[:media_path] %>"
                placeholder="/path/to/Show.Name.Year..."
                class="field-input"
-               autofocus required>
+               autofocus>
       </div>
       <div class="add-actions">
-        <button type="submit" class="btn-primary">Scan & Add</button>
-        <a href="<%= root_path %>" class="btn-ghost">Cancel</a>
+        <button type="submit" class="btn-primary" id="submitBtn">Scan & Add</button>
       </div>
     <% end %>
   </div>
 </main>
+<script>
+  (function() {
+    var hiddenInput = document.getElementById('media_path');
+    var electronPicker = document.getElementById('electronPicker');
+    var browserInput = document.getElementById('browserInput');
+    var textInput = document.getElementById('media_path_text');
+    var chooseBtn = document.getElementById('chooseBtn');
+    var folderDisplay = document.getElementById('folderDisplay');
+    var form = document.getElementById('addForm');
+
+    var submitBtn = document.getElementById('submitBtn');
+
+    if (window.electronAPI && window.electronAPI.selectFolder) {
+      // Electron mode: show folder picker, hide text input, hide submit until folder chosen
+      electronPicker.style.display = '';
+      browserInput.style.display = 'none';
+      submitBtn.style.display = 'none';
+
+      chooseBtn.addEventListener('click', function() {
+        window.electronAPI.selectFolder().then(function(folderPath) {
+          if (folderPath) {
+            hiddenInput.value = folderPath;
+            folderDisplay.textContent = folderPath;
+            folderDisplay.classList.add('has-path');
+            submitBtn.style.display = '';
+          }
+        });
+      });
+    } else {
+      // Browser dev mode: sync text input to hidden input on submit
+      form.addEventListener('submit', function() {
+        hiddenInput.value = textInput.value;
+      });
+    }
+  })();
+</script>

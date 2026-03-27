@@ -157,7 +157,7 @@
         data-season="<%= season_num %>"
         onclick="selectSeason(<%= season_num %>)"
       >
-          Season <%= season_num %>
+          <%= season_num == 0 ? 'Specials' : "Season #{season_num}" %>
           <% if pct == 100 %>
             <span class="season-check">&#10003;</span>
           <% elsif pct > 0 %>
@@ -172,7 +172,7 @@
       <% pct = episodes.any? ? (watched_in_season * 100 / episodes.size) : 0 %>
       <section class="season-panel<%= ' active' if season_num == active_season %>" id="panel-<%= season_num %>">
         <div class="season-header">
-          <h2>Season <%= season_num %></h2>
+          <h2><%= season_num == 0 ? 'Specials' : "Season #{season_num}" %></h2>
           <span class="season-detail"><%= episodes.size %> episodes &middot; <%= watched_in_season %> watched</span>
           <div class="season-bar">
             <div class="season-bar-fill" style="width:<%= pct %>%"></div>
@@ -243,12 +243,14 @@
     if (active) active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }
 
+  var _wasPlaying = false;
   setInterval(function() {
     fetch("/playback/status")
       .then(function(r) { return r.json(); })
       .then(function(data) {
         var np = document.getElementById("nowPlaying");
         if (data.playing) {
+          _wasPlaying = true;
           np.style.display = "flex";
           document.getElementById("npSeries").textContent = data.series_name || "";
           document.getElementById("npTitle").textContent = data.episode_code + " " + data.episode_title;
@@ -257,6 +259,7 @@
           document.getElementById("npBar").style.width = (data.position * 100) + "%";
         } else {
           np.style.display = "none";
+          if (_wasPlaying) { _wasPlaying = false; window.location.reload(); }
         }
       })
       .catch(function() {});

@@ -13,10 +13,19 @@ class Series < ApplicationRecord
   # Derive a clean series name from a folder path.
   # e.g. "/Volumes/Backup/The.Simpsons.1989.WEBRip.BDRip.H.265-ernzarob" -> "The Simpsons"
   # e.g. "/data/Breaking.Bad.2008.1080p.BluRay.x265" -> "Breaking Bad"
+  # e.g. "/Volumes/NTFS/Black Books (2000) Season 1-3..." -> "Black Books"
+  # e.g. "/Volumes/NTFS/The Sopranos" -> "The Sopranos"
+  # e.g. "/Volumes/NTFS/The.City.And.The.City.S01.1080p..." -> "The City And The City"
   def self.name_from_path(path)
     folder = File.basename(path)
-    # Strip everything from the first 4-digit year onward, then replace dots with spaces
-    clean = folder.sub(/[.\s]\d{4}.*/, '').tr('.', ' ').strip
+    # Strip parenthesized year and everything after: "Black Books (2000) Season..." -> "Black Books"
+    clean = folder.sub(/\s*\(\d{4}\).*/, '')
+    # Strip dot-separated year and everything after: "The.Simpsons.1989..." -> "The.Simpsons"
+    clean = clean.sub(/[.](?:19|20)\d{2}.*/, '') if clean == folder
+    # Strip season code and everything after: "The.City.And.The.City.S01.1080p..." -> "The.City.And.The.City"
+    clean = clean.sub(/[.\s]S\d+.*/i, '') if clean == folder
+    # Replace dots with spaces
+    clean = clean.tr('.', ' ').strip
     clean.presence || folder
   end
 

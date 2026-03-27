@@ -83,12 +83,14 @@
   </main>
 <% end %>
 <script>
+  var _wasPlaying = false;
   setInterval(function() {
     fetch("/playback/status")
       .then(function(r) { return r.json(); })
       .then(function(data) {
         var np = document.getElementById("nowPlaying");
         if (data.playing) {
+          _wasPlaying = true;
           np.style.display = "flex";
           document.getElementById("npSeries").textContent = data.series_name || "";
           document.getElementById("npTitle").textContent = data.episode_code + " " + data.episode_title;
@@ -97,6 +99,7 @@
           document.getElementById("npBar").style.width = (data.position * 100) + "%";
         } else {
           np.style.display = "none";
+          if (_wasPlaying) { _wasPlaying = false; window.location.reload(); }
         }
       })
       .catch(function() {});

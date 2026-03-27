@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
 const net = require('net');
@@ -157,6 +157,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -172,6 +173,17 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// --- IPC Handlers ---
+
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Series Folder',
+  });
+  if (result.canceled) return null;
+  return result.filePaths[0];
+});
 
 // --- App Lifecycle ---
 

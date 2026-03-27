@@ -961,10 +961,48 @@ body {
 }
 .field-input::placeholder { color: var(--text-tertiary); }
 
+.folder-picker {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.btn-choose-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,.1);
+  color: var(--text-primary);
+  border: 1px solid rgba(255,255,255,.18);
+  padding: 12px 28px;
+  border-radius: 980px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .2s, transform .15s;
+}
+.btn-choose-folder:hover {
+  background: rgba(255,255,255,.16);
+  transform: scale(1.02);
+}
+.folder-path {
+  color: var(--text-tertiary);
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-path.has-path {
+  color: var(--text-secondary);
+}
+
 .add-actions {
   display: flex;
   gap: 12px;
   align-items: center;
+  justify-content: center;
 }
 
 /* ================================================================
