@@ -1,11 +1,85 @@
-#!/bin/bash
-# Build: React + Electron packaging
-set -e
+#!/usr/bin/env bash
+#
+# Build the packaged app with auto version increment.
+#
+# Version format: MAJOR.MINOR.PATCH where PATCH auto-increments.
+# The last-built commit hash is stored in .build-commit. If HEAD
+# matches that hash, the version stays the same (idempotent rebuild).
+#
+# Usage: bin/build              # Mac + Linux
+#        bin/build --mac        # Mac only
+#        bin/build --linux      # Linux only
+#
+set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
+BUILD_COMMIT_FILE=".build-commit"
+PACKAGE_JSON="package.json"
+
+# ── 0. Parse platform flags (default: both) ─────────────────────────
+BUILD_MAC=false
+BUILD_LINUX=false
+
+if [ $# -eq 0 ]; then
+  BUILD_MAC=true
+  BUILD_LINUX=true
+else
+  for arg in "$@"; do
+    case "$arg" in
+      --mac)   BUILD_MAC=true ;;
+      --linux) BUILD_LINUX=true ;;
+      *) echo "Unknown flag: $arg (use --mac, --linux, or both)"; exit 1 ;;
+    esac
+  done
+fi
+
+# ── 1. Version increment ────────────────────────────────────────────
+HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+LAST_HASH=$(cat "$BUILD_COMMIT_FILE" 2>/dev/null || echo "")
+
+CURRENT_VERSION=$(node -e "console.log(require('./$PACKAGE_JSON').version)")
+
+if [ "$HEAD_HASH" = "$LAST_HASH" ]; then
+  echo "Version $CURRENT_VERSION (same commit: $HEAD_HASH — $HEAD_MSG)"
+else
+  # Bump patch version
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+  PATCH=$((PATCH + 1))
+  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+  # Update package.json
+  node -e "
+    const fs = require('fs');
+    const pkg = JSON.parse(fs.readFileSync('$PACKAGE_JSON', 'utf-8'));
+    pkg.version = '$NEW_VERSION';
+    fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
+  "
+
+  echo "Version $CURRENT_VERSION → $NEW_VERSION ($HEAD_HASH — $HEAD_MSG)"
+  CURRENT_VERSION="$NEW_VERSION"
+fi
+
+# ── 2. Build React frontend ────────────────────────────────────────
+echo ""
 echo "Building React frontend..."
 npx vite build
 
-echo "Packaging Electron app..."
-npx electron-builder --mac --publish never
+# ── 3. Build platform packages ─────────────────────────────────────
+TARGETS=""
+$BUILD_MAC   && TARGETS="$TARGETS --mac"
+$BUILD_LINUX && TARGETS="$TARGETS --linux"
 
-echo "Done! Check the dist/ folder."
+echo ""
+echo "Building Electron app v$CURRENT_VERSION ($TARGETS)..."
+npx electron-builder $TARGETS --publish never
+
+# ── 4. Record build commit ─────────────────────────────────────────
+echo "$HEAD_HASH" > "$BUILD_COMMIT_FILE"
+
+echo ""
+echo "Build complete: v$CURRENT_VERSION"
+ls -lh dist/*.dmg 2>/dev/null || true
+ls -lh dist/*.AppImage 2>/dev/null || true
+ls -lh dist/*.deb 2>/dev/null || true

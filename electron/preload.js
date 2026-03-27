@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
   // Episodes
   playEpisode: (episodeId) => ipcRenderer.invoke('episodes:play', episodeId),
   toggleEpisode: (episodeId) => ipcRenderer.invoke('episodes:toggle', episodeId),
+  getNextEpisode: (episodeId) => ipcRenderer.invoke('episodes:getNext', episodeId),
 
   // Movies
   listMovies: () => ipcRenderer.invoke('movies:list'),
@@ -26,10 +27,26 @@ contextBridge.exposeInMainWorld('api', {
   refreshMovieMetadata: (slug) => ipcRenderer.invoke('movies:refreshMetadata', slug),
   destroyMovie: (slug) => ipcRenderer.invoke('movies:destroy', slug),
 
-  // Playback
+  // Playback (new transcoder-based)
+  startPlayback: (filePath, startTime, prefs) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs),
+  seekPlayback: (time) => ipcRenderer.invoke('playback:seek', time),
+  stopPlayback: (finalTime, finalDuration) => ipcRenderer.invoke('playback:stop', finalTime, finalDuration),
+  reportProgress: (time, duration) => ipcRenderer.invoke('playback:progress', time, duration),
   getPlaybackStatus: () => ipcRenderer.invoke('playback:status'),
   setPlaybackEpisode: (episodeId, whId) => ipcRenderer.invoke('playback:setEpisode', episodeId, whId),
   setPlaybackMovie: (movieId) => ipcRenderer.invoke('playback:setMovie', movieId),
+  switchAudio: (audioStreamIndex, currentVideoTime) => ipcRenderer.invoke('playback:switchAudio', audioStreamIndex, currentVideoTime),
+  switchSubtitle: (subtitleStreamIndex) => ipcRenderer.invoke('playback:switchSubtitle', subtitleStreamIndex),
+  savePlaybackPreferences: (prefs) => ipcRenderer.invoke('playback:savePreferences', prefs),
+  getPlaybackPreferences: (query) => ipcRenderer.invoke('playback:getPreferences', query),
+  checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),
+  openInVlc: (opts) => ipcRenderer.invoke('playback:openInVlc', opts),
+  openInDefault: (filePath) => ipcRenderer.invoke('playback:openInDefault', filePath),
+  onVlcPlaybackEnded: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('vlc-playback-ended', handler)
+    return () => ipcRenderer.removeListener('vlc-playback-ended', handler)
+  },
 
   // History
   listHistory: (limit) => ipcRenderer.invoke('history:list', limit),

@@ -199,8 +199,8 @@ body {
 @keyframes np-pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
 .np-label { color: var(--green); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; font-size: 11px; }
 .np-title { color: var(--text-primary); font-weight: 500; flex: 1; }
-.np-time { color: var(--text-tertiary); }
-.np-progress { width: 120px; height: 3px; background: rgba(255,255,255,.1); border-radius: 2px; overflow: hidden; }
+.np-time { color: var(--text-tertiary); font-size: 12px; white-space: nowrap; }
+.np-progress { width: 120px; height: 3px; background: rgba(255,255,255,.1); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
 .np-progress-fill { height: 100%; background: var(--green); border-radius: 2px; transition: width 1s linear; }
 
 /* -- Page Title -------------------------------------------------- */
@@ -897,19 +897,71 @@ body {
 }
 .btn-ep-play:hover { background: var(--accent-hover); transform: scale(1.1); }
 
-.btn-ep-toggle {
-  background: transparent;
+.btn-ep-more {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.08);
   color: var(--text-tertiary);
-  border: 1px solid var(--border);
-  padding: 6px 14px;
-  border-radius: 980px;
-  font-size: 12px;
-  font-weight: 500;
+  border: none;
+  border-radius: 50%;
   cursor: pointer;
-  transition: all .2s;
+  transition: background .2s, transform .15s, color .2s;
   font-family: inherit;
 }
-.btn-ep-toggle:hover { color: var(--text-primary); border-color: var(--border-focus); background: rgba(255,255,255,.04); }
+.btn-ep-more:hover { background: rgba(255,255,255,.14); color: var(--text-primary); transform: scale(1.1); }
+.btn-ep-more.active { background: rgba(255,255,255,.18); color: var(--text-primary); }
+
+/* Episode more-menu wrapper (for popover positioning) */
+.ep-more-wrap {
+  position: relative;
+}
+
+/* Episode popover menu */
+.ep-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 190px;
+  background: rgba(28, 28, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  padding: 4px 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  z-index: 100;
+}
+
+.ep-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 14px;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,.85);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.ep-popover-item:hover {
+  background: rgba(255,255,255,.1);
+}
+
+.ep-popover-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
 
 /* ================================================================
    ADD SERIES PAGE
@@ -1096,24 +1148,6 @@ body {
   margin: 24px 0;
 }
 
-.movie-toggle-btn {
-  background: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  padding: 10px 24px;
-  border-radius: 980px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all .2s;
-  font-family: inherit;
-}
-.movie-toggle-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--border-focus);
-  background: rgba(255,255,255,.06);
-}
-
 .movie-director {
   color: var(--text-secondary);
   font-style: italic;
@@ -1222,6 +1256,345 @@ body {
 .sync-status-detail {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+/* ================================================================
+   VIDEO PLAYER OVERLAY
+   ================================================================ */
+
+.video-player-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: none;
+  -webkit-app-region: no-drag; /* Override navbar drag region so buttons work */
+}
+.video-player-overlay.controls-visible {
+  cursor: default;
+}
+
+.video-player-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+/* ::cue styling is injected dynamically by VideoPlayer.jsx based on size/appearance preferences */
+
+/* -- Buffering Spinner ------------------------------------------- */
+.video-player-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(255,255,255,.15);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* -- Top Bar (title + close) ------------------------------------- */
+.video-player-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 20px 84px; /* 84px left to clear macOS traffic lights */
+  background: linear-gradient(to bottom, rgba(0,0,0,.7) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity .3s ease;
+  pointer-events: none;
+  z-index: 10;
+}
+.video-player-top.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.video-player-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.video-player-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.video-player-subtitle {
+  font-size: 13px;
+  color: rgba(255,255,255,.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.video-player-close {
+  background: rgba(255,255,255,.1);
+  border: none;
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .2s;
+  flex-shrink: 0;
+}
+.video-player-close:hover {
+  background: rgba(255,255,255,.25);
+}
+
+/* -- Bottom Controls --------------------------------------------- */
+.video-player-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 0 24px 20px;
+  background: linear-gradient(to top, rgba(0,0,0,.7) 0%, transparent 100%);
+  opacity: 0;
+  transition: opacity .3s ease;
+  pointer-events: none;
+  z-index: 3;
+}
+.video-player-controls.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* -- Seek Bar ---------------------------------------------------- */
+.video-player-seek {
+  position: relative;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.video-player-seek-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: rgba(255,255,255,.2);
+  border-radius: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.video-player-seek-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width .1s linear;
+}
+.video-player-seek-input {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 24px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.video-player-seek:hover .video-player-seek-track {
+  height: 6px;
+}
+
+/* -- Controls Row ------------------------------------------------ */
+.video-player-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-player-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background .2s;
+  position: relative;
+}
+.video-player-btn:hover {
+  background: rgba(255,255,255,.1);
+}
+
+.video-player-skip-label {
+  position: absolute;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  bottom: 4px;
+  right: 4px;
+}
+
+.video-player-time {
+  font-size: 13px;
+  color: rgba(255,255,255,.7);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* -- Volume ------------------------------------------------------ */
+.video-player-volume {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.video-player-volume-slider {
+  width: 80px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,.2);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.video-player-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* -- Track Selector (Audio / Subtitles) -------------------------- */
+.video-player-track-menu-anchor {
+  position: relative;
+}
+.video-player-btn.active {
+  background: rgba(255,255,255,.15);
+}
+
+.video-player-track-popover {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  right: 0;
+  min-width: 220px;
+  max-width: 320px;
+  background: rgba(28, 28, 30, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  padding: 8px 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  z-index: 20;
+}
+
+.track-popover-section + .track-popover-section {
+  border-top: 1px solid rgba(255,255,255,.1);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.track-popover-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255,255,255,.45);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 16px 4px;
+}
+
+.track-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 16px;
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,.85);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background .15s;
+}
+.track-popover-item:hover {
+  background: rgba(255,255,255,.1);
+}
+.track-popover-item.active {
+  color: #fff;
+}
+
+.track-popover-check {
+  width: 16px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: center;
+}
+
+.track-popover-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-popover-sizes {
+  display: flex;
+  gap: 6px;
+  padding: 6px 16px 8px;
+}
+
+.track-popover-size-btn {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255,255,255,.7);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: center;
+}
+.track-popover-size-btn:hover {
+  background: rgba(255,255,255,.1);
+  border-color: rgba(255,255,255,.3);
+}
+.track-popover-size-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 /* ================================================================

@@ -42,7 +42,11 @@ export default function Library() {
     loadData()
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
-    return () => window.removeEventListener('playback-stopped', handleStop)
+    const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+    return () => {
+      window.removeEventListener('playback-stopped', handleStop)
+      unsubVlc()
+    }
   }, [loadData])
 
   if (loading) return (

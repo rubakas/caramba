@@ -1,12 +1,23 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { formatTime, progressPercent, truncate } from '../utils'
 
 const PlaySvg = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 )
 
-export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle }) {
+const MoreSvg = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="12" cy="5" r="2" />
+    <circle cx="12" cy="12" r="2" />
+    <circle cx="12" cy="19" r="2" />
+  </svg>
+)
+
+export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpenInVlc, onOpenInDefault, vlcAvailable }) {
   const [expanded, setExpanded] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef(null)
+  const btnRef = useRef(null)
 
   const ep = episode
   const watched = !!ep.watched
@@ -14,6 +25,19 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle }) {
   const pct = progressPercent(ep.progress_seconds, ep.duration_seconds)
   const desc = ep.description || ''
   const isLong = desc.length > 120
+
+  // Click-outside to close menu
+  useEffect(() => {
+    if (!menuOpen) return
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target) &&
+          btnRef.current && !btnRef.current.contains(e.target)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
 
   const rowClass = [
     'ep-row',
@@ -60,9 +84,42 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle }) {
         <button className="btn-ep-play" onClick={() => onPlay(ep.id)}>
           <PlaySvg />
         </button>
-        <button className="btn-ep-toggle" onClick={() => onToggle(ep.id)}>
-          {watched ? 'Unwatch' : 'Watched'}
-        </button>
+        <div className="ep-more-wrap">
+          <button
+            ref={btnRef}
+            className={`btn-ep-more${menuOpen ? ' active' : ''}`}
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <MoreSvg />
+          </button>
+          {menuOpen && (
+            <div ref={menuRef} className="ep-popover">
+              <button
+                className="ep-popover-item"
+                onClick={() => { onToggle(ep.id); setMenuOpen(false) }}
+              >
+                <span className="ep-popover-icon">{watched ? '\u21A9' : '\u2713'}</span>
+                <span>{watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
+              </button>
+              {vlcAvailable && (
+                <button
+                  className="ep-popover-item"
+                  onClick={() => { onOpenInVlc(ep.id); setMenuOpen(false) }}
+                >
+                  <span className="ep-popover-icon">{'\u25B6'}</span>
+                  <span>Open in VLC</span>
+                </button>
+              )}
+              <button
+                className="ep-popover-item"
+                onClick={() => { onOpenInDefault(ep.id); setMenuOpen(false) }}
+              >
+                <span className="ep-popover-icon">{'\u2197'}</span>
+                <span>Open in Default Player</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

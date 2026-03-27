@@ -209,6 +209,18 @@ const episodes = {
     `).get(seriesId)
   },
 
+  // Get the immediate next episode after the given episodeId (by season/episode order)
+  // regardless of watched status — used for auto-play next
+  getNext(episodeId) {
+    const current = this.findById(episodeId)
+    if (!current) return null
+    return get().prepare(`
+      SELECT * FROM episodes WHERE series_id = ?
+      AND (season_number > ? OR (season_number = ? AND episode_number > ?))
+      ORDER BY season_number, episode_number LIMIT 1
+    `).get(current.series_id, current.season_number, current.season_number, current.episode_number) || null
+  },
+
   nextUp(seriesId) {
     // Find last watched, then get the next unwatched episode
     const lastWatched = get().prepare(`
@@ -344,4 +356,40 @@ const watchHistories = {
   },
 }
 
-module.exports = { open, close, get, getDbPath, getStoragePath, slugify, series, episodes, movies, watchHistories }
+// -- Playback Preferences (per-series / per-movie) --
+
+const playbackPreferences = {
+  forSeries(seriesId) {
+    return get().prepare('SELECT * FROM playback_preferences WHERE series_id = ?').get(seriesId)
+  },
+
+  forMovie(movieId) {
+    return get().prepare('SELECT * FROM playback_preferences WHERE movie_id = ?').get(movieId)
+  },
+
+  saveSeries(seriesId, { audio_language, subtitle_language, subtitle_off }) {
+    get().prepare(`
+      INSERT INTO playback_preferences (series_id, audio_language, subtitle_language, subtitle_off)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(series_id) DO UPDATE SET
+        audio_language = excluded.audio_language,
+        subtitle_language = excluded.subtitle_language,
+        subtitle_off = excluded.subtitle_off,
+        updated_at = datetime('now')
+    `).run(seriesId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0)
+  },
+
+  saveMovie(movieId, { audio_language, subtitle_language, subtitle_off }) {
+    get().prepare(`
+      INSERT INTO playback_preferences (movie_id, audio_language, subtitle_language, subtitle_off)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(movie_id) DO UPDATE SET
+        audio_language = excluded.audio_language,
+        subtitle_language = excluded.subtitle_language,
+        subtitle_off = excluded.subtitle_off,
+        updated_at = datetime('now')
+    `).run(movieId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0)
+  },
+}
+
+module.exports = { open, close, get, getDbPath, getStoragePath, slugify, series, episodes, movies, watchHistories, playbackPreferences }

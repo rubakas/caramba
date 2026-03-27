@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import SeasonTabs from '../components/SeasonTabs'
 import EpisodeRow from '../components/EpisodeRow'
+import { usePlayer } from '../context/PlayerContext'
 import { genresList, premiereYear, statusClass, formatTime, progressPercent, truncate } from '../utils'
 
 const PlaySvg = ({ size = 20 }) => (
@@ -13,6 +14,7 @@ const PlaySvg = ({ size = 20 }) => (
 export default function SeriesShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
+  const { openPlayer } = usePlayer()
   const [series, setSeries] = useState(null)
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
@@ -20,15 +22,17 @@ export default function SeriesShow() {
   const [nextEp, setNextEp] = useState(null)
   const [activeSeason, setActiveSeason] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [vlcAvailable, setVlcAvailable] = useState(false)
 
   const loadData = useCallback(async () => {
     try {
-      const [s, eps, seasonNums, resume, next] = await Promise.all([
+      const [s, eps, seasonNums, resume, next, hasVlc] = await Promise.all([
         window.api.getSeries(slug),
         window.api.getSeriesEpisodes(slug),
         window.api.getSeriesSeasons(slug),
         window.api.getResumable(slug),
         window.api.getNextUp(slug),
+        window.api.checkVlc(),
       ])
       if (!s) { navigate('/'); return }
       setSeries(s)
@@ -36,6 +40,7 @@ export default function SeriesShow() {
       setSeasons(seasonNums)
       setResumeEp(resume)
       setNextEp(next)
+      setVlcAvailable(hasVlc)
 
       // Determine active season: last watched episode's season, or first season
       if (activeSeason === null) {
@@ -56,13 +61,25 @@ export default function SeriesShow() {
     loadData()
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
-    return () => window.removeEventListener('playback-stopped', handleStop)
+    const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+    return () => {
+      window.removeEventListener('playback-stopped', handleStop)
+      unsubVlc()
+    }
   }, [loadData])
 
   const handlePlay = async (episodeId) => {
     const result = await window.api.playEpisode(episodeId)
     if (result && !result.error) {
-      await window.api.setPlaybackEpisode(result.episode_id, result.watch_history_id)
+      await openPlayer({
+        type: 'episode',
+        episodeId: { id: result.episode_id, whId: result.watch_history_id },
+        seriesId: result.series_id,
+        filePath: result.file_path,
+        startTime: result.start_time,
+        title: series?.name || '',
+        subtitle: episodes.find(e => e.id === episodeId)?.code + ' — ' + (episodes.find(e => e.id === episodeId)?.title || ''),
+      })
       loadData()
     }
   }
@@ -70,6 +87,20 @@ export default function SeriesShow() {
   const handleToggle = async (episodeId) => {
     await window.api.toggleEpisode(episodeId)
     loadData()
+  }
+
+  const handleOpenInVlc = async (episodeId) => {
+    const ep = episodes.find(e => e.id === episodeId)
+    if (!ep?.file_path) return
+    const result = await window.api.openInVlc({ filePath: ep.file_path, episodeId })
+    if (result?.error) console.error('Open in VLC failed:', result.error)
+  }
+
+  const handleOpenInDefault = async (episodeId) => {
+    const ep = episodes.find(e => e.id === episodeId)
+    if (!ep?.file_path) return
+    const result = await window.api.openInDefault(ep.file_path)
+    if (result?.error) console.error('Open in Default Player failed:', result.error)
   }
 
   const handleScan = async () => {
@@ -295,6 +326,9 @@ export default function SeriesShow() {
                         isCurrent={lastWatched?.id === ep.id}
                         onPlay={handlePlay}
                         onToggle={handleToggle}
+                        onOpenInVlc={handleOpenInVlc}
+                        onOpenInDefault={handleOpenInDefault}
+                        vlcAvailable={vlcAvailable}
                       />
                     ))}
                   </div>

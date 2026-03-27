@@ -76,3 +76,14 @@ CREATE TABLE IF NOT EXISTS watch_histories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wh_episode ON watch_histories(episode_id);
+
+CREATE TABLE IF NOT EXISTS playback_preferences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  series_id INTEGER UNIQUE REFERENCES series(id) ON DELETE CASCADE,
+  movie_id INTEGER UNIQUE REFERENCES movies(id) ON DELETE CASCADE,
+  audio_language TEXT,
+  subtitle_language TEXT,
+  subtitle_off INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

@@ -3,7 +3,6 @@
 const { ipcMain } = require('electron')
 const db = require('../db')
 const movieMetadata = require('../services/movie-metadata')
-const vlcPlayer = require('../services/vlc-player')
 
 function register() {
   ipcMain.handle('movies:list', () => {
@@ -39,8 +38,12 @@ function register() {
       (movie.progress_seconds / movie.duration_seconds) < 0.9
       ? movie.progress_seconds : 0
 
-    await vlcPlayer.play(movie.file_path, startTime)
-    return { movie_id: movie.id }
+    // Return info the renderer needs to start the stream
+    return {
+      movie_id: movie.id,
+      file_path: movie.file_path,
+      start_time: startTime,
+    }
   })
 
   ipcMain.handle('movies:toggle', (_e, slug) => {

@@ -2,7 +2,6 @@
 
 const { ipcMain } = require('electron')
 const db = require('../db')
-const vlcPlayer = require('../services/vlc-player')
 
 function register() {
   ipcMain.handle('episodes:play', async (_e, episodeId) => {
@@ -24,10 +23,26 @@ function register() {
       (episode.progress_seconds / episode.duration_seconds) < 0.9
       ? episode.progress_seconds : 0
 
-    // Launch VLC
-    await vlcPlayer.play(episode.file_path, startTime)
+    // Return the info the renderer needs to start the stream
+    return {
+      episode_id: episodeId,
+      series_id: episode.series_id,
+      watch_history_id: wh.id,
+      file_path: episode.file_path,
+      start_time: startTime,
+    }
+  })
 
-    return { episode_id: episodeId, watch_history_id: wh.id }
+  // Get the immediate next episode after this one (for auto-play)
+  ipcMain.handle('episodes:getNext', (_e, episodeId) => {
+    const next = db.episodes.getNext(episodeId)
+    if (!next) return null
+    // Return the series info too so the frontend can build the title
+    const s = db.series.findById(next.series_id)
+    return {
+      episode: next,
+      seriesName: s?.name || '',
+    }
   })
 
   ipcMain.handle('episodes:toggle', (_e, episodeId) => {
