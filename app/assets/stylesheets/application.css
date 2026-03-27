@@ -89,11 +89,21 @@ body {
   height: var(--nav-h);
   display: flex;
   align-items: center;
-  padding: 0 48px;
+  padding: 0 48px 0 84px;
   background: rgba(0,0,0,.72);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.topnav-brand,
+.topnav-links,
+.topnav-link,
+.topnav-action,
+.topnav-actions,
+.topnav-btn {
+  -webkit-app-region: no-drag;
 }
 
 .topnav-brand {
