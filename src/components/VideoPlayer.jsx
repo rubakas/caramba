@@ -115,12 +115,39 @@ export default function VideoPlayer() {
     return () => { document.body.style.overflow = '' }
   }, [playerState.open])
 
+  // Helper: disable all text tracks on the video element.
+  // This forces Chromium to clear any currently-rendered subtitle cue.
+  const disableAllTextTracks = useCallback(() => {
+    const video = videoRef.current
+    if (!video) return
+    for (let i = 0; i < video.textTracks.length; i++) {
+      video.textTracks[i].mode = 'disabled'
+    }
+  }, [])
+
+  // When subtitleUrl becomes null (subs turned off), explicitly disable all
+  // text tracks so Chromium clears the last-painted cue from the overlay.
+  useEffect(() => {
+    if (playerState.open && !playerState.subtitleUrl) {
+      disableAllTextTracks()
+    }
+  }, [playerState.open, playerState.subtitleUrl, disableAllTextTracks])
+
   // Force subtitle track to 'showing' — Chromium often ignores the `default`
-  // attribute or resets the mode to 'hidden' when the video source changes
+  // attribute or resets the mode to 'hidden' when the video source changes.
+  // Uses a ref to track whether subtitles should be active, so the interval
+  // callback never forces a stale track to 'showing' after subs are turned off.
+  const subtitleActiveRef = useRef(false)
+  useEffect(() => {
+    subtitleActiveRef.current = !!(playerState.open && playerState.subtitleUrl)
+  }, [playerState.open, playerState.subtitleUrl])
+
   useEffect(() => {
     if (!playerState.open || !playerState.subtitleUrl) return
 
     const forceShowSubtitles = () => {
+      // Bail out if subtitles were turned off between interval ticks
+      if (!subtitleActiveRef.current) return
       const video = videoRef.current
       if (!video) return
       for (let i = 0; i < video.textTracks.length; i++) {
@@ -150,8 +177,11 @@ export default function VideoPlayer() {
       video.removeEventListener('loadeddata', forceShowSubtitles)
       video.removeEventListener('canplay', forceShowSubtitles)
       clearInterval(interval)
+      // On cleanup (subtitle switch, subs off, player close), disable all tracks
+      // so Chromium clears any currently-rendered cue from the overlay
+      disableAllTextTracks()
     }
-  }, [playerState.open, playerState.subtitleUrl, subtitleVersion])
+  }, [playerState.open, playerState.subtitleUrl, subtitleVersion, disableAllTextTracks])
 
   // Inject dynamic <style> for ::cue (CSS custom properties don't work inside ::cue)
   useEffect(() => {
@@ -330,20 +360,15 @@ export default function VideoPlayer() {
   }, [switchAudio])
 
   const handleSwitchSubtitle = useCallback(async (subtitleStreamIndex) => {
+    // Disable all text tracks BEFORE the switch so Chromium clears the
+    // currently-rendered cue.  The forceShowSubtitles effect will re-enable
+    // the new track once React mounts the fresh <track> element.
+    disableAllTextTracks()
     const result = await switchSubtitle(subtitleStreamIndex)
     // switchSubtitle updates playerState.subtitleUrl and activeSubtitleIndex.
     // React will re-render the <track> element (or remove it if subtitleUrl is null).
-    // After React re-renders, enable the new text track if present.
-    if (result && result.subtitleUrl) {
-      // Small delay so React has time to mount the new <track> element
-      setTimeout(() => {
-        const video = videoRef.current
-        if (video && video.textTracks[0]) {
-          video.textTracks[0].mode = 'showing'
-        }
-      }, 100)
-    }
-  }, [switchSubtitle])
+    // The forceShowSubtitles effect handles setting mode='showing' on the new track.
+  }, [switchSubtitle, disableAllTextTracks])
 
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
