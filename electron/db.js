@@ -49,6 +49,68 @@ function migrate() {
   const schemaPath = path.join(__dirname, 'schema.sql')
   const schema = fs.readFileSync(schemaPath, 'utf-8')
   db.exec(schema)
+  migrateWatchlist()
+}
+
+function migrateWatchlist() {
+  // Check if watchlist table needs migration (old schema had tvmaze_id NOT NULL UNIQUE)
+  const cols = db.prepare("PRAGMA table_info(watchlist)").all()
+  const colNames = cols.map(c => c.name)
+
+  // Check if tvmaze_id still has NOT NULL constraint (old schema)
+  const tvmazeCol = cols.find(c => c.name === 'tvmaze_id')
+  const needsRecreate = tvmazeCol && tvmazeCol.notnull === 1
+
+  if (needsRecreate) {
+    // Recreate watchlist table: migrate data, drop old, create new
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS watchlist_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL DEFAULT 'show',
+        tvmaze_id INTEGER,
+        name TEXT NOT NULL,
+        poster_url TEXT,
+        description TEXT,
+        genres TEXT,
+        rating REAL,
+        premiered TEXT,
+        status TEXT,
+        network TEXT,
+        imdb_id TEXT,
+        year TEXT,
+        director TEXT,
+        runtime INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `)
+    // Copy existing show entries
+    db.exec(`
+      INSERT INTO watchlist_new (type, tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at)
+      SELECT 'show', tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at
+      FROM watchlist
+    `)
+    db.exec('DROP TABLE watchlist')
+    db.exec('ALTER TABLE watchlist_new RENAME TO watchlist')
+  } else {
+    // Just add missing columns
+    if (!colNames.includes('type')) {
+      db.exec("ALTER TABLE watchlist ADD COLUMN type TEXT NOT NULL DEFAULT 'show'")
+    }
+    if (!colNames.includes('year')) {
+      db.exec("ALTER TABLE watchlist ADD COLUMN year TEXT")
+    }
+    if (!colNames.includes('director')) {
+      db.exec("ALTER TABLE watchlist ADD COLUMN director TEXT")
+    }
+    if (!colNames.includes('runtime')) {
+      db.exec("ALTER TABLE watchlist ADD COLUMN runtime INTEGER")
+    }
+  }
+
+  // Create partial unique indexes (safe — IF NOT EXISTS)
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_tvmaze ON watchlist(tvmaze_id) WHERE tvmaze_id IS NOT NULL")
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_imdb ON watchlist(imdb_id) WHERE imdb_id IS NOT NULL")
 }
 
 // -- Helper: generate slug --
@@ -356,6 +418,61 @@ const watchHistories = {
   },
 }
 
+// -- Watchlist (Discover) --
+
+const watchlist = {
+  all() {
+    return get().prepare('SELECT * FROM watchlist ORDER BY created_at DESC').all()
+  },
+
+  findByTvmazeId(tvmazeId) {
+    return get().prepare('SELECT * FROM watchlist WHERE tvmaze_id = ?').get(tvmazeId)
+  },
+
+  findByImdbId(imdbId) {
+    return get().prepare('SELECT * FROM watchlist WHERE imdb_id = ?').get(imdbId)
+  },
+
+  addShow({ tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id }) {
+    get().prepare(`
+      INSERT OR IGNORE INTO watchlist (type, tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id)
+      VALUES ('show', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(tvmaze_id, name, poster_url || null, description || null, genres || null, rating || null, premiered || null, status || null, network || null, imdb_id || null)
+    return this.findByTvmazeId(tvmaze_id)
+  },
+
+  addMovie({ imdb_id, name, poster_url, description, genres, rating, year, director, runtime }) {
+    get().prepare(`
+      INSERT OR IGNORE INTO watchlist (type, imdb_id, name, poster_url, description, genres, rating, year, director, runtime)
+      VALUES ('movie', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(imdb_id, name, poster_url || null, description || null, genres || null, rating || null, year || null, director || null, runtime || null)
+    return this.findByImdbId(imdb_id)
+  },
+
+  // Legacy: keep old add() for backward compat (delegates to addShow)
+  add(data) {
+    if (data._type === 'movie' || data.type === 'movie') return this.addMovie(data)
+    return this.addShow(data)
+  },
+
+  removeByTvmazeId(tvmazeId) {
+    get().prepare('DELETE FROM watchlist WHERE tvmaze_id = ?').run(tvmazeId)
+  },
+
+  removeByImdbId(imdbId) {
+    get().prepare('DELETE FROM watchlist WHERE imdb_id = ?').run(imdbId)
+  },
+
+  remove(identifier) {
+    // Backward compat: if it's a number, treat as tvmaze_id
+    if (typeof identifier === 'number') {
+      this.removeByTvmazeId(identifier)
+    } else if (typeof identifier === 'string') {
+      this.removeByImdbId(identifier)
+    }
+  },
+}
+
 // -- Playback Preferences (per-series / per-movie) --
 
 const playbackPreferences = {
@@ -392,4 +509,4 @@ const playbackPreferences = {
   },
 }
 
-module.exports = { open, close, get, getDbPath, getStoragePath, slugify, series, episodes, movies, watchHistories, playbackPreferences }
+module.exports = { open, close, get, getDbPath, getStoragePath, slugify, series, episodes, movies, watchHistories, watchlist, playbackPreferences }

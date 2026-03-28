@@ -1214,6 +1214,516 @@ body {
 }
 
 /* ================================================================
+   DISCOVER PAGE
+   ================================================================ */
+.discover-main {
+  padding: 32px 48px 80px;
+}
+
+.discover-search {
+  position: relative;
+  margin-bottom: 16px;
+  max-width: 480px;
+}
+.discover-search-input {
+  width: 100%;
+  padding: 14px 44px 14px 20px;
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.discover-search-input::placeholder {
+  color: var(--text-tertiary);
+}
+.discover-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+}
+
+.discover-clear-btn {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: var(--border);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+  -webkit-app-region: no-drag;
+}
+.discover-clear-btn:hover {
+  background: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.discover-spinner {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+
+/* -- Search Type Filters ------------------------------------------ */
+.discover-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 32px;
+}
+.discover-filter-btn {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  -webkit-app-region: no-drag;
+}
+.discover-filter-btn:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.discover-filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+@keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+
+.discover-section {
+  margin-bottom: 40px;
+}
+
+.discover-empty {
+  color: var(--text-tertiary);
+  font-size: 15px;
+  padding: 20px 0;
+}
+
+/* -- Discover Card ------------------------------------------------ */
+.discover-card {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.discover-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+
+.discover-card-main {
+  cursor: pointer;
+}
+
+.discover-network {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+}
+
+/* -- Watchlist Button --------------------------------------------- */
+.discover-watchlist-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(8px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color .2s, background .2s;
+  z-index: 2;
+  -webkit-app-region: no-drag;
+}
+.discover-watchlist-btn:hover {
+  background: rgba(0,0,0,.8);
+  color: var(--text-primary);
+}
+.discover-watchlist-btn.active {
+  color: var(--accent);
+}
+
+/* "In Library" badge */
+.card-badge-library {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(48, 209, 88, 0.85);
+  color: #fff;
+}
+
+/* -- Detail Modal ------------------------------------------------- */
+.dm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  animation: dm-fade-in .2s ease;
+}
+@keyframes dm-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.dm-container {
+  position: relative;
+  width: 100%;
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .7);
+  animation: dm-slide-up .25s ease;
+}
+@keyframes dm-slide-up {
+  from { opacity: 0; transform: translateY(24px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.dm-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, .5);
+  backdrop-filter: blur(8px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+  -webkit-app-region: no-drag;
+}
+.dm-close:hover {
+  background: rgba(0, 0, 0, .75);
+  color: var(--text-primary);
+}
+
+/* Hero */
+.dm-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 260px;
+  display: flex;
+  align-items: flex-end;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.dm-hero-bg {
+  position: absolute;
+  inset: 0;
+  background-image: var(--poster);
+  background-size: cover;
+  background-position: center 20%;
+  filter: blur(40px) brightness(.35) saturate(1.4);
+  transform: scale(1.2);
+}
+.dm-hero-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--bg) 0%, rgba(0,0,0,.5) 50%, rgba(0,0,0,.7) 100%);
+}
+
+.dm-hero-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 28px;
+  align-items: flex-end;
+  padding: 40px 36px 32px;
+  width: 100%;
+}
+
+.dm-poster {
+  flex-shrink: 0;
+  width: 140px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, .6);
+}
+.dm-poster img {
+  width: 100%;
+  display: block;
+}
+
+.dm-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dm-title {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -.03em;
+  line-height: 1.1;
+  margin-bottom: 10px;
+}
+
+/* Reuses existing .show-meta-row, .show-status, .show-rating, .show-imdb,
+   .show-genres, .show-description, .movie-director from library pages */
+
+.dm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.dm-library-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-radius: 980px;
+  border: 1.5px solid var(--green);
+  background: rgba(48, 209, 88, .12);
+  color: var(--green);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all .2s;
+  -webkit-app-region: no-drag;
+}
+.dm-library-btn:hover {
+  background: rgba(48, 209, 88, .22);
+}
+.dm-library-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+
+.dm-watchlist-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  border-radius: 980px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all .2s;
+  -webkit-app-region: no-drag;
+}
+.dm-watchlist-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(10, 132, 255, .08);
+}
+.dm-watchlist-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(10, 132, 255, .12);
+}
+
+/* Body */
+.dm-body {
+  padding: 0 36px 36px;
+}
+
+.dm-loading {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  padding: 24px 0;
+}
+
+/* Season Tabs */
+.dm-season-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 16px 0 12px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+.dm-season-tab {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 16px;
+  background: transparent;
+  border: 1.5px solid var(--border);
+  border-radius: 980px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.dm-season-tab:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, .04);
+}
+.dm-season-tab.active {
+  background: var(--text-primary);
+  color: var(--bg);
+  border-color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Episode list */
+.dm-episodes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.dm-episode {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid transparent;
+  transition: border-color .15s, background .15s;
+}
+.dm-episode:hover {
+  border-color: var(--border);
+  background: var(--surface-hover);
+}
+
+.dm-ep-number {
+  flex-shrink: 0;
+  width: 42px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  padding-top: 2px;
+}
+
+.dm-ep-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.dm-ep-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 3px;
+}
+
+.dm-ep-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.dm-ep-summary {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  max-height: 60px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* Movie details rows */
+.dm-movie-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+}
+
+.dm-detail-row {
+  display: flex;
+  gap: 16px;
+  font-size: 15px;
+  align-items: baseline;
+}
+
+.dm-detail-label {
+  flex-shrink: 0;
+  width: 80px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* -- Empty Hero --------------------------------------------------- */
+.discover-empty-hero {
+  text-align: center;
+  padding: 80px 20px 40px;
+  color: var(--text-tertiary);
+}
+.discover-empty-icon {
+  margin-bottom: 16px;
+  opacity: 0.4;
+}
+.discover-empty-hero p {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+.discover-empty-sub {
+  font-size: 14px;
+  opacity: 0.6;
+}
+
+/* ================================================================
    SETTINGS PAGE
    ================================================================ */
 .settings-main {

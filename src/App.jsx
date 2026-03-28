@@ -11,6 +11,7 @@ import MovieShow from './pages/MovieShow'
 import MoviesNew from './pages/MoviesNew'
 import History from './pages/History'
 import Settings from './pages/Settings'
+import Discover from './pages/Discover'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/movies" element={<Movies />} />
             <Route path="/movies/new" element={<MoviesNew />} />
             <Route path="/movies/:slug" element={<MovieShow />} />
+            <Route path="/discover" element={<Discover />} />
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

@@ -23,6 +23,7 @@ const playbackIpc = require('./ipc/playback')
 const historyIpc = require('./ipc/history')
 const settingsIpc = require('./ipc/settings')
 const dialogsIpc = require('./ipc/dialogs')
+const discoverIpc = require('./ipc/discover')
 
 // Subtitle cache: stores the RAW VTT with original timestamps.
 // The subtitle:// protocol handler shifts timestamps by the current seek offset.
@@ -123,6 +124,7 @@ function createWindow() {
   historyIpc.register()
   settingsIpc.register()
   dialogsIpc.register(mainWindow)
+  discoverIpc.register()
 
   // Load the React app
   if (process.env.VITE_DEV_URL) {

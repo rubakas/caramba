@@ -87,3 +87,26 @@ CREATE TABLE IF NOT EXISTS playback_preferences (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS watchlist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL DEFAULT 'show',
+  tvmaze_id INTEGER,
+  name TEXT NOT NULL,
+  poster_url TEXT,
+  description TEXT,
+  genres TEXT,
+  rating REAL,
+  premiered TEXT,
+  status TEXT,
+  network TEXT,
+  imdb_id TEXT,
+  year TEXT,
+  director TEXT,
+  runtime INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_tvmaze ON watchlist(tvmaze_id) WHERE tvmaze_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_imdb ON watchlist(imdb_id) WHERE imdb_id IS NOT NULL;

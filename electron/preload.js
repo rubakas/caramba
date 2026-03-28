@@ -61,4 +61,12 @@ contextBridge.exposeInMainWorld('api', {
   // Dialogs
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
+
+  // Discover
+  searchShows: (query, searchType) => ipcRenderer.invoke('discover:search', query, searchType),
+  getShowDetails: (tvmazeId) => ipcRenderer.invoke('discover:showDetails', tvmazeId),
+  getMovieDetails: (imdbId) => ipcRenderer.invoke('discover:movieDetails', imdbId),
+  addToWatchlist: (show) => ipcRenderer.invoke('discover:addToWatchlist', show),
+  removeFromWatchlist: (identifier) => ipcRenderer.invoke('discover:removeFromWatchlist', identifier),
+  listWatchlist: () => ipcRenderer.invoke('discover:listWatchlist'),
 })
