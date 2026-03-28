@@ -93,9 +93,11 @@ async function probe(filePath) {
     ]
     const proc = spawn(FFPROBE_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
+    let stderr = ''
     proc.stdout.on('data', d => { stdout += d })
+    proc.stderr.on('data', d => { stderr += d })
     proc.on('close', code => {
-      if (code !== 0) return reject(new Error(`ffprobe exited with ${code}`))
+      if (code !== 0) return reject(new Error(`ffprobe exited with ${code}: ${stderr.trim() || 'no output'} (file: ${filePath})`))
       try {
         const data = JSON.parse(stdout)
         const videoStream = data.streams?.find(s => s.codec_type === 'video' && s.codec_name !== 'mjpeg')

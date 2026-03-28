@@ -3,10 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { formatTime, progressPercent } from '../utils'
 
-const PlaySvg = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-)
-
 function groupByDate(histories) {
   const today = []
   const thisWeek = []
@@ -41,7 +37,7 @@ function formatDate(dateStr) {
   })
 }
 
-function HistoryEntry({ h, onPlay }) {
+function HistoryEntry({ h }) {
   const pct = progressPercent(h.progress_seconds, h.duration_seconds)
   const finished = h.progress_seconds && h.duration_seconds && (h.progress_seconds / h.duration_seconds) >= 0.9
 
@@ -61,11 +57,6 @@ function HistoryEntry({ h, onPlay }) {
           {finished && <span className="badge badge--green">Completed</span>}
           {!finished && h.progress_seconds > 0 && <span className="badge badge--amber">Partial</span>}
         </span>
-      </div>
-      <div className="history-entry-right">
-        <button className="btn-ep-play" onClick={() => onPlay(h)}>
-          <PlaySvg />
-        </button>
       </div>
     </div>
   )
@@ -95,13 +86,6 @@ export default function History() {
   useEffect(() => {
     loadData()
   }, [loadData])
-
-  const handlePlay = async (h) => {
-    const result = await window.api.playEpisode(h.episode_id)
-    if (result && !result.error) {
-      await window.api.setPlaybackEpisode(result.episode_id, result.watch_history_id)
-    }
-  }
 
   if (loading) return (
     <>
@@ -137,19 +121,19 @@ export default function History() {
             {today.length > 0 && (
               <section className="history-section">
                 <h2 className="history-section-title">Today</h2>
-                {today.map(h => <HistoryEntry key={h.id} h={h} onPlay={handlePlay} />)}
+                {today.map(h => <HistoryEntry key={h.id} h={h} />)}
               </section>
             )}
             {thisWeek.length > 0 && (
               <section className="history-section">
                 <h2 className="history-section-title">This Week</h2>
-                {thisWeek.map(h => <HistoryEntry key={h.id} h={h} onPlay={handlePlay} />)}
+                {thisWeek.map(h => <HistoryEntry key={h.id} h={h} />)}
               </section>
             )}
             {older.length > 0 && (
               <section className="history-section">
                 <h2 className="history-section-title">Earlier</h2>
-                {older.map(h => <HistoryEntry key={h.id} h={h} onPlay={handlePlay} />)}
+                {older.map(h => <HistoryEntry key={h.id} h={h} />)}
               </section>
             )}
           </>

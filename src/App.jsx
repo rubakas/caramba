@@ -1,5 +1,7 @@
 import { HashRouter, Routes, Route } from 'react-router-dom'
+import { ToastProvider } from './context/ToastContext'
 import { PlayerProvider } from './context/PlayerContext'
+import ToastContainer from './components/ToastContainer'
 import VideoPlayer from './components/VideoPlayer'
 import Library from './pages/Library'
 import SeriesShow from './pages/SeriesShow'
@@ -12,20 +14,23 @@ import Settings from './pages/Settings'
 
 export default function App() {
   return (
-    <PlayerProvider>
-      <HashRouter>
-        <Routes>
-          <Route path="/" element={<Library />} />
-          <Route path="/series/new" element={<SeriesNew />} />
-          <Route path="/series/:slug" element={<SeriesShow />} />
-          <Route path="/movies" element={<Movies />} />
-          <Route path="/movies/new" element={<MoviesNew />} />
-          <Route path="/movies/:slug" element={<MovieShow />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-        <VideoPlayer />
-      </HashRouter>
-    </PlayerProvider>
+    <ToastProvider>
+      <PlayerProvider>
+        <HashRouter>
+          <Routes>
+            <Route path="/" element={<Library />} />
+            <Route path="/series/new" element={<SeriesNew />} />
+            <Route path="/series/:slug" element={<SeriesShow />} />
+            <Route path="/movies" element={<Movies />} />
+            <Route path="/movies/new" element={<MoviesNew />} />
+            <Route path="/movies/:slug" element={<MovieShow />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+          <VideoPlayer />
+        </HashRouter>
+        <ToastContainer />
+      </PlayerProvider>
+    </ToastProvider>
   )
 }

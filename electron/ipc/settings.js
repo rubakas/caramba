@@ -26,14 +26,11 @@ function register() {
       const syncPath = path.join(folder, 'series_tracker.sqlite3')
       if (fs.existsSync(syncPath) && fs.statSync(syncPath).size > 0) {
         await dbSync.load()
-        dbSync.startPeriodicSync()
         return { success: true, message: 'Found existing database in sync folder — loaded it.' }
       }
       await dbSync.dump()
-      dbSync.startPeriodicSync()
-      return { success: true, message: 'Sync folder set. Database will sync every 30 seconds.' }
+      return { success: true, message: 'Sync folder set. Database syncs on app open/close.' }
     } else {
-      dbSync.stopPeriodicSync()
       return { success: true, message: 'Sync disabled.' }
     }
   })

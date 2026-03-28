@@ -1,8 +1,10 @@
 import { createContext, useContext, useState, useCallback } from 'react'
+import { useToast } from './ToastContext'
 
 const PlayerContext = createContext(null)
 
 export function PlayerProvider({ children }) {
+  const { showToast } = useToast()
   const [playerState, setPlayerState] = useState({
     open: false,
     streamUrl: null,
@@ -49,6 +51,7 @@ export function PlayerProvider({ children }) {
       const result = await window.api.startPlayback(filePath, startTime || 0, prefs)
       if (result.error) {
         console.error('Failed to start playback:', result.error)
+        showToast(result.error, { type: 'error', duration: 6000 })
         return
       }
 
@@ -72,8 +75,9 @@ export function PlayerProvider({ children }) {
       })
     } catch (err) {
       console.error('openPlayer error:', err)
+      showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
     }
-  }, [])
+  }, [showToast])
 
   const closePlayer = useCallback((finalTime, finalDuration) => {
     setPlayerState(prev => ({ ...prev, open: false, streamUrl: null }))
@@ -130,9 +134,10 @@ export function PlayerProvider({ children }) {
       })
     } catch (err) {
       console.error('playNextEpisode error:', err)
+      showToast('Failed to play next episode: ' + (err.message || 'Unknown error'), { type: 'error' })
       closePlayer()
     }
-  }, [closePlayer, openPlayer])
+  }, [closePlayer, openPlayer, showToast])
 
   // Helper to persist current audio/subtitle preference
   const savePreferences = useCallback((state, overrides = {}) => {

@@ -104,7 +104,6 @@ export default function Settings() {
           <h2 className="settings-section-title">Database Sync</h2>
           <p className="settings-help">
             Choose a shared folder (Dropbox, iCloud, NAS, etc.) to sync your database between machines.
-            The app checks every 30 seconds and loads whichever copy is newer.
           </p>
           <div className="settings-form">
             <div className="field">
@@ -175,6 +174,7 @@ export default function Settings() {
                 Load from Sync Folder
               </button>
             </div>
+            <p className="settings-hint">Database syncs automatically when you open or close the app.</p>
           </section>
         )}
       </main>

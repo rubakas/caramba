@@ -5,6 +5,7 @@ import NowPlaying from '../components/NowPlaying'
 import SeasonTabs from '../components/SeasonTabs'
 import EpisodeRow from '../components/EpisodeRow'
 import { usePlayer } from '../context/PlayerContext'
+import { useToast } from '../context/ToastContext'
 import { genresList, premiereYear, statusClass, formatTime, progressPercent, truncate } from '../utils'
 
 const PlaySvg = ({ size = 20 }) => (
@@ -15,6 +16,7 @@ export default function SeriesShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
   const { openPlayer } = usePlayer()
+  const { showToast } = useToast()
   const [series, setSeries] = useState(null)
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
@@ -70,18 +72,20 @@ export default function SeriesShow() {
 
   const handlePlay = async (episodeId) => {
     const result = await window.api.playEpisode(episodeId)
-    if (result && !result.error) {
-      await openPlayer({
-        type: 'episode',
-        episodeId: { id: result.episode_id, whId: result.watch_history_id },
-        seriesId: result.series_id,
-        filePath: result.file_path,
-        startTime: result.start_time,
-        title: series?.name || '',
-        subtitle: episodes.find(e => e.id === episodeId)?.code + ' — ' + (episodes.find(e => e.id === episodeId)?.title || ''),
-      })
-      loadData()
+    if (!result || result.error) {
+      showToast(result?.error || 'Failed to start playback', { type: 'error' })
+      return
     }
+    await openPlayer({
+      type: 'episode',
+      episodeId: { id: result.episode_id, whId: result.watch_history_id },
+      seriesId: result.series_id,
+      filePath: result.file_path,
+      startTime: result.start_time,
+      title: series?.name || '',
+      subtitle: episodes.find(e => e.id === episodeId)?.code + ' — ' + (episodes.find(e => e.id === episodeId)?.title || ''),
+    })
+    loadData()
   }
 
   const handleToggle = async (episodeId) => {
@@ -93,14 +97,14 @@ export default function SeriesShow() {
     const ep = episodes.find(e => e.id === episodeId)
     if (!ep?.file_path) return
     const result = await window.api.openInVlc({ filePath: ep.file_path, episodeId })
-    if (result?.error) console.error('Open in VLC failed:', result.error)
+    if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleOpenInDefault = async (episodeId) => {
     const ep = episodes.find(e => e.id === episodeId)
     if (!ep?.file_path) return
     const result = await window.api.openInDefault(ep.file_path)
-    if (result?.error) console.error('Open in Default Player failed:', result.error)
+    if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleScan = async () => {

@@ -208,15 +208,21 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   transcoder.stop()
-  dbSync.stopPeriodicSync()
-  db.close()
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let isQuitting = false
+app.on('before-quit', (e) => {
+  if (isQuitting) return // prevent infinite loop from app.quit() below
+  isQuitting = true
+  e.preventDefault()
   transcoder.stop()
-  dbSync.stopPeriodicSync()
-  db.close()
+  dbSync.dump()
+    .catch(err => console.warn('DbSync: dump on quit failed —', err.message))
+    .finally(() => {
+      db.close()
+      app.quit()
+    })
 })
 
 module.exports = { setSubtitleCache, getSubtitleCache }

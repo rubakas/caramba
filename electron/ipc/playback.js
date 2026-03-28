@@ -34,6 +34,10 @@ function register() {
   // Start playback: probe file, start transcoder, extract subs
   ipcMain.handle('playback:start', async (_e, filePath, startTime = 0, prefs = null) => {
     try {
+      if (!filePath || !fs.existsSync(filePath)) {
+        return { error: 'File not found: ' + (filePath || '(no path)') }
+      }
+
       const info = await transcoder.probe(filePath)
 
       // Pick audio track: saved preference (by language) > English > first

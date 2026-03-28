@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import { usePlayer } from '../context/PlayerContext'
+import { useToast } from '../context/ToastContext'
 import { genresList, formatTime, progressPercent, runtimeDisplay, isInProgress } from '../utils'
 
 const PlaySvg = ({ size = 20 }) => (
@@ -21,6 +22,7 @@ export default function MovieShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
   const { openPlayer } = usePlayer()
+  const { showToast } = useToast()
   const [movie, setMovie] = useState(null)
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
@@ -57,16 +59,18 @@ export default function MovieShow() {
 
   const handlePlay = async () => {
     const result = await window.api.playMovie(slug)
-    if (result && !result.error) {
-      await openPlayer({
-        type: 'movie',
-        movieId: result.movie_id,
-        filePath: result.file_path,
-        startTime: result.start_time,
-        title: movie?.title || '',
-      })
-      loadData()
+    if (!result || result.error) {
+      showToast(result?.error || 'Failed to start playback', { type: 'error' })
+      return
     }
+    await openPlayer({
+      type: 'movie',
+      movieId: result.movie_id,
+      filePath: result.file_path,
+      startTime: result.start_time,
+      title: movie?.title || '',
+    })
+    loadData()
   }
 
   const handleToggle = async () => {
@@ -77,13 +81,13 @@ export default function MovieShow() {
   const handleOpenInVlc = async () => {
     if (!movie?.file_path) return
     const result = await window.api.openInVlc({ filePath: movie.file_path, movieId: movie.id })
-    if (result?.error) console.error('Open in VLC failed:', result.error)
+    if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleOpenInDefault = async () => {
     if (!movie?.file_path) return
     const result = await window.api.openInDefault(movie.file_path)
-    if (result?.error) console.error('Open in Default Player failed:', result.error)
+    if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   // Click-outside to close menu
