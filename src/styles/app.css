@@ -673,11 +673,13 @@ body {
 .btn-play-cta {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   background: var(--accent);
   color: #fff;
   border: none;
   padding: 12px 28px;
+  min-width: 144px;
   border-radius: 980px;
   font-size: 15px;
   font-weight: 600;
