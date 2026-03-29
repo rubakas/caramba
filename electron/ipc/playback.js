@@ -295,18 +295,22 @@ function register() {
   })
 
   // Save playback preferences (audio/subtitle language) per series or movie
-  ipcMain.handle('playback:savePreferences', (_e, { type, seriesId, movieId, audioLanguage, subtitleLanguage, subtitleOff }) => {
+  ipcMain.handle('playback:savePreferences', (_e, { type, seriesId, movieId, audioLanguage, subtitleLanguage, subtitleOff, subtitleSize, subtitleStyle }) => {
     if (type === 'episode' && seriesId) {
       db.playbackPreferences.saveSeries(seriesId, {
         audio_language: audioLanguage,
         subtitle_language: subtitleLanguage,
         subtitle_off: subtitleOff,
+        subtitle_size: subtitleSize,
+        subtitle_style: subtitleStyle,
       })
     } else if (type === 'movie' && movieId) {
       db.playbackPreferences.saveMovie(movieId, {
         audio_language: audioLanguage,
         subtitle_language: subtitleLanguage,
         subtitle_off: subtitleOff,
+        subtitle_size: subtitleSize,
+        subtitle_style: subtitleStyle,
       })
     }
     return true
@@ -325,6 +329,8 @@ function register() {
       audioLanguage: pref.audio_language,
       subtitleLanguage: pref.subtitle_language,
       subtitleOff: !!pref.subtitle_off,
+      subtitleSize: pref.subtitle_size || 'medium',
+      subtitleStyle: pref.subtitle_style || 'classic',
     }
   })
 

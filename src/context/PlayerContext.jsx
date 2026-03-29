@@ -5,6 +5,7 @@ const PlayerContext = createContext(null)
 
 export function PlayerProvider({ children }) {
   const { showToast } = useToast()
+  const [launching, setLaunching] = useState(false)
   const [playerState, setPlayerState] = useState({
     open: false,
     streamUrl: null,
@@ -22,9 +23,12 @@ export function PlayerProvider({ children }) {
     subtitleStreams: [],
     activeAudioIndex: null,
     activeSubtitleIndex: null, // null = off
+    subtitleSize: 'medium',
+    subtitleStyle: 'classic',
   })
 
   const openPlayer = useCallback(async ({ type, episodeId, seriesId, movieId, title, subtitle, filePath, startTime }) => {
+    setLaunching(true)
     try {
       // Tell main process what we're playing
       if (type === 'episode') {
@@ -52,6 +56,7 @@ export function PlayerProvider({ children }) {
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
+        setLaunching(false)
         return
       }
 
@@ -72,10 +77,14 @@ export function PlayerProvider({ children }) {
         subtitleStreams: result.subtitleStreams || [],
         activeAudioIndex: result.activeAudioIndex ?? null,
         activeSubtitleIndex: result.activeSubtitleIndex ?? null,
+        subtitleSize: prefs?.subtitleSize || 'medium',
+        subtitleStyle: prefs?.subtitleStyle || 'classic',
       })
     } catch (err) {
       console.error('openPlayer error:', err)
       showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
+    } finally {
+      setLaunching(false)
     }
   }, [showToast])
 
@@ -154,6 +163,8 @@ export function PlayerProvider({ children }) {
       audioLanguage: audioStream?.language || null,
       subtitleLanguage: subtitleStream?.language || null,
       subtitleOff: subtitleIndex == null,
+      subtitleSize: overrides.subtitleSize || state.subtitleSize || 'medium',
+      subtitleStyle: overrides.subtitleStyle || state.subtitleStyle || 'classic',
     }).catch(() => {})
   }, [])
 
@@ -193,8 +204,19 @@ export function PlayerProvider({ children }) {
     return null
   }, [savePreferences])
 
+  // Update subtitle size/style and persist
+  const setSubtitleAppearance = useCallback(({ subtitleSize, subtitleStyle }) => {
+    setPlayerState(prev => {
+      const next = { ...prev }
+      if (subtitleSize !== undefined) next.subtitleSize = subtitleSize
+      if (subtitleStyle !== undefined) next.subtitleStyle = subtitleStyle
+      savePreferences(next, { subtitleSize: next.subtitleSize, subtitleStyle: next.subtitleStyle })
+      return next
+    })
+  }, [savePreferences])
+
   return (
-    <PlayerContext.Provider value={{ playerState, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle }}>
+    <PlayerContext.Provider value={{ playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance }}>
       {children}
     </PlayerContext.Provider>
   )

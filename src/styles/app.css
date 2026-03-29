@@ -690,8 +690,22 @@ body {
   flex-shrink: 0;
 }
 .btn-play-cta:hover { background: var(--accent-hover); transform: scale(1.03); }
+.btn-play-cta:disabled { opacity: 0.7; cursor: wait; transform: none; }
+.btn-play-cta:disabled:hover { background: var(--accent); transform: none; }
 .btn-play-cta--resume { background: var(--amber); }
 .btn-play-cta--resume:hover { background: #FFB340; }
+.btn-play-cta--resume:disabled:hover { background: var(--amber); }
+
+.btn-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: btn-spin .6s linear infinite;
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
 
 /* -- Stats Row --------------------------------------------------- */
 .stats-row {

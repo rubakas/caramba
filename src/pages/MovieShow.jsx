@@ -21,7 +21,7 @@ const MoreSvg = () => (
 export default function MovieShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
-  const { openPlayer } = usePlayer()
+  const { openPlayer, launching } = usePlayer()
   const { showToast } = useToast()
   const [movie, setMovie] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -197,8 +197,8 @@ export default function MovieShow() {
                 </span>
               </div>
             </div>
-            <button className="btn-play-cta btn-play-cta--resume" onClick={handlePlay}>
-              <PlaySvg /> Resume
+            <button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={handlePlay}>
+              {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
             </button>
           </div>
         ) : (
@@ -209,8 +209,8 @@ export default function MovieShow() {
                 <span className="cta-ep-title">{movie.title}</span>
               </div>
             </div>
-            <button className="btn-play-cta" onClick={handlePlay}>
-              <PlaySvg /> Play
+            <button className="btn-play-cta" disabled={launching} onClick={handlePlay}>
+              {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
             </button>
           </div>
         )}

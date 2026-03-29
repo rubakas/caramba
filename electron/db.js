@@ -50,6 +50,7 @@ function migrate() {
   const schema = fs.readFileSync(schemaPath, 'utf-8')
   db.exec(schema)
   migrateWatchlist()
+  migratePlaybackPreferences()
 }
 
 function migrateWatchlist() {
@@ -111,6 +112,17 @@ function migrateWatchlist() {
   // Create partial unique indexes (safe — IF NOT EXISTS)
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_tvmaze ON watchlist(tvmaze_id) WHERE tvmaze_id IS NOT NULL")
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_imdb ON watchlist(imdb_id) WHERE imdb_id IS NOT NULL")
+}
+
+function migratePlaybackPreferences() {
+  const cols = db.prepare("PRAGMA table_info(playback_preferences)").all()
+  const colNames = cols.map(c => c.name)
+  if (!colNames.includes('subtitle_size')) {
+    db.exec("ALTER TABLE playback_preferences ADD COLUMN subtitle_size TEXT NOT NULL DEFAULT 'medium'")
+  }
+  if (!colNames.includes('subtitle_style')) {
+    db.exec("ALTER TABLE playback_preferences ADD COLUMN subtitle_style TEXT NOT NULL DEFAULT 'classic'")
+  }
 }
 
 // -- Helper: generate slug --
@@ -484,28 +496,32 @@ const playbackPreferences = {
     return get().prepare('SELECT * FROM playback_preferences WHERE movie_id = ?').get(movieId)
   },
 
-  saveSeries(seriesId, { audio_language, subtitle_language, subtitle_off }) {
+  saveSeries(seriesId, { audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style }) {
     get().prepare(`
-      INSERT INTO playback_preferences (series_id, audio_language, subtitle_language, subtitle_off)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO playback_preferences (series_id, audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(series_id) DO UPDATE SET
         audio_language = excluded.audio_language,
         subtitle_language = excluded.subtitle_language,
         subtitle_off = excluded.subtitle_off,
+        subtitle_size = excluded.subtitle_size,
+        subtitle_style = excluded.subtitle_style,
         updated_at = datetime('now')
-    `).run(seriesId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0)
+    `).run(seriesId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0, subtitle_size || 'medium', subtitle_style || 'classic')
   },
 
-  saveMovie(movieId, { audio_language, subtitle_language, subtitle_off }) {
+  saveMovie(movieId, { audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style }) {
     get().prepare(`
-      INSERT INTO playback_preferences (movie_id, audio_language, subtitle_language, subtitle_off)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO playback_preferences (movie_id, audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(movie_id) DO UPDATE SET
         audio_language = excluded.audio_language,
         subtitle_language = excluded.subtitle_language,
         subtitle_off = excluded.subtitle_off,
+        subtitle_size = excluded.subtitle_size,
+        subtitle_style = excluded.subtitle_style,
         updated_at = datetime('now')
-    `).run(movieId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0)
+    `).run(movieId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0, subtitle_size || 'medium', subtitle_style || 'classic')
   },
 }
 

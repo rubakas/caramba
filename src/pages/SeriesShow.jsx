@@ -15,7 +15,7 @@ const PlaySvg = ({ size = 20 }) => (
 export default function SeriesShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
-  const { openPlayer } = usePlayer()
+  const { openPlayer, launching } = usePlayer()
   const { showToast } = useToast()
   const [series, setSeries] = useState(null)
   const [episodes, setEpisodes] = useState([])
@@ -236,8 +236,8 @@ export default function SeriesShow() {
                     </span>
                   </div>
                 </div>
-                <button className="btn-play-cta btn-play-cta--resume" onClick={() => handlePlay(resumeEp.id)}>
-                  <PlaySvg /> Resume
+                <button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)}>
+                  {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
                 </button>
               </div>
             )}
@@ -255,8 +255,8 @@ export default function SeriesShow() {
                     <p className="cta-desc">{truncate(nextEp.description, 150)}</p>
                   )}
                 </div>
-                <button className="btn-play-cta" onClick={() => handlePlay(nextEp.id)}>
-                  <PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}
+                <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)}>
+                  {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
                 </button>
               </div>
             ) : !lastWatched ? (
@@ -269,8 +269,8 @@ export default function SeriesShow() {
                       <span className="cta-ep-title">{episodes[0].title}</span>
                     </div>
                   </div>
-                  <button className="btn-play-cta" onClick={() => handlePlay(episodes[0].id)}>
-                    <PlaySvg /> Play
+                  <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)}>
+                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
                   </button>
                 </div>
               )

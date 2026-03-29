@@ -210,7 +210,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   transcoder.stop()
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })
 
 let isQuitting = false

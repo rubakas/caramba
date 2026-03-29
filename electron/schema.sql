@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS playback_preferences (
   audio_language TEXT,
   subtitle_language TEXT,
   subtitle_off INTEGER NOT NULL DEFAULT 0,
+  subtitle_size TEXT NOT NULL DEFAULT 'medium',
+  subtitle_style TEXT NOT NULL DEFAULT 'classic',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

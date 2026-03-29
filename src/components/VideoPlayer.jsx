@@ -69,7 +69,7 @@ const SUB_STYLES = [
 ]
 
 export default function VideoPlayer() {
-  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle } = usePlayer()
+  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance } = usePlayer()
   const videoRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
@@ -91,10 +91,10 @@ export default function VideoPlayer() {
   // Bumped on every seek/audio switch so the <track> element remounts
   // and fetches freshly time-shifted VTT from the protocol handler
   const [subtitleVersion, setSubtitleVersion] = useState(0)
-  const [subtitleSize, setSubtitleSize] = useState('medium')
-  const [subtitleStyle, setSubtitleStyle] = useState('classic')
 
   const totalDuration = playerState.duration || 0
+  const subtitleSize = playerState.subtitleSize || 'medium'
+  const subtitleStyle = playerState.subtitleStyle || 'classic'
 
   // Reset local state when player opens with new session
   useEffect(() => {
@@ -302,6 +302,8 @@ export default function VideoPlayer() {
     const absoluteCurrent = seekBaseRef.current + (video.currentTime || 0)
     const newTime = Math.max(0, Math.min(absoluteCurrent + delta, totalDuration))
 
+    // Clear stale subtitle cues immediately before the async seek
+    disableAllTextTracks()
     setBuffering(true)
     try {
       const result = await window.api.seekPlayback(newTime)
@@ -317,10 +319,12 @@ export default function VideoPlayer() {
       console.error('Seek failed:', err)
       setBuffering(false)
     }
-  }, [totalDuration])
+  }, [totalDuration, disableAllTextTracks])
 
   const handleSeekBarChange = useCallback(async (e) => {
     const newTime = parseFloat(e.target.value)
+    // Clear stale subtitle cues immediately before the async seek
+    disableAllTextTracks()
     setBuffering(true)
     try {
       const result = await window.api.seekPlayback(newTime)
@@ -339,7 +343,7 @@ export default function VideoPlayer() {
       console.error('Seek bar failed:', err)
       setBuffering(false)
     }
-  }, [])
+  }, [disableAllTextTracks])
 
   const handleSwitchAudio = useCallback(async (audioStreamIndex) => {
     const video = videoRef.current
@@ -685,7 +689,7 @@ export default function VideoPlayer() {
                         <button
                           key={s.id}
                           className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
-                          onClick={() => setSubtitleSize(s.id)}
+                          onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
                         >
                           {s.label}
                         </button>
@@ -700,7 +704,7 @@ export default function VideoPlayer() {
                       <button
                         key={s.id}
                         className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
-                        onClick={() => setSubtitleStyle(s.id)}
+                        onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
                       >
                         <span className="track-popover-check">
                           {s.id === subtitleStyle ? '\u2713' : ''}
