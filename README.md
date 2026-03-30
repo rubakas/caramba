@@ -42,9 +42,12 @@ bin/setup-ffmpeg
 
 # Launch in dev mode
 bin/dev
+
+# Launch with simulated update banner (for testing the update UI)
+SIMULATE_UPDATE=1 npm run electron
 ```
 
-`bin/dev` builds the React frontend with Vite, then starts Electron.
+`bin/dev` builds the React frontend with Vite, then starts Electron. `SIMULATE_UPDATE=1` triggers a fake update notification on launch without hitting GitHub.
 
 ## Building
 

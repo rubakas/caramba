@@ -12,6 +12,7 @@ import MoviesNew from './pages/MoviesNew'
 import History from './pages/History'
 import Settings from './pages/Settings'
 import Discover from './pages/Discover'
+import UpdatePrompt from './components/UpdatePrompt'
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
           <VideoPlayer />
         </HashRouter>
         <ToastContainer />
+        <UpdatePrompt />
       </PlayerProvider>
     </ToastProvider>
   )

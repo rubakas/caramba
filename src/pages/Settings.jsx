@@ -177,6 +177,8 @@ export default function Settings() {
             <p className="settings-hint">Database syncs automatically when you open or close the app.</p>
           </section>
         )}
+
+
       </main>
     </>
   )

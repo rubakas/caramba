@@ -24,6 +24,7 @@ const historyIpc = require('./ipc/history')
 const settingsIpc = require('./ipc/settings')
 const dialogsIpc = require('./ipc/dialogs')
 const discoverIpc = require('./ipc/discover')
+const updaterIpc = require('./ipc/updater')
 
 // Subtitle cache: stores the RAW VTT with original timestamps.
 // The subtitle:// protocol handler shifts timestamps by the current seek offset.
@@ -125,6 +126,7 @@ function createWindow() {
   settingsIpc.register()
   dialogsIpc.register(mainWindow)
   discoverIpc.register()
+  updaterIpc.register(mainWindow)
 
   // Load the React app
   if (process.env.VITE_DEV_URL) {
@@ -133,6 +135,11 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist-react', 'index.html'))
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist-react', 'index.html'))
+  }
+
+  // Open DevTools in dev mode
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
   // Open external links in system browser
@@ -202,6 +209,23 @@ app.whenReady().then(() => {
   dbSync.syncOnStartup().catch(err => console.warn('DbSync: startup sync error —', err.message))
 
   createWindow()
+
+  // Check for updates in packaged builds (fire-and-forget).
+  // Run with SIMULATE_UPDATE=1 in dev to test the update UI without a real release.
+  if (app.isPackaged || process.env.SIMULATE_UPDATE) {
+    const updater = require('./services/updater')
+    const checkFn = process.env.SIMULATE_UPDATE
+      ? () => Promise.resolve({ version: '99.0.0', assetUrl: null, assetName: 'Caramba-99.0.0.dmg' })
+      : updater.checkForUpdate.bind(updater)
+
+    checkFn()
+      .then(info => {
+        updaterIpc.setPendingInfo(info)
+        if (!info || !mainWindow) return
+        mainWindow.webContents.send('updater:update-available', info)
+      })
+      .catch(err => console.warn('Updater: check failed —', err.message))
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
