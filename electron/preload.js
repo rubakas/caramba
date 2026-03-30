@@ -69,4 +69,19 @@ contextBridge.exposeInMainWorld('api', {
   addToWatchlist: (show) => ipcRenderer.invoke('discover:addToWatchlist', show),
   removeFromWatchlist: (identifier) => ipcRenderer.invoke('discover:removeFromWatchlist', identifier),
   listWatchlist: () => ipcRenderer.invoke('discover:listWatchlist'),
+
+  // Updater
+  checkForUpdate: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdateAvailable: (cb) => {
+    const handler = (_e, info) => cb(info)
+    ipcRenderer.on('updater:update-available', handler)
+    return () => ipcRenderer.removeListener('updater:update-available', handler)
+  },
+  onDownloadProgress: (cb) => {
+    const handler = (_e, progress) => cb(progress)
+    ipcRenderer.on('updater:download-progress', handler)
+    return () => ipcRenderer.removeListener('updater:download-progress', handler)
+  },
 })
