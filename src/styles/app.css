@@ -117,19 +117,11 @@ body {
   border-color: rgba(255,69,58,.15);
   color: var(--text-primary);
 }
-.toast--error .toast-icon { color: var(--red); }
 .toast--success {
   background: rgba(48,209,88,.06);
   border-color: rgba(48,209,88,.12);
 }
-.toast--success .toast-icon { color: var(--green); }
-.toast--info .toast-icon { color: var(--accent); }
 
-.toast-icon {
-  font-size: 15px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
 .toast-message {
   line-height: 1.4;
 }
@@ -447,7 +439,10 @@ body {
 
 .card-rating {
   position: relative;
-  background: rgba(0,0,0,.18);
+  background: rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 8px;
   color: #fff;
   font-size: 12px;
   font-weight: 700;
@@ -1484,7 +1479,10 @@ body {
   width: 32px;
   height: 32px;
   border: none;
-  background: rgba(0,0,0,.25);
+  border-radius: 16px;
+  background: rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;

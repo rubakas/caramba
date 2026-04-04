@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import { useToast } from './ToastContext'
 
 const PlayerContext = createContext(null)
@@ -217,6 +217,21 @@ export function PlayerProvider({ children }) {
       return next
     })
   }, [savePreferences])
+
+  // Listen for async subtitle extraction results pushed from main process.
+  // Subtitles are extracted in the background after playback starts so the
+  // video begins immediately without waiting for subtitle extraction to finish.
+  useEffect(() => {
+    if (!window.api?.onSubtitlesReady) return
+    const cleanup = window.api.onSubtitlesReady(({ subtitleUrl, subtitleStreamIndex }) => {
+      setPlayerState(prev => {
+        // Only apply if player is open and still expects this subtitle track
+        if (!prev.open || prev.activeSubtitleIndex !== subtitleStreamIndex) return prev
+        return { ...prev, subtitleUrl }
+      })
+    })
+    return cleanup
+  }, [])
 
   return (
     <PlayerContext.Provider value={{ playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance }}>

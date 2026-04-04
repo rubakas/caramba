@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('vlc-playback-ended', handler)
     return () => ipcRenderer.removeListener('vlc-playback-ended', handler)
   },
+  onSubtitlesReady: (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('playback:subtitles-ready', handler)
+    return () => ipcRenderer.removeListener('playback:subtitles-ready', handler)
+  },
 
   // History
   listHistory: (limit) => ipcRenderer.invoke('history:list', limit),

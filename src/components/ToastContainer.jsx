@@ -17,9 +17,6 @@ export default function ToastContainer() {
           onClick={() => dismiss(toast.id)}
           refraction={toastGlass}
         >
-          <span className="toast-icon">
-            {toast.type === 'error' ? '\u2718' : toast.type === 'success' ? '\u2713' : '\u24D8'}
-          </span>
           <span className="toast-message">{toast.message}</span>
         </refractive.div>
       ))}

@@ -6,6 +6,9 @@
 # The last-built commit hash is stored in .build-commit. If HEAD
 # matches that hash, the version stays the same (idempotent rebuild).
 #
+# When building for Linux on macOS, Docker is used automatically to
+# cross-compile native modules (better-sqlite3) for the correct arch.
+#
 # Usage: bin/build                        # Mac + Linux, no publish
 #        bin/build --mac                  # Mac only
 #        bin/build --linux                # Linux only
@@ -78,24 +81,111 @@ echo ""
 echo "Building React frontend..."
 npx vite build
 
-# ── 3. Build platform packages ─────────────────────────────────────
-TARGETS=""
-$BUILD_MAC   && TARGETS="$TARGETS --mac"
-$BUILD_LINUX && TARGETS="$TARGETS --linux"
+# ── 3. Setup ffmpeg binaries for target platforms ──────────────────
+if $BUILD_MAC; then
+  echo "Ensuring macOS ffmpeg binaries..."
+  bin/setup-ffmpeg --mac
+fi
+if $BUILD_LINUX; then
+  echo "Ensuring Linux ffmpeg binaries..."
+  bin/setup-ffmpeg --linux
+fi
 
-echo ""
-echo "Building Electron app v$CURRENT_VERSION ($TARGETS)..."
-npx electron-builder $TARGETS --publish never
+# ── 4. Build macOS package (native, no Docker needed) ──────────────
+if $BUILD_MAC; then
+  echo ""
+  echo "Building macOS app v$CURRENT_VERSION..."
+  npx electron-builder --mac --publish never
+fi
 
-# ── 4. Summary ─────────────────────────────────────────────────────
+# ── 5. Build Linux package ─────────────────────────────────────────
+if $BUILD_LINUX; then
+  HOST_OS="$(uname -s)"
 
+  if [ "$HOST_OS" = "Linux" ]; then
+    # Native Linux build — no Docker needed
+    echo ""
+    echo "Building Linux app v$CURRENT_VERSION..."
+    npx electron-builder --linux --x64 --publish never
+  else
+    # Cross-compile via Docker (macOS → Linux x64)
+    # Native modules (better-sqlite3) must be compiled inside a Linux
+    # x64 container so the .node binary has the correct ELF architecture.
+    echo ""
+    echo "Cross-compiling Linux app v$CURRENT_VERSION via Docker..."
+    echo "(Native modules require a Linux x64 environment)"
+
+    # ── Docker environment setup ──────────────────────────────────
+    # Work around credential store issues (common with Colima)
+    DOCKER_TMPCONFIG=$(mktemp -d)
+    echo '{}' > "$DOCKER_TMPCONFIG/config.json"
+    export DOCKER_CONFIG="$DOCKER_TMPCONFIG"
+
+    # Auto-detect Docker socket
+    for sock in \
+      "$HOME/.colima/default/docker.sock" \
+      "/var/run/docker.sock" \
+      "$HOME/.docker/run/docker.sock" \
+      "$HOME/.orbstack/run/docker.sock"; do
+      if [ -S "$sock" ]; then
+        export DOCKER_HOST="unix://$sock"
+        break
+      fi
+    done
+
+    if ! docker info >/dev/null 2>&1; then
+      echo "Error: Docker is not running. Start Colima/Docker Desktop/OrbStack and retry."
+      rm -rf "$DOCKER_TMPCONFIG"
+      exit 1
+    fi
+
+    echo "Using Docker: ${DOCKER_HOST:-default socket}"
+    echo "This may be slow on ARM hosts due to QEMU x86_64 emulation."
+    echo ""
+
+    docker run --rm \
+      --platform linux/amd64 \
+      --name "caramba-linux-build-$$" \
+      -v "${PWD}:/host-project:ro" \
+      -v "${PWD}/dist:/host-project-dist" \
+      -w /build \
+      electronuserland/builder:20 \
+      /bin/bash -c '
+        set -euo pipefail
+
+        echo "==> Copying project files..."
+        cp /host-project/package.json /host-project/package-lock.json ./
+        cp -r /host-project/electron ./
+        cp -r /host-project/dist-react ./
+        cp -r /host-project/storage ./
+        cp -r /host-project/vendor ./
+        [ -d /host-project/public ] && cp -r /host-project/public ./
+
+        echo "==> Installing dependencies (native modules compile for Linux x64)..."
+        npm ci
+
+        echo "==> Building AppImage with electron-builder..."
+        npx electron-builder --linux AppImage --x64 --publish never
+
+        echo "==> Copying artifacts to host..."
+        cp -v dist/*.AppImage /host-project-dist/ 2>/dev/null || true
+
+        echo ""
+        echo "==> Linux build complete!"
+      '
+
+    rm -rf "$DOCKER_TMPCONFIG"
+  fi
+fi
+
+# ── 6. Summary ─────────────────────────────────────────────────────
 echo ""
 echo "Build complete: v$CURRENT_VERSION"
 ls -lh dist/*.dmg 2>/dev/null || true
 ls -lh dist/*.AppImage 2>/dev/null || true
 ls -lh dist/*.deb 2>/dev/null || true
 
-# ── 5. Publish to GitHub Releases ──────────────────────────────────
+# ── 7. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   echo ""
 

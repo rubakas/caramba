@@ -1,49 +1,105 @@
 #!/usr/bin/env bash
 #
 # Download static ffmpeg + ffprobe binaries for bundling into the Electron app.
-# Source: https://evermeet.cx/ffmpeg/ (macOS arm64/x86_64 universal static builds)
 #
-# Usage: bin/setup-ffmpeg
+# macOS:  https://evermeet.cx/ffmpeg/ (arm64/x86_64 universal static builds)
+# Linux:  https://johnvansickle.com/ffmpeg/ (amd64 static builds)
+#
+# Usage: bin/setup-ffmpeg          # current platform
+#        bin/setup-ffmpeg --linux   # force Linux (for cross-compile on macOS)
+#        bin/setup-ffmpeg --mac     # force macOS
+#        bin/setup-ffmpeg --all     # both platforms
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-VENDOR_DIR="vendor/ffmpeg"
+setup_mac() {
+  local dir="vendor/ffmpeg"
 
-# Check if already present
-if [ -x "$VENDOR_DIR/ffmpeg" ] && [ -x "$VENDOR_DIR/ffprobe" ]; then
-  echo "ffmpeg binaries already present:"
-  "$VENDOR_DIR/ffmpeg" -version | head -1
-  "$VENDOR_DIR/ffprobe" -version | head -1
-  exit 0
-fi
+  if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
+    echo "macOS ffmpeg already present:"
+    "$dir/ffmpeg" -version | head -1
+    return 0
+  fi
 
-# Require 7z for extraction
-if ! command -v 7z &>/dev/null; then
-  echo "Installing p7zip..."
-  brew install p7zip
-fi
+  # Require 7z for extraction
+  if ! command -v 7z &>/dev/null; then
+    echo "Installing p7zip..."
+    brew install p7zip
+  fi
 
-mkdir -p "$VENDOR_DIR"
+  mkdir -p "$dir"
 
-echo "Downloading static ffmpeg..."
-curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z" -o /tmp/ffmpeg.7z
+  echo "Downloading static ffmpeg (macOS)..."
+  curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z" -o /tmp/ffmpeg.7z
 
-echo "Downloading static ffprobe..."
-curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z" -o /tmp/ffprobe.7z
+  echo "Downloading static ffprobe (macOS)..."
+  curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z" -o /tmp/ffprobe.7z
 
-echo "Extracting..."
-7z e /tmp/ffmpeg.7z -o"$VENDOR_DIR" -y >/dev/null
-7z e /tmp/ffprobe.7z -o"$VENDOR_DIR" -y >/dev/null
+  echo "Extracting..."
+  7z e /tmp/ffmpeg.7z -o"$dir" -y >/dev/null
+  7z e /tmp/ffprobe.7z -o"$dir" -y >/dev/null
 
-chmod +x "$VENDOR_DIR/ffmpeg" "$VENDOR_DIR/ffprobe"
+  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+  rm -f /tmp/ffmpeg.7z /tmp/ffprobe.7z
 
-# Clean up
-rm -f /tmp/ffmpeg.7z /tmp/ffprobe.7z
+  echo "Done (macOS):"
+  "$dir/ffmpeg" -version | head -1
+  ls -lh "$dir/"
+}
 
-echo ""
-echo "Done:"
-"$VENDOR_DIR/ffmpeg" -version | head -1
-"$VENDOR_DIR/ffprobe" -version | head -1
-ls -lh "$VENDOR_DIR/"
+setup_linux() {
+  local dir="vendor/ffmpeg-linux"
+
+  if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
+    echo "Linux ffmpeg already present:"
+    echo "  $(ls -lh "$dir/ffmpeg" | awk '{print $5, $9}')"
+    return 0
+  fi
+
+  mkdir -p "$dir"
+
+  echo "Downloading static ffmpeg (Linux amd64)..."
+  curl -sL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -o /tmp/ffmpeg-linux.tar.xz
+
+  echo "Extracting..."
+  tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp/
+
+  cp /tmp/ffmpeg-*-static/ffmpeg /tmp/ffmpeg-*-static/ffprobe "$dir/"
+  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+
+  # Clean up
+  rm -rf /tmp/ffmpeg-linux.tar.xz /tmp/ffmpeg-*-static
+
+  echo "Done (Linux x64):"
+  ls -lh "$dir/"
+}
+
+# Parse args
+TARGET="${1:-auto}"
+
+case "$TARGET" in
+  --all)
+    setup_mac
+    echo ""
+    setup_linux
+    ;;
+  --linux)
+    setup_linux
+    ;;
+  --mac)
+    setup_mac
+    ;;
+  auto|"")
+    case "$(uname -s)" in
+      Darwin) setup_mac ;;
+      Linux)  setup_linux ;;
+      *)      echo "Unknown platform: $(uname -s)"; exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "Usage: bin/setup-ffmpeg [--mac|--linux|--all]"
+    exit 1
+    ;;
+esac

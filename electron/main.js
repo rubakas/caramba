@@ -103,20 +103,26 @@ function shiftVtt(vtt, offset) {
 let mainWindow = null
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOpts = {
     width: 1280,
     height: 860,
     minWidth: 800,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
-  })
+  }
+
+  // macOS: hide title bar, show traffic lights inset
+  if (process.platform === 'darwin') {
+    windowOpts.titleBarStyle = 'hiddenInset'
+    windowOpts.trafficLightPosition = { x: 16, y: 16 }
+  }
+
+  mainWindow = new BrowserWindow(windowOpts)
 
   // Register IPC handlers (dialogs needs the window reference)
   seriesIpc.register()

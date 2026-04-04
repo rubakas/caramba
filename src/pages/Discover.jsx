@@ -25,8 +25,6 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
   const poster = show.poster_url
   const genres = genresList(show.genres).slice(0, 3)
   const year = premiereYear(show.premiered)
-  const ratingBadgeGlass = useGlassConfig('rating-badge')
-  const watchlistBtnGlass = useGlassConfig('watchlist-btn')
 
   return (
     <div className="discover-card" onClick={onClick}>
@@ -38,7 +36,7 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
             <div className="card-poster-fallback">{show.name?.[0] || '?'}</div>
           )}
           <div className="card-overlay">
-            {show.rating ? <refractive.span className="card-rating" refraction={ratingBadgeGlass}>{show.rating}</refractive.span> : <span />}
+            {show.rating ? <span className="card-rating">{show.rating}</span> : <span />}
           </div>
         </div>
         <div className="card-body">
@@ -59,14 +57,13 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
         </div>
       </div>
 
-      <refractive.button
+      <button
         className={`discover-watchlist-btn${show.in_watchlist ? ' active' : ''}`}
         onClick={(e) => { e.stopPropagation(); onToggleWatchlist(show) }}
         title={show.in_watchlist ? 'Remove from Watchlist' : 'Add to Watchlist'}
-        refraction={watchlistBtnGlass}
       >
         {show.in_watchlist ? <BookmarkFilled /> : <BookmarkOutline />}
-      </refractive.button>
+      </button>
     </div>
   )
 }
@@ -74,8 +71,6 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
 // -- Movie Card ---------------------------------------------------
 
 function MovieCard({ movie, onClick, onToggleWatchlist }) {
-  const ratingBadgeGlass = useGlassConfig('rating-badge')
-  const watchlistBtnGlass = useGlassConfig('watchlist-btn')
   return (
     <div className="discover-card" onClick={onClick}>
       <div className="discover-card-main">
@@ -86,7 +81,7 @@ function MovieCard({ movie, onClick, onToggleWatchlist }) {
             <div className="card-poster-fallback">{movie.name?.[0] || '?'}</div>
           )}
           <div className="card-overlay">
-            {movie.rating ? <refractive.span className="card-rating" refraction={ratingBadgeGlass}>{movie.rating}</refractive.span> : <span />}
+            {movie.rating ? <span className="card-rating">{movie.rating}</span> : <span />}
           </div>
         </div>
         <div className="card-body">
@@ -97,14 +92,13 @@ function MovieCard({ movie, onClick, onToggleWatchlist }) {
         </div>
       </div>
 
-      <refractive.button
+      <button
         className={`discover-watchlist-btn${movie.in_watchlist ? ' active' : ''}`}
         onClick={(e) => { e.stopPropagation(); onToggleWatchlist(movie) }}
         title={movie.in_watchlist ? 'Remove from Watchlist' : 'Add to Watchlist'}
-        refraction={watchlistBtnGlass}
       >
         {movie.in_watchlist ? <BookmarkFilled /> : <BookmarkOutline />}
-      </refractive.button>
+      </button>
     </div>
   )
 }
