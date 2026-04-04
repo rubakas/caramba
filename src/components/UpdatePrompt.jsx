@@ -48,8 +48,16 @@ export default function UpdatePrompt() {
 
   const handleInstall = async () => {
     setInstalling(true)
+    setError(null)
     const result = await window.api.installUpdate()
-    // In simulation installUpdate returns { ok: true }; real install quits the app
+    // Real macOS install quits the app — we only get here for simulation or errors
+    if (result?.error) {
+      setError(result.error)
+      setInstalling(false)
+      setPhase('ready') // stay on ready so user can retry or dismiss
+      return
+    }
+    // Simulation mode: installUpdate returns { ok: true }
     if (result?.ok) setPhase('idle')
   }
 
@@ -83,6 +91,7 @@ export default function UpdatePrompt() {
           <>
             <div className="update-prompt-title">Ready to install</div>
             <div className="update-prompt-sub">Caramba {info?.version} — the app will restart.</div>
+            {error && <div className="update-prompt-sub" style={{ color: 'var(--red)' }}>{error}</div>}
           </>
         )}
       </div>

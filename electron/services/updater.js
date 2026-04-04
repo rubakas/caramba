@@ -5,7 +5,7 @@ const fsp = require('fs/promises')
 const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
-const { execFile } = require('child_process')
+const { execFile, spawn } = require('child_process')
 const { promisify } = require('util')
 
 const execFileAsync = promisify(execFile)
@@ -202,7 +202,9 @@ function downloadUpdate(assetUrl, onProgress, expectedSha256 = null) {
 
 /**
  * Install the downloaded file and relaunch the app.
- * On macOS: mount DMG, copy .app to /Applications/, unmount, relaunch.
+ * On macOS: mount DMG, copy .app to a staging dir, then spawn a detached
+ *   shell script that waits for this process to exit, copies the staged .app
+ *   to /Applications/, unmounts the DMG, and relaunches the app. Then quit.
  * On Linux: replace the current AppImage executable in-place, relaunch.
  */
 async function installUpdate(filePath) {
@@ -210,12 +212,11 @@ async function installUpdate(filePath) {
     await installMac(filePath)
   } else if (process.platform === 'linux') {
     await installLinux(filePath)
+    app.relaunch()
+    app.quit()
   } else {
     throw new Error(`Unsupported platform: ${process.platform}`)
   }
-
-  app.relaunch()
-  app.quit()
 }
 
 async function installMac(dmgPath) {
@@ -228,21 +229,62 @@ async function installMac(dmgPath) {
     throw new Error(`Could not determine DMG mount point from: ${stdout}`)
   }
 
-  try {
-    // Find the .app bundle inside the mount
-    const entries = await fsp.readdir(mountPoint)
-    const appName = entries.find(e => e.endsWith('.app'))
-    if (!appName) throw new Error(`No .app bundle found in ${mountPoint}`)
-
-    const appSrc = path.join(mountPoint, appName)
-    const appDest = path.join('/Applications', appName)
-
-    // Copy to /Applications (overwrites existing)
-    await execFileAsync('cp', ['-Rf', appSrc, appDest])
-  } finally {
-    // Always unmount, even if copy failed
+  // Find the .app bundle inside the mount
+  const entries = await fsp.readdir(mountPoint)
+  const appName = entries.find(e => e.endsWith('.app'))
+  if (!appName) {
     await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']).catch(() => {})
+    throw new Error(`No .app bundle found in ${mountPoint}`)
   }
+
+  const appSrc = path.join(mountPoint, appName)
+  const appDest = path.join('/Applications', appName)
+  const pid = process.pid
+
+  // Stage the .app to a temp dir so we can unmount the DMG inside the script
+  // (copying from a mounted DMG in the background is fragile if the DMG gets
+  // garbage-collected or auto-unmounted).
+  const stageDir = path.join(os.tmpdir(), `caramba-stage-${Date.now()}`)
+  const stagedApp = path.join(stageDir, appName)
+  await fsp.mkdir(stageDir, { recursive: true })
+  await execFileAsync('cp', ['-Rf', appSrc, stagedApp])
+
+  // Unmount the DMG now — we have a full copy in stageDir
+  await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']).catch(() => {})
+
+  // Write a helper script that:
+  //  1. Waits for the current Electron process to exit
+  //  2. Copies the staged .app to /Applications/
+  //  3. Cleans up the staging dir
+  //  4. Opens the new app
+  const scriptPath = path.join(os.tmpdir(), `caramba-update-${Date.now()}.sh`)
+  const script = `#!/bin/bash
+# Wait for the running Electron process to exit (up to 30s)
+for i in $(seq 1 60); do
+  kill -0 ${pid} 2>/dev/null || break
+  sleep 0.5
+done
+# Copy the staged .app to /Applications/
+rm -rf ${JSON.stringify(appDest)}
+cp -Rf ${JSON.stringify(stagedApp)} ${JSON.stringify(appDest)}
+# Clean up staging dir and this script
+rm -rf ${JSON.stringify(stageDir)}
+rm -f ${JSON.stringify(scriptPath)}
+# Relaunch
+open -a ${JSON.stringify(appDest)}
+`
+
+  await fsp.writeFile(scriptPath, script, { mode: 0o755 })
+
+  // Spawn the script detached so it survives our exit
+  const child = spawn('/bin/bash', [scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  child.unref()
+
+  // Now quit — the script will take over
+  app.quit()
 }
 
 async function installLinux(appImagePath) {
