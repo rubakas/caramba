@@ -187,40 +187,5 @@ ls -lh dist/*.deb 2>/dev/null || true
 
 # ── 7. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
-  echo ""
-
-  # Require gh CLI
-  if ! command -v gh &>/dev/null; then
-    echo "Error: gh CLI not found. Install it: brew install gh"
-    exit 1
-  fi
-
-  # Collect artifacts
-  ARTIFACTS=()
-  for f in dist/*.dmg dist/*.AppImage dist/*.deb; do
-    [ -f "$f" ] && ARTIFACTS+=("$f")
-  done
-
-  if [ ${#ARTIFACTS[@]} -eq 0 ]; then
-    echo "Warning: No artifacts found in dist/ — skipping publish."
-    exit 0
-  fi
-
-  TAG="v$CURRENT_VERSION"
-  echo "Publishing $TAG to GitHub Releases..."
-  echo "  Assets: ${ARTIFACTS[*]}"
-
-  # Check if release already exists for this tag
-  if gh release view "$TAG" &>/dev/null; then
-    echo "  Release $TAG already exists — uploading assets (overwrite)..."
-    gh release upload "$TAG" "${ARTIFACTS[@]}" --clobber
-  else
-    gh release create "$TAG" "${ARTIFACTS[@]}" \
-      --title "$TAG" \
-      --notes "$HEAD_MSG" \
-      --latest
-  fi
-
-  echo ""
-  echo "Published: $(gh release view "$TAG" --json url -q '.url')"
+  bin/publish
 fi
