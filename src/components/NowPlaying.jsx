@@ -48,7 +48,7 @@ export default function NowPlaying() {
       : playerState.title
 
     return (
-      <refractive.div className="now-playing-bar" refraction={{ radius: 12, blur: 6, bezelWidth: 2 }}>
+      <refractive.div className="now-playing-bar" refraction={{ radius: 12, blur: 6, bezelWidth: 2, glassThickness: 70, specularOpacity: 0.18, refractiveIndex: 1.5 }}>
         <div className="np-dot" />
         <span className="np-label">Now Playing</span>
         <span className="np-title">{title}</span>
@@ -74,7 +74,7 @@ export default function NowPlaying() {
     const pct = duration > 0 ? (time / duration) * 100 : 0
 
     return (
-      <refractive.div className="now-playing-bar" refraction={{ radius: 12, blur: 6, bezelWidth: 2 }}>
+      <refractive.div className="now-playing-bar" refraction={{ radius: 12, blur: 6, bezelWidth: 2, glassThickness: 70, specularOpacity: 0.18, refractiveIndex: 1.5 }}>
         <div className="np-dot" />
         <span className="np-label">VLC</span>
         <span className="np-title">{title}</span>

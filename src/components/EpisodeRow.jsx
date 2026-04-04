@@ -94,7 +94,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
             <MoreSvg />
           </button>
           {menuOpen && (
-            <refractive.div ref={menuRef} className="ep-popover" refraction={{ radius: 10, blur: 8, bezelWidth: 2 }}>
+            <refractive.div ref={menuRef} className="ep-popover" refraction={{ radius: 10, blur: 8, bezelWidth: 2, glassThickness: 80, specularOpacity: 0.15, refractiveIndex: 1.45 }}>
               <button
                 className="ep-popover-item"
                 onClick={() => { onToggle(ep.id); setMenuOpen(false) }}

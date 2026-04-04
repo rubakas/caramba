@@ -20,7 +20,7 @@ export default function Navbar({ active, actions, rightContent }) {
   return (
     <refractive.nav
       className="topnav"
-      refraction={{ radius: 0, blur: 8, bezelWidth: 1 }}
+      refraction={{ radius: 0, blur: 8, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}
     >
       <a className="topnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
         Caramba

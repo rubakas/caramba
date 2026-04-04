@@ -13,7 +13,7 @@ export default function ToastContainer() {
           key={toast.id}
           className={`toast toast--${toast.type}${toast.fading ? ' fade-out' : ''}`}
           onClick={() => dismiss(toast.id)}
-          refraction={{ radius: 980, blur: 6, bezelWidth: 2 }}
+          refraction={{ radius: 980, blur: 6, bezelWidth: 2, glassThickness: 70, specularOpacity: 0.18, refractiveIndex: 1.5 }}
         >
           <span className="toast-icon">
             {toast.type === 'error' ? '\u2718' : toast.type === 'success' ? '\u2713' : '\u24D8'}

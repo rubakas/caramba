@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { refractive } from '@hashintel/refractive'
+import { refractive, lip } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import { genresList, premiereYear, statusClass } from '../utils'
 
@@ -35,7 +35,7 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
             <div className="card-poster-fallback">{show.name?.[0] || '?'}</div>
           )}
           <div className="card-overlay">
-            {show.rating ? <refractive.span className="card-rating" refraction={{ radius: 8, blur: 4, bezelWidth: 1 }}>{show.rating}</refractive.span> : <span />}
+            {show.rating ? <refractive.span className="card-rating" refraction={{ radius: 8, blur: 4, bezelWidth: 1, glassThickness: 50, specularOpacity: 0.3, refractiveIndex: 1.6, bezelHeightFn: lip }}>{show.rating}</refractive.span> : <span />}
             {show.in_library && <span className="card-badge-library">In Library</span>}
           </div>
         </div>
@@ -81,7 +81,7 @@ function MovieCard({ movie, onClick, onToggleWatchlist }) {
             <div className="card-poster-fallback">{movie.name?.[0] || '?'}</div>
           )}
           <div className="card-overlay">
-            {movie.rating ? <refractive.span className="card-rating" refraction={{ radius: 8, blur: 4, bezelWidth: 1 }}>{movie.rating}</refractive.span> : <span />}
+            {movie.rating ? <refractive.span className="card-rating" refraction={{ radius: 8, blur: 4, bezelWidth: 1, glassThickness: 50, specularOpacity: 0.3, refractiveIndex: 1.6, bezelHeightFn: lip }}>{movie.rating}</refractive.span> : <span />}
             {movie.in_library && <span className="card-badge-library">In Library</span>}
           </div>
         </div>
@@ -197,9 +197,9 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
 
   return (
     <div className="dm-overlay" ref={overlayRef} onClick={handleOverlayClick}>
-      <refractive.div className="dm-container" refraction={{ radius: 16, blur: 6, bezelWidth: 2 }}>
+      <refractive.div className="dm-container" refraction={{ radius: 16, blur: 6, bezelWidth: 2, glassThickness: 100, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
         {/* Close button */}
-        <refractive.button className="dm-close" onClick={onClose} refraction={{ radius: 18, blur: 4, bezelWidth: 1 }}><CloseSvg /></refractive.button>
+        <refractive.button className="dm-close" onClick={onClose} refraction={{ radius: 18, blur: 4, bezelWidth: 1, glassThickness: 50, specularOpacity: 0.3, refractiveIndex: 1.6, bezelHeightFn: lip }}><CloseSvg /></refractive.button>
 
         {/* Hero — same style as library show-hero */}
         <header

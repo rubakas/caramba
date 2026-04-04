@@ -59,7 +59,7 @@ export default function UpdatePrompt() {
   if (phase === 'idle') return null
 
   return (
-    <refractive.div className="update-prompt" refraction={{ radius: 16, blur: 6, bezelWidth: 2 }}>
+    <refractive.div className="update-prompt" refraction={{ radius: 16, blur: 6, bezelWidth: 2, glassThickness: 70, specularOpacity: 0.18, refractiveIndex: 1.5 }}>
       <div className="update-prompt-body">
         {phase === 'available' && (
           <>

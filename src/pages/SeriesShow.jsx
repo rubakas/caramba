@@ -221,7 +221,7 @@ export default function SeriesShow() {
           <>
             {/* Resume CTA */}
             {showResumeCta && (
-              <refractive.div className="cta-card cta-resume" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
+              <refractive.div className="cta-card cta-resume" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
                 <div className="cta-content">
                   <span className="cta-label">Resume Where You Left Off</span>
                   <div className="cta-episode">
@@ -245,7 +245,7 @@ export default function SeriesShow() {
 
             {/* Next Up / Start / All Caught Up */}
             {nextEp ? (
-              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
+              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
                 <div className="cta-content">
                   <span className="cta-label">Up Next</span>
                   <div className="cta-episode">
@@ -262,7 +262,7 @@ export default function SeriesShow() {
               </refractive.div>
             ) : !lastWatched ? (
               episodes.length > 0 && (
-                <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
+                <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
                   <div className="cta-content">
                     <span className="cta-label">Start Watching</span>
                     <div className="cta-episode">
@@ -276,7 +276,7 @@ export default function SeriesShow() {
                 </refractive.div>
               )
             ) : allWatched ? (
-              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
+              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
                 <div className="cta-content">
                   <span className="cta-label">All Caught Up</span>
                   <div className="cta-episode">
@@ -288,11 +288,11 @@ export default function SeriesShow() {
 
             {/* Stats */}
             <div className="stats-row">
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></refractive.div>
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></refractive.div>
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></refractive.div>
-              {totalEps > 0 && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></refractive.div>}
-              {totalHours && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></refractive.div>}
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></refractive.div>
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></refractive.div>
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></refractive.div>
+              {totalEps > 0 && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></refractive.div>}
+              {totalHours && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></refractive.div>}
             </div>
 
             {/* Season Tabs */}
