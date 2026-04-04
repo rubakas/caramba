@@ -8,20 +8,24 @@ Track TV series and movies, manage watch progress across devices with DB sync, a
 
 - **Series Tracker** — scan a folder of TV episodes (SxxExx naming), auto-fetch metadata from TVMaze, track watched/unwatched state per episode, resume from where you left off, auto-play next episode
 - **Movies** — add movie files, fetch metadata + posters from IMDb, track progress
-- **In-App Video Player** — plays HEVC/H.265 MKV files via ffmpeg transcoding (HEVC→H.264 with VideoToolbox hardware acceleration), with subtitle support (VTT extraction + shifting), audio/subtitle track selection, and playback preferences saved per series/movie
+- **Discover** — browse trending and popular series/movies, add to library
+- **In-App Video Player** — plays HEVC/H.265 MKV files via ffmpeg transcoding (HEVC→H.264 with VideoToolbox hardware acceleration on macOS, libx264 on Linux), with subtitle support (VTT extraction + shifting), audio/subtitle track selection, and playback preferences saved per series/movie
 - **VLC Integration** — open any file in VLC with HTTP-based progress tracking (polls VLC's HTTP API)
 - **DB Sync** — sync your SQLite database to a shared folder (iCloud, Dropbox, etc.) so progress carries across machines. Uses `sqlite3 .backup` for safe copies, periodic sync every 30s
 - **NowPlaying Bar** — persistent bottom bar showing current playback state for both in-app and VLC playback
+- **Auto-Updater** — checks GitHub Releases for new versions, downloads with progress + SHA256 verification, installs and relaunches automatically
+- **Liquid Glass UI** — Apple-style refractive glassmorphism using `@hashintel/refractive` across navbar, cards, modals, toasts, and player controls
 
 ## Tech Stack
 
-| Layer    | Technology                                    |
-| -------- | --------------------------------------------- |
-| Frontend | React 19, React Router 7 (HashRouter), Vite 6 |
-| Backend  | Electron 33, better-sqlite3                   |
-| Player   | ffmpeg (VideoToolbox HW accel), HTML5 `<video>` |
-| Metadata | TVMaze (series), imdbapi.dev (movies)          |
-| Package  | electron-builder (DMG, AppImage, deb)          |
+| Layer    | Technology                                              |
+| -------- | ------------------------------------------------------- |
+| Frontend | React 19, React Router 7 (HashRouter), Vite 6           |
+| Backend  | Electron 33, better-sqlite3                              |
+| Player   | ffmpeg (VideoToolbox / libx264), HTML5 `<video>`         |
+| UI       | @hashintel/refractive (Liquid Glass), CSS custom props   |
+| Metadata | TVMaze (series), imdbapi.dev (movies)                    |
+| Package  | electron-builder (DMG, AppImage, deb)                    |
 
 ## Prerequisites
 
@@ -59,7 +63,7 @@ bin/build --publish    # Mac + Linux + publish to GitHub Releases
 bin/build --mac --publish  # Mac + publish
 ```
 
-The build script auto-increments the patch version in `package.json` on each new commit. If HEAD matches the last built commit (stored in `.build-commit`), the version stays the same for idempotent rebuilds.
+The build script auto-increments the patch version in `package.json` and commits the bump as `vX.Y.Z`. If the last commit is already a version bump, the version stays the same for idempotent rebuilds.
 
 Output goes to `dist/` — look for `.dmg`, `.AppImage`, or `.deb` files.
 
@@ -70,6 +74,18 @@ Pass `--publish` to upload built artifacts to GitHub Releases via the `gh` CLI:
 - Creates a new release tagged `vMAJOR.MINOR.PATCH` with the latest commit message as notes
 - If the release already exists (idempotent rebuild), overwrites the assets
 - Requires `gh` to be installed and authenticated (`gh auth login`)
+
+## Auto-Updater
+
+The app includes a custom auto-updater (no `electron-updater` dependency). On startup, it checks `https://api.github.com/repos/rubakas/caramba/releases/latest` for a newer version.
+
+- Detects platform-specific asset (`.dmg` for macOS, `.AppImage` for Linux)
+- Verifies SHA256 checksum if a `CHECKSUMS.txt` asset is attached to the release
+- Downloads to a temp directory with progress reporting
+- **macOS install**: mounts DMG, stages the `.app` to a temp dir, spawns a detached shell script that waits for the app to quit, copies the new `.app` to `/Applications/`, and relaunches
+- **Linux install**: replaces the AppImage binary in-place, relaunches
+
+The update UI (`UpdatePrompt`) shows phases: available → downloading (with progress bar) → ready to install.
 
 ## Project Structure
 
@@ -87,6 +103,8 @@ electron/              Electron main process
     history.js         Watch history
     settings.js        DB sync config
     dialogs.js         Native file/folder dialogs
+    discover.js        Discover/trending metadata from external APIs
+    updater.js         Auto-update check, download, install IPC handlers
   services/
     transcoder.js      ffmpeg HEVC→H.264 transcoding + subtitle extraction
     media-scanner.js   Scan folders for SxxExx episode files
@@ -94,6 +112,7 @@ electron/              Electron main process
     movie-metadata.js  IMDb API integration
     db-sync.js         SQLite backup-based sync
     sync-config.js     Sync folder config (storage/sync_config.json)
+    updater.js         GitHub Releases update checker + installer
 
 src/                   React frontend (Vite)
   App.jsx              HashRouter + routes
@@ -107,6 +126,8 @@ src/                   React frontend (Vite)
     EpisodeRow.jsx     Episode list item with 3-dot menu
     SeasonTabs.jsx     Scrollable season tab bar
     PosterCard.jsx     Series/movie poster grid card
+    ToastContainer.jsx Toast notifications
+    UpdatePrompt.jsx   Auto-update banner (check, download, install)
   pages/
     Library.jsx        Series library (home)
     SeriesShow.jsx     Series detail + episode list
@@ -114,18 +135,25 @@ src/                   React frontend (Vite)
     Movies.jsx         Movie library
     MovieShow.jsx      Movie detail
     MoviesNew.jsx      Add movies from files
+    Discover.jsx       Trending/popular series and movies
     History.jsx        Watch history
     Settings.jsx       DB sync settings
+    Playground.jsx     Dev-only glass parameter tuning (dev mode only)
+  config/
+    glass.json         Refractive glass config (defaults + per-component)
+    useGlassConfig.js  Hook to resolve glass config with defaults
   styles/
-    app.css            All styles — pure black theme, Inter font
+    app.css            All styles — pure black theme, Apple system font stack
 
 bin/
   dev                  Dev launcher (vite build + electron)
   build                Production build with auto version increment
-  setup-ffmpeg         Download static ffmpeg/ffprobe for bundling
+  publish              Upload artifacts to GitHub Releases via gh CLI
+  setup-ffmpeg         Download static ffmpeg/ffprobe for bundling (--mac / --linux)
 
 vendor/                Bundled binaries (gitignored, created by bin/setup-ffmpeg)
-  ffmpeg/              Static ffmpeg + ffprobe
+  ffmpeg/              macOS ARM static ffmpeg + ffprobe
+  ffmpeg-linux/        Linux x64 static ffmpeg + ffprobe
 
 storage/               Local data (gitignored)
   development.sqlite3  SQLite database

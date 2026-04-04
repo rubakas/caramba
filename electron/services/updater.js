@@ -220,7 +220,10 @@ async function installUpdate(filePath) {
 }
 
 async function installMac(dmgPath) {
+  const log = (...args) => console.log('Updater [installMac]:', ...args)
+
   // Mount the DMG
+  log('Mounting', dmgPath)
   const { stdout } = await execFileAsync('hdiutil', ['attach', '-nobrowse', '-quiet', dmgPath])
 
   // Parse mount point: last tab-delimited field of last non-empty line
@@ -228,6 +231,7 @@ async function installMac(dmgPath) {
   if (!mountPoint || !mountPoint.startsWith('/')) {
     throw new Error(`Could not determine DMG mount point from: ${stdout}`)
   }
+  log('Mounted at', mountPoint)
 
   // Find the .app bundle inside the mount
   const entries = await fsp.readdir(mountPoint)
@@ -241,40 +245,50 @@ async function installMac(dmgPath) {
   const appDest = path.join('/Applications', appName)
   const pid = process.pid
 
-  // Stage the .app to a temp dir so we can unmount the DMG inside the script
-  // (copying from a mounted DMG in the background is fragile if the DMG gets
-  // garbage-collected or auto-unmounted).
+  // Stage the .app to a temp dir so the background script doesn't depend
+  // on the DMG staying mounted.
   const stageDir = path.join(os.tmpdir(), `caramba-stage-${Date.now()}`)
   const stagedApp = path.join(stageDir, appName)
   await fsp.mkdir(stageDir, { recursive: true })
+  log('Staging to', stagedApp)
   await execFileAsync('cp', ['-Rf', appSrc, stagedApp])
 
   // Unmount the DMG now — we have a full copy in stageDir
   await execFileAsync('hdiutil', ['detach', mountPoint, '-quiet']).catch(() => {})
+  log('DMG unmounted, staged app ready')
 
   // Write a helper script that:
   //  1. Waits for the current Electron process to exit
   //  2. Copies the staged .app to /Applications/
   //  3. Cleans up the staging dir
   //  4. Opens the new app
+  const logFile = path.join(os.tmpdir(), 'caramba-update.log')
   const scriptPath = path.join(os.tmpdir(), `caramba-update-${Date.now()}.sh`)
   const script = `#!/bin/bash
+exec > ${JSON.stringify(logFile)} 2>&1
+echo "Update script started at $(date)"
+echo "Waiting for PID ${pid} to exit..."
 # Wait for the running Electron process to exit (up to 30s)
 for i in $(seq 1 60); do
   kill -0 ${pid} 2>/dev/null || break
   sleep 0.5
 done
+echo "Process exited (or timeout). Copying app..."
 # Copy the staged .app to /Applications/
 rm -rf ${JSON.stringify(appDest)}
 cp -Rf ${JSON.stringify(stagedApp)} ${JSON.stringify(appDest)}
+echo "Copy done. Cleaning up..."
 # Clean up staging dir and this script
 rm -rf ${JSON.stringify(stageDir)}
 rm -f ${JSON.stringify(scriptPath)}
 # Relaunch
+echo "Relaunching ${JSON.stringify(appDest)}"
 open -a ${JSON.stringify(appDest)}
+echo "Done at $(date)"
 `
 
   await fsp.writeFile(scriptPath, script, { mode: 0o755 })
+  log('Update script written to', scriptPath, '— log at', logFile)
 
   // Spawn the script detached so it survives our exit
   const child = spawn('/bin/bash', [scriptPath], {
@@ -282,6 +296,7 @@ open -a ${JSON.stringify(appDest)}
     stdio: 'ignore',
   })
   child.unref()
+  log('Script spawned (PID', child.pid + '), quitting app...')
 
   // Now quit — the script will take over
   app.quit()
