@@ -17,8 +17,20 @@ if ! command -v gh &>/dev/null; then
   exit 1
 fi
 
+# Require git
+if ! command -v git &>/dev/null; then
+  echo "Error: git not found."
+  exit 1
+fi
+
+# Warn if working tree is dirty
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "Warning: Working tree has uncommitted changes. Publishing from a dirty state."
+fi
+
 CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # Collect artifacts
 ARTIFACTS=()

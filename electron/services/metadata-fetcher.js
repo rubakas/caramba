@@ -24,8 +24,18 @@ async function search(query) {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     })
+    // Handle rate limiting (TVMaze: 20 calls/10s)
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10)
+      console.warn(`MetadataFetcher: rate limited, retrying after ${retryAfter}s`)
+      await new Promise(r => setTimeout(r, retryAfter * 1000))
+      return search(query) // single retry
+    }
     if (!res.ok) return null
-    return await res.json()
+    const data = await res.json()
+    // Basic response validation — expect an object with an id
+    if (!data || typeof data !== 'object' || !data.id) return null
+    return data
   } catch (e) {
     console.warn(`MetadataFetcher: search failed for '${query}' — ${e.message}`)
     return null

@@ -39,7 +39,7 @@ function register(mainWindow) {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('updater:download-progress', progress)
         }
-      })
+      }, info.sha256 || null)
 
       return { ok: true }
     } catch (err) {

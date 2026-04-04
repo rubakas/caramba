@@ -40,10 +40,18 @@ async function searchTitle(title) {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     })
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10)
+      console.warn(`MovieMetadata: rate limited, retrying after ${retryAfter}s`)
+      await new Promise(r => setTimeout(r, retryAfter * 1000))
+      return searchTitle(title) // single retry
+    }
     if (!res.ok) return null
     const data = await res.json()
+    // Basic response validation
+    if (!data || typeof data !== 'object') return null
     const titles = data.titles
-    if (!titles || titles.length === 0) return null
+    if (!Array.isArray(titles) || titles.length === 0) return null
     return titles.find(t => t.type === 'movie') || titles[0]
   } catch (e) {
     console.warn(`MovieMetadata: search failed for '${title}' — ${e.message}`)
@@ -58,8 +66,17 @@ async function getTitleDetails(imdbId) {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     })
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10)
+      console.warn(`MovieMetadata: rate limited, retrying after ${retryAfter}s`)
+      await new Promise(r => setTimeout(r, retryAfter * 1000))
+      return getTitleDetails(imdbId) // single retry
+    }
     if (!res.ok) return null
-    return await res.json()
+    const data = await res.json()
+    // Basic response validation — expect an object with an id
+    if (!data || typeof data !== 'object' || !data.id) return null
+    return data
   } catch (e) {
     console.warn(`MovieMetadata: get_title failed for '${imdbId}' — ${e.message}`)
     return null

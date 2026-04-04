@@ -4,15 +4,17 @@
 const { spawn } = require('child_process')
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
 
 const VLC_PATH = process.env.VLC_PATH || '/Applications/VLC.app/Contents/MacOS/VLC'
 const VLC_HTTP_PORT = parseInt(process.env.VLC_HTTP_PORT || '9090', 10)
-const VLC_HTTP_PASSWORD = process.env.VLC_HTTP_PASSWORD || 'simpsons'
+// Generate a random password per app session to prevent local cross-app access
+const VLC_HTTP_PASSWORD = process.env.VLC_HTTP_PASSWORD || crypto.randomBytes(16).toString('hex')
 
 const AUTH_HEADER = 'Basic ' + Buffer.from(`:${VLC_HTTP_PASSWORD}`).toString('base64')
 
 async function vlcRequest(queryPath = '') {
-  const url = `http://localhost:${VLC_HTTP_PORT}/requests/status.json${queryPath}`
+  const url = `http://127.0.0.1:${VLC_HTTP_PORT}/requests/status.json${queryPath}`
   try {
     const res = await fetch(url, {
       headers: { Authorization: AUTH_HEADER },
@@ -55,6 +57,7 @@ function launchVlc(filePath, startTime) {
   const args = [
     filePath,
     '--extraintf', 'http',
+    '--http-host', '127.0.0.1',
     '--http-port', String(VLC_HTTP_PORT),
     '--http-password', VLC_HTTP_PASSWORD,
     '--no-http-forward-cookies',
@@ -74,7 +77,9 @@ function launchVlc(filePath, startTime) {
 }
 
 async function enqueueAndPlay(filePath, startTime) {
-  const fileUri = 'file://' + encodeURIComponent(filePath).replace(/%2F/g, '/').replace(/\+/g, '%20')
+  // Build a proper file:// URI — encode each path component individually
+  // to correctly handle spaces, #, ?, and other special characters in filenames
+  const fileUri = 'file://' + filePath.split('/').map(c => encodeURIComponent(c)).join('/')
 
   await vlcRequest('?command=pl_empty')
   await vlcRequest(`?command=in_play&input=${fileUri}`)

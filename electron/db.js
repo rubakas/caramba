@@ -24,7 +24,19 @@ function getDbPath() {
 function open() {
   if (db) return db
   const dbPath = getDbPath()
-  db = new Database(dbPath)
+  try {
+    db = new Database(dbPath)
+  } catch (err) {
+    // Handle locked or corrupted database on open
+    console.error('[DB] Failed to open database:', err.message)
+    if (err.code === 'SQLITE_BUSY' || err.message.includes('database is locked')) {
+      throw new Error('Database is locked by another process. Close other instances and retry.')
+    }
+    if (err.code === 'SQLITE_CORRUPT' || err.message.includes('not a database')) {
+      throw new Error('Database file is corrupted. Please restore from backup.')
+    }
+    throw err
+  }
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   migrate()
@@ -41,6 +53,26 @@ function close() {
 function get() {
   if (!db) open()
   return db
+}
+
+/**
+ * Wrap a database write operation with error handling for disk-full / locked DB.
+ * Returns the result of fn(), or throws with a user-friendly message.
+ */
+function safeWrite(fn) {
+  try {
+    return fn()
+  } catch (err) {
+    if (err.code === 'SQLITE_FULL' || err.message?.includes('database or disk is full')) {
+      console.error('[DB] Disk full — write failed:', err.message)
+      throw new Error('Disk is full. Free up space and try again.')
+    }
+    if (err.code === 'SQLITE_BUSY' || err.message?.includes('database is locked')) {
+      console.error('[DB] Database locked — write failed:', err.message)
+      throw new Error('Database is busy. Try again in a moment.')
+    }
+    throw err
+  }
 }
 
 // -- Schema migration --
@@ -64,35 +96,39 @@ function migrateWatchlist() {
 
   if (needsRecreate) {
     // Recreate watchlist table: migrate data, drop old, create new
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS watchlist_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL DEFAULT 'show',
-        tvmaze_id INTEGER,
-        name TEXT NOT NULL,
-        poster_url TEXT,
-        description TEXT,
-        genres TEXT,
-        rating REAL,
-        premiered TEXT,
-        status TEXT,
-        network TEXT,
-        imdb_id TEXT,
-        year TEXT,
-        director TEXT,
-        runtime INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `)
-    // Copy existing show entries
-    db.exec(`
-      INSERT INTO watchlist_new (type, tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at)
-      SELECT 'show', tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at
-      FROM watchlist
-    `)
-    db.exec('DROP TABLE watchlist')
-    db.exec('ALTER TABLE watchlist_new RENAME TO watchlist')
+    // Wrapped in a transaction so a crash mid-migration cannot orphan data
+    const migrateWatchlistTx = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS watchlist_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL DEFAULT 'show',
+          tvmaze_id INTEGER,
+          name TEXT NOT NULL,
+          poster_url TEXT,
+          description TEXT,
+          genres TEXT,
+          rating REAL,
+          premiered TEXT,
+          status TEXT,
+          network TEXT,
+          imdb_id TEXT,
+          year TEXT,
+          director TEXT,
+          runtime INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `)
+      // Copy existing show entries
+      db.exec(`
+        INSERT INTO watchlist_new (type, tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at)
+        SELECT 'show', tvmaze_id, name, poster_url, description, genres, rating, premiered, status, network, imdb_id, created_at, updated_at
+        FROM watchlist
+      `)
+      db.exec('DROP TABLE watchlist')
+      db.exec('ALTER TABLE watchlist_new RENAME TO watchlist')
+    })
+    migrateWatchlistTx()
   } else {
     // Just add missing columns
     if (!colNames.includes('type')) {
@@ -134,6 +170,53 @@ function slugify(text) {
     .replace(/^-|-$/g, '')
 }
 
+// -- Security: validate a file path belongs to a registered media directory --
+
+/**
+ * Check if a file path is within any registered series media_path or matches
+ * a known movie file_path. Returns true if the path is safe to operate on.
+ */
+function isKnownMediaPath(filePath) {
+  if (!filePath || !db) return false
+  const normalized = path.resolve(filePath)
+
+  // Check against all series media directories
+  const allSeries = get().prepare('SELECT media_path FROM series').all()
+  for (const s of allSeries) {
+    if (s.media_path && normalized.startsWith(path.resolve(s.media_path) + path.sep)) return true
+    if (s.media_path && normalized === path.resolve(s.media_path)) return true
+  }
+
+  // Check if it's a known movie file
+  const movie = get().prepare('SELECT id FROM movies WHERE file_path = ?').get(normalized)
+  if (movie) return true
+
+  // Check if it's a known episode file
+  const episode = get().prepare('SELECT id FROM episodes WHERE file_path = ?').get(normalized)
+  if (episode) return true
+
+  return false
+}
+
+// -- Allowed column names for dynamic update functions (prevents SQL injection) --
+
+const SERIES_UPDATE_COLS = new Set([
+  'name', 'slug', 'media_path', 'poster_url', 'banner_url', 'description',
+  'genres', 'rating', 'premiered', 'status', 'network', 'tvmaze_id', 'imdb_id',
+])
+
+const MOVIES_UPDATE_COLS = new Set([
+  'title', 'slug', 'file_path', 'year', 'poster_url', 'banner_url', 'description',
+  'genres', 'rating', 'director', 'runtime', 'imdb_id', 'tmdb_id',
+  'watched', 'progress_seconds', 'duration_seconds',
+])
+
+const EPISODES_UPDATE_COLS = new Set([
+  'title', 'code', 'season_number', 'episode_number', 'file_path',
+  'description', 'runtime', 'rating', 'aired',
+  'watched', 'progress_seconds', 'duration_seconds',
+])
+
 // -- Series CRUD --
 
 const series = {
@@ -160,15 +243,21 @@ const series = {
 
   create({ name, slug, media_path }) {
     const s = slug || slugify(name)
+    // Handle slug collision (same pattern as movies.create)
+    let finalSlug = s
+    let counter = 1
+    while (get().prepare('SELECT id FROM series WHERE slug = ?').get(finalSlug)) {
+      finalSlug = `${s}-${counter++}`
+    }
     const stmt = get().prepare(
       'INSERT INTO series (name, slug, media_path) VALUES (?, ?, ?)'
     )
-    const result = stmt.run(name, s, media_path)
+    const result = stmt.run(name, finalSlug, media_path)
     return this.findById(result.lastInsertRowid)
   },
 
   update(id, fields) {
-    const keys = Object.keys(fields)
+    const keys = Object.keys(fields).filter(k => SERIES_UPDATE_COLS.has(k))
     if (keys.length === 0) return
     const sets = keys.map(k => `${k} = ?`).join(', ')
     const vals = keys.map(k => fields[k])
@@ -242,7 +331,7 @@ const episodes = {
   },
 
   updateMetadata(id, fields) {
-    const keys = Object.keys(fields)
+    const keys = Object.keys(fields).filter(k => EPISODES_UPDATE_COLS.has(k))
     if (keys.length === 0) return
     const sets = keys.map(k => `${k} = ?`).join(', ')
     const vals = keys.map(k => fields[k])
@@ -351,7 +440,7 @@ const movies = {
   },
 
   update(id, fields) {
-    const keys = Object.keys(fields)
+    const keys = Object.keys(fields).filter(k => MOVIES_UPDATE_COLS.has(k))
     if (keys.length === 0) return
     const sets = keys.map(k => `${k} = ?`).join(', ')
     const vals = keys.map(k => fields[k])
@@ -525,4 +614,4 @@ const playbackPreferences = {
   },
 }
 
-module.exports = { open, close, get, getDbPath, getStoragePath, slugify, series, episodes, movies, watchHistories, watchlist, playbackPreferences }
+module.exports = { open, close, get, getDbPath, getStoragePath, slugify, isKnownMediaPath, safeWrite, series, episodes, movies, watchHistories, watchlist, playbackPreferences }

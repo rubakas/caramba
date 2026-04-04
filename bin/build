@@ -46,7 +46,13 @@ else
   fi
 fi
 
-# ── 1. Version increment ────────────────────────────────────────────
+# ── 1. Pre-flight checks ───────────────────────────────────────────
+# Ensure working directory is clean (uncommitted changes can cause confusion)
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "Warning: You have uncommitted changes. Build will use the current working tree state."
+fi
+
+# ── 2. Version increment ────────────────────────────────────────────
 HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
 LAST_HASH=$(cat "$BUILD_COMMIT_FILE" 2>/dev/null || echo "")
@@ -76,12 +82,12 @@ else
   echo "$HEAD_HASH" > "$BUILD_COMMIT_FILE"
 fi
 
-# ── 2. Build React frontend ────────────────────────────────────────
+# ── 3. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
 npx vite build
 
-# ── 3. Setup ffmpeg binaries for target platforms ──────────────────
+# ── 4. Setup ffmpeg binaries for target platforms ──────────────────
 if $BUILD_MAC; then
   echo "Ensuring macOS ffmpeg binaries..."
   bin/setup-ffmpeg --mac
@@ -91,14 +97,14 @@ if $BUILD_LINUX; then
   bin/setup-ffmpeg --linux
 fi
 
-# ── 4. Build macOS package (native, no Docker needed) ──────────────
+# ── 5. Build macOS package (native, no Docker needed) ──────────────
 if $BUILD_MAC; then
   echo ""
   echo "Building macOS app v$CURRENT_VERSION..."
   npx electron-builder --mac --publish never
 fi
 
-# ── 5. Build Linux package ─────────────────────────────────────────
+# ── 6. Build Linux package ─────────────────────────────────────────
 if $BUILD_LINUX; then
   HOST_OS="$(uname -s)"
 
@@ -178,14 +184,14 @@ if $BUILD_LINUX; then
   fi
 fi
 
-# ── 6. Summary ─────────────────────────────────────────────────────
+# ── 7. Summary ─────────────────────────────────────────────────────
 echo ""
 echo "Build complete: v$CURRENT_VERSION"
 ls -lh dist/*.dmg 2>/dev/null || true
 ls -lh dist/*.AppImage 2>/dev/null || true
 ls -lh dist/*.deb 2>/dev/null || true
 
-# ── 7. Publish to GitHub Releases ──────────────────────────────────
+# ── 8. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   bin/publish
 fi

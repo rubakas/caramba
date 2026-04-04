@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react'
 import { useToast } from './ToastContext'
 
 const PlayerContext = createContext(null)
@@ -233,8 +233,12 @@ export function PlayerProvider({ children }) {
     return cleanup
   }, [])
 
+  const contextValue = useMemo(() => ({
+    playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance
+  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance])
+
   return (
-    <PlayerContext.Provider value={{ playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance }}>
+    <PlayerContext.Provider value={contextValue}>
       {children}
     </PlayerContext.Provider>
   )

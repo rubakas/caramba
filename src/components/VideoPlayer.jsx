@@ -78,6 +78,9 @@ export default function VideoPlayer() {
   const trackMenuRef = useRef(null)
   const clickTimerRef = useRef(null)
 
+  // Seek generation counter to discard stale seek results from concurrent calls
+  const seekGenRef = useRef(0)
+
   // seekBase tracks the absolute offset that ffmpeg's -ss was given.
   // video.currentTime is relative to this offset — so absolute time = seekBase + video.currentTime
   const seekBaseRef = useRef(0)
@@ -120,6 +123,16 @@ export default function VideoPlayer() {
     if (!playerState.open) return
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
+  }, [playerState.open])
+
+  // Clean up all timers when player closes to prevent leaks
+  useEffect(() => {
+    if (!playerState.open) {
+      clearTimeout(hideTimerRef.current)
+      clearTimeout(clickTimerRef.current)
+      hideTimerRef.current = null
+      clickTimerRef.current = null
+    }
   }, [playerState.open])
 
   // Helper: disable all text tracks on the video element.
@@ -309,11 +322,16 @@ export default function VideoPlayer() {
     const absoluteCurrent = seekBaseRef.current + (video.currentTime || 0)
     const newTime = Math.max(0, Math.min(absoluteCurrent + delta, totalDuration))
 
+    // Increment generation — any in-flight seek with an older gen is stale
+    const gen = ++seekGenRef.current
+
     // Clear stale subtitle cues immediately before the async seek
     disableAllTextTracks()
     setBuffering(true)
     try {
       const result = await window.api.seekPlayback(newTime)
+      // Discard if a newer seek was initiated while we were waiting
+      if (gen !== seekGenRef.current) return
       if (result && result.streamUrl) {
         seekBaseRef.current = result.seekTime ?? newTime
         setCurrentTime(seekBaseRef.current)
@@ -323,6 +341,7 @@ export default function VideoPlayer() {
         video.play().catch(() => {})
       }
     } catch (err) {
+      if (gen !== seekGenRef.current) return
       console.error('Seek failed:', err)
       setBuffering(false)
     }
@@ -330,11 +349,15 @@ export default function VideoPlayer() {
 
   const handleSeekBarChange = useCallback(async (e) => {
     const newTime = parseFloat(e.target.value)
+    // Increment generation — any in-flight seek with an older gen is stale
+    const gen = ++seekGenRef.current
     // Clear stale subtitle cues immediately before the async seek
     disableAllTextTracks()
     setBuffering(true)
     try {
       const result = await window.api.seekPlayback(newTime)
+      // Discard if a newer seek was initiated while we were waiting
+      if (gen !== seekGenRef.current) return
       if (result && result.streamUrl) {
         seekBaseRef.current = result.seekTime ?? newTime
         setCurrentTime(seekBaseRef.current)
@@ -347,6 +370,7 @@ export default function VideoPlayer() {
         }
       }
     } catch (err) {
+      if (gen !== seekGenRef.current) return
       console.error('Seek bar failed:', err)
       setBuffering(false)
     }

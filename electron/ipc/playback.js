@@ -4,13 +4,15 @@
 const { ipcMain, shell } = require('electron')
 const { spawn } = require('child_process')
 const fs = require('fs')
+const crypto = require('crypto')
 const db = require('../db')
 const transcoder = require('../services/transcoder')
 
 const VLC_APP_PATH = '/Applications/VLC.app'
 const VLC_BIN_PATH = '/Applications/VLC.app/Contents/MacOS/VLC'
 const VLC_HTTP_PORT = 9090
-const VLC_HTTP_PASSWORD = 'caramba'
+// Generate a random password per app session to prevent local cross-app access
+const VLC_HTTP_PASSWORD = crypto.randomBytes(16).toString('hex')
 const VLC_AUTH_HEADER = 'Basic ' + Buffer.from(`:${VLC_HTTP_PASSWORD}`).toString('base64')
 const VLC_POLL_INTERVAL = 3000 // 3 seconds
 
@@ -36,6 +38,11 @@ function register() {
     try {
       if (!filePath || !fs.existsSync(filePath)) {
         return { error: 'File not found: ' + (filePath || '(no path)') }
+      }
+
+      // Security: only allow playback of files within registered media directories
+      if (!db.isKnownMediaPath(filePath)) {
+        return { error: 'File is not in a registered media directory' }
       }
 
       const info = await transcoder.probe(filePath)
@@ -362,6 +369,10 @@ function register() {
     if (!filePath || !fs.existsSync(filePath)) {
       return { error: 'File not found: ' + filePath }
     }
+    // Security: only allow opening files within registered media directories
+    if (!db.isKnownMediaPath(filePath)) {
+      return { error: 'File is not in a registered media directory' }
+    }
 
     // Stop any existing VLC polling
     stopVlcPolling()
@@ -407,7 +418,9 @@ function register() {
 
       if (running) {
         // Enqueue file into running VLC
-        const fileUri = 'file://' + encodeURIComponent(filePath).replace(/%2F/g, '/').replace(/\+/g, '%20')
+        // Build a proper file:// URI — encode each path component individually
+        // to correctly handle spaces, #, ?, and other special characters in filenames
+        const fileUri = 'file://' + filePath.split('/').map(c => encodeURIComponent(c)).join('/')
         await vlcRequest('?command=pl_empty')
         await vlcRequest(`?command=in_play&input=${fileUri}`)
         if (startTime > 0) {
@@ -419,6 +432,7 @@ function register() {
         const args = [
           filePath,
           '--extraintf', 'http',
+          '--http-host', '127.0.0.1',
           '--http-port', String(VLC_HTTP_PORT),
           '--http-password', VLC_HTTP_PASSWORD,
           '--no-http-forward-cookies',
@@ -446,6 +460,10 @@ function register() {
   ipcMain.handle('playback:openInDefault', async (_e, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) {
       return { error: 'File not found: ' + filePath }
+    }
+    // Security: only allow opening files within registered media directories
+    if (!db.isKnownMediaPath(filePath)) {
+      return { error: 'File is not in a registered media directory' }
     }
     try {
       const result = await shell.openPath(filePath)
@@ -485,7 +503,7 @@ function getCurrentSeekBase() { return currentSeekBase }
 // -- VLC HTTP interface helpers --
 
 async function vlcRequest(queryPath = '') {
-  const url = `http://localhost:${VLC_HTTP_PORT}/requests/status.json${queryPath}`
+  const url = `http://127.0.0.1:${VLC_HTTP_PORT}/requests/status.json${queryPath}`
   try {
     const res = await fetch(url, {
       headers: { Authorization: VLC_AUTH_HEADER },

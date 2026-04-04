@@ -37,11 +37,24 @@ setup_mac() {
   echo "Downloading static ffprobe (macOS)..."
   curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z" -o /tmp/ffprobe.7z
 
+  # Verify downloads are non-empty (basic integrity check)
+  for f in /tmp/ffmpeg.7z /tmp/ffprobe.7z; do
+    if [ ! -s "$f" ]; then
+      echo "Error: Downloaded file is empty: $f"
+      exit 1
+    fi
+  done
+
   echo "Extracting..."
   7z e /tmp/ffmpeg.7z -o"$dir" -y >/dev/null
   7z e /tmp/ffprobe.7z -o"$dir" -y >/dev/null
 
   chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+
+  # Record checksums for audit/reproducibility
+  echo "Recording SHA256 checksums..."
+  shasum -a 256 "$dir/ffmpeg" "$dir/ffprobe" | tee "$dir/SHA256SUMS"
+
   rm -f /tmp/ffmpeg.7z /tmp/ffprobe.7z
 
   echo "Done (macOS):"
@@ -63,11 +76,21 @@ setup_linux() {
   echo "Downloading static ffmpeg (Linux amd64)..."
   curl -sL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -o /tmp/ffmpeg-linux.tar.xz
 
+  # Verify download is non-empty (basic integrity check)
+  if [ ! -s /tmp/ffmpeg-linux.tar.xz ]; then
+    echo "Error: Downloaded file is empty: /tmp/ffmpeg-linux.tar.xz"
+    exit 1
+  fi
+
   echo "Extracting..."
   tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp/
 
   cp /tmp/ffmpeg-*-static/ffmpeg /tmp/ffmpeg-*-static/ffprobe "$dir/"
   chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+
+  # Record checksums for audit/reproducibility
+  echo "Recording SHA256 checksums..."
+  shasum -a 256 "$dir/ffmpeg" "$dir/ffprobe" | tee "$dir/SHA256SUMS"
 
   # Clean up
   rm -rf /tmp/ffmpeg-linux.tar.xz /tmp/ffmpeg-*-static

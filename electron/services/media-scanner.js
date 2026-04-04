@@ -6,7 +6,7 @@ const fs = require('fs')
 const path = require('path')
 const db = require('../db')
 
-const EPISODE_CODE_RE = /S(\d{1,2})E(\d{1,2})/i
+const EPISODE_CODE_RE = /S(\d{1,3})E(\d{1,3})/i
 
 // Derive a clean series name from a folder path.
 function nameFromPath(folderPath) {

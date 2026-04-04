@@ -145,10 +145,10 @@ function createWindow() {
   }
 
   // Load the React app
-  if (process.env.VITE_DEV_URL) {
+  // Security: only allow VITE_DEV_URL in development builds to prevent
+  // env-var poisoning from redirecting packaged apps to a malicious server.
+  if (!app.isPackaged && process.env.VITE_DEV_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_URL)
-  } else if (app.isPackaged) {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist-react', 'index.html'))
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist-react', 'index.html'))
   }
@@ -162,6 +162,16 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // Security: block navigation away from the app's origin. A renderer compromise
+  // could otherwise navigate to an attacker-controlled page with preload APIs active.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devUrl = !app.isPackaged && process.env.VITE_DEV_URL
+    if (url.startsWith('file://')) return
+    if (devUrl && url.startsWith(devUrl)) return
+    event.preventDefault()
+    if (url.startsWith('http')) shell.openExternal(url)
   })
 
   mainWindow.on('closed', () => {
@@ -220,7 +230,14 @@ app.whenReady().then(() => {
   })
 
   // Open database
-  db.open()
+  try {
+    db.open()
+  } catch (err) {
+    const { dialog } = require('electron')
+    dialog.showErrorBox('Database Error', err.message || 'Failed to open the database. The app will now quit.')
+    app.quit()
+    return
+  }
 
   // Startup sync check (async, fire-and-forget — must not block app startup)
   dbSync.syncOnStartup().catch(err => console.warn('DbSync: startup sync error —', err.message))
@@ -253,6 +270,9 @@ app.on('window-all-closed', () => {
   transcoder.stop()
   app.quit()
 })
+
+// Ensure ffmpeg processes are killed even on abrupt exit
+process.on('exit', () => { transcoder.stop() })
 
 let isQuitting = false
 app.on('before-quit', (e) => {
