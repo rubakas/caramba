@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { refractive } from '@hashintel/refractive'
 import { formatTime, progressPercent, truncate } from '../utils'
-import { useGlassConfig } from '../config/useGlassConfig'
 
 const PlaySvg = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -20,9 +18,6 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   const btnRef = useRef(null)
-  const popoverGlass = useGlassConfig('popover')
-  const epPlayGlass = useGlassConfig('ep-play')
-  const epMoreGlass = useGlassConfig('ep-more')
 
   const ep = episode
   const watched = !!ep.watched
@@ -86,20 +81,19 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
         )}
       </div>
       <div className="ep-actions">
-        <refractive.button className="btn-ep-play" onClick={() => onPlay(ep.id)} refraction={epPlayGlass}>
+        <button className="btn-ep-play" onClick={() => onPlay(ep.id)}>
           <PlaySvg />
-        </refractive.button>
+        </button>
         <div className="ep-more-wrap">
-          <refractive.button
+          <button
             ref={btnRef}
             className={`btn-ep-more${menuOpen ? ' active' : ''}`}
             onClick={() => setMenuOpen(!menuOpen)}
-            refraction={epMoreGlass}
           >
             <MoreSvg />
-          </refractive.button>
+          </button>
           {menuOpen && (
-            <refractive.div ref={menuRef} className="ep-popover" refraction={popoverGlass}>
+            <div ref={menuRef} className="ep-popover">
               <button
                 className="ep-popover-item"
                 onClick={() => { onToggle(ep.id); setMenuOpen(false) }}
@@ -123,7 +117,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                 <span className="ep-popover-icon">{'\u2197'}</span>
                 <span>Open in Default Player</span>
               </button>
-            </refractive.div>
+            </div>
           )}
         </div>
       </div>

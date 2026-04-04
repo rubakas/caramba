@@ -30,36 +30,30 @@ export default function SeriesShow() {
 
   const loadData = useCallback(async () => {
     try {
-      const [s, eps, seasonNums, resume, next, hasVlc] = await Promise.all([
-        window.api.getSeries(slug),
-        window.api.getSeriesEpisodes(slug),
-        window.api.getSeriesSeasons(slug),
-        window.api.getResumable(slug),
-        window.api.getNextUp(slug),
-        window.api.checkVlc(),
-      ])
-      if (!s) { navigate('/'); return }
-      setSeries(s)
-      setEpisodes(eps)
-      setSeasons(seasonNums)
-      setResumeEp(resume)
-      setNextEp(next)
-      setVlcAvailable(hasVlc)
+      const data = await window.api.getSeriesShow(slug)
+      if (!data) { navigate('/'); return }
+      setSeries(data.series)
+      setEpisodes(data.episodes)
+      setSeasons(data.seasons)
+      setResumeEp(data.resumeEp)
+      setNextEp(data.nextEp)
+      setVlcAvailable(data.vlcAvailable)
 
       // Determine active season: last watched episode's season, or first season
-      if (activeSeason === null) {
-        const lastWatched = [...eps].filter(e => e.watched).sort((a, b) => {
+      setActiveSeason(prev => {
+        if (prev !== null) return prev
+        const lastWatched = [...data.episodes].filter(e => e.watched).sort((a, b) => {
           if (a.season_number !== b.season_number) return b.season_number - a.season_number
           return b.episode_number - a.episode_number
         })[0]
-        setActiveSeason(lastWatched?.season_number ?? seasonNums[0] ?? 1)
-      }
+        return lastWatched?.season_number ?? data.seasons[0] ?? 1
+      })
     } catch (err) {
       console.error('Failed to load series:', err)
     } finally {
       setLoading(false)
     }
-  }, [slug, navigate, activeSeason])
+  }, [slug, navigate])
 
   useEffect(() => {
     loadData()

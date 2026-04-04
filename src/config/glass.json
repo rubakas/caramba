@@ -89,13 +89,5 @@
   },
   "season-tab": {
     "radius": 20
-  },
-  "ep-play": {
-    "radius": 18,
-    "bezelHeightFn": "lip"
-  },
-  "ep-more": {
-    "radius": 18,
-    "bezelHeightFn": "lip"
   }
 }

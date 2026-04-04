@@ -303,28 +303,6 @@ const SPECIMENS = [
       </refractive.button>
     ),
   },
-  {
-    id: 'ep-play',
-    label: 'Episode Play',
-    element: 'button',
-    description: 'Episode row play button (36x36 circle, lip)',
-    render: (props) => (
-      <refractive.button style={{ width: 36, height: 36, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#0A84FF', color: '#fff', border: 'none', cursor: 'pointer' }} refraction={props}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-      </refractive.button>
-    ),
-  },
-  {
-    id: 'ep-more',
-    label: 'Episode More',
-    element: 'button',
-    description: 'Episode row 3-dot menu button (36x36 circle, lip)',
-    render: (props) => (
-      <refractive.button style={{ width: 36, height: 36, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.4)', border: 'none', cursor: 'pointer' }} refraction={props}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-      </refractive.button>
-    ),
-  },
 ]
 
 // Param definitions — radius is specimen-only, the rest can be defaults

@@ -1036,6 +1036,7 @@ body {
 .btn-ep-play {
   width: 36px;
   height: 36px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1052,6 +1053,7 @@ body {
 .btn-ep-more {
   width: 36px;
   height: 36px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1077,7 +1079,10 @@ body {
   top: calc(100% + 6px);
   right: 0;
   min-width: 190px;
-  background: rgba(28, 28, 30, 0.22);
+  border-radius: 12px;
+  background: rgba(28, 28, 30, 0.72);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(255,255,255,.08);
   padding: 4px 0;
   box-shadow: var(--glass-edge-all), var(--glass-shadow-md);

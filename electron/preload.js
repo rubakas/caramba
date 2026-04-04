@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   // Series
   listSeries: () => ipcRenderer.invoke('series:list'),
   getSeries: (slug) => ipcRenderer.invoke('series:get', slug),
+  getSeriesShow: (slug) => ipcRenderer.invoke('series:show', slug),
   getSeriesEpisodes: (slug) => ipcRenderer.invoke('series:getEpisodes', slug),
   getSeriesSeasons: (slug) => ipcRenderer.invoke('series:getSeasons', slug),
   getResumable: (slug) => ipcRenderer.invoke('series:getResumable', slug),

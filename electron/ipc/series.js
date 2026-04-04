@@ -1,9 +1,12 @@
 // IPC handlers for series operations
 
 const { ipcMain } = require('electron')
+const fs = require('fs')
 const db = require('../db')
 const mediaScanner = require('../services/media-scanner')
 const metadataFetcher = require('../services/metadata-fetcher')
+
+const VLC_APP_PATH = '/Applications/VLC.app'
 
 function register() {
   ipcMain.handle('series:list', () => {
@@ -17,8 +20,34 @@ function register() {
       ...s,
       season_count: db.series.seasonCount(s.id),
       total_watch_time: db.series.totalWatchTime(s.id),
-      total_episodes: db.episodes.forSeries(s.id).length,
-      watched_episodes: db.episodes.forSeries(s.id).filter(e => e.watched).length,
+      total_episodes: db.episodes.countForSeries(s.id),
+      watched_episodes: db.episodes.countWatchedForSeries(s.id),
+    }
+  })
+
+  // Combined handler: returns everything SeriesShow needs in one IPC round-trip.
+  ipcMain.handle('series:show', (_e, slug) => {
+    const s = db.series.findBySlug(slug)
+    if (!s) return null
+    const episodes = db.episodes.forSeries(s.id)
+    const seasons = db.episodes.seasons(s.id)
+    const totalWatchTime = db.series.totalWatchTime(s.id)
+    const resumeEp = db.episodes.resumable(s.id) || null
+    const nextEp = db.episodes.nextUp(s.id) || null
+    const vlcAvailable = process.platform === 'darwin' ? fs.existsSync(VLC_APP_PATH) : false
+    return {
+      series: {
+        ...s,
+        season_count: seasons.length,
+        total_watch_time: totalWatchTime,
+        total_episodes: episodes.length,
+        watched_episodes: episodes.filter(e => e.watched).length,
+      },
+      episodes,
+      seasons,
+      resumeEp,
+      nextEp,
+      vlcAvailable,
     }
   })
 

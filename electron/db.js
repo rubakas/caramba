@@ -292,6 +292,16 @@ const episodes = {
     ).all(seriesId)
   },
 
+  countForSeries(seriesId) {
+    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE series_id = ?').get(seriesId)
+    return row ? row.c : 0
+  },
+
+  countWatchedForSeries(seriesId) {
+    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE series_id = ? AND watched = 1').get(seriesId)
+    return row ? row.c : 0
+  },
+
   forSeason(seriesId, seasonNum) {
     return get().prepare(
       'SELECT * FROM episodes WHERE series_id = ? AND season_number = ? ORDER BY episode_number'
