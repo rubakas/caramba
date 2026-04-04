@@ -191,4 +191,8 @@ ls -lh dist/*.deb 2>/dev/null || true
 # ── 8. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   bin/publish
+
+  echo ""
+  echo "Cleaning dist/..."
+  rm -rf dist
 fi
