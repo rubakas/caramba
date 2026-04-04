@@ -26,12 +26,18 @@ function findBinary(name) {
     return process.env[envKey]
   }
 
-  // 4. Common install locations
-  const candidates = [
-    `/opt/homebrew/bin/${name}`,   // Homebrew (Apple Silicon)
-    `/usr/local/bin/${name}`,       // Homebrew (Intel) / manual install
-    `/usr/bin/${name}`,             // System
-  ]
+  // 4. Common install locations (platform-aware)
+  const candidates = process.platform === 'darwin'
+    ? [
+        `/opt/homebrew/bin/${name}`,   // Homebrew (Apple Silicon)
+        `/usr/local/bin/${name}`,       // Homebrew (Intel) / manual install
+        `/usr/bin/${name}`,             // System
+      ]
+    : [
+        `/usr/bin/${name}`,             // Linux system (pacman, apt, etc.)
+        `/usr/local/bin/${name}`,       // Manual install
+        `/snap/bin/${name}`,            // Snap
+      ]
   for (const p of candidates) {
     if (fs.existsSync(p)) return p
   }
@@ -138,7 +144,8 @@ async function probe(filePath) {
 
 /**
  * Start transcoding a file. Returns a readable stream of fragmented MP4.
- * Uses VideoToolbox HW accel on macOS for both decode and encode.
+ * Uses hardware acceleration when available (VideoToolbox on macOS, VAAPI on Linux).
+ * Falls back to software encoding if hwaccel is unavailable.
  * @param {string} filePath
  * @param {number} seekTime
  * @param {object} [opts]
@@ -148,9 +155,14 @@ function start(filePath, seekTime = 0, opts = {}) {
   stop()
 
   const args = []
+  const isMac = process.platform === 'darwin'
 
-  // Hardware-accelerated HEVC decoding
-  args.push('-hwaccel', 'videotoolbox')
+  // Hardware-accelerated decoding (platform-specific)
+  if (isMac) {
+    args.push('-hwaccel', 'videotoolbox')
+  }
+  // On Linux, let ffmpeg auto-detect available hwaccel (vaapi, nvdec, etc.)
+  // No explicit -hwaccel flag = software decode, which is the safest default
 
   // Seek before input for fast seeking
   if (seekTime > 0) {
@@ -169,15 +181,29 @@ function start(filePath, seekTime = 0, opts = {}) {
     args.push('-map', '0:a:0')
   }
 
-  // Video: H.264 via VideoToolbox, good quality
-  args.push(
-    '-c:v', 'h264_videotoolbox',
-    '-b:v', '4M',
-    '-maxrate', '6M',
-    '-bufsize', '12M',
-    '-profile:v', 'high',
-    '-pix_fmt', 'yuv420p',
-  )
+  // Video encoding (platform-specific)
+  if (isMac) {
+    // H.264 via VideoToolbox, good quality
+    args.push(
+      '-c:v', 'h264_videotoolbox',
+      '-b:v', '4M',
+      '-maxrate', '6M',
+      '-bufsize', '12M',
+      '-profile:v', 'high',
+      '-pix_fmt', 'yuv420p',
+    )
+  } else {
+    // Software H.264 via libx264, balanced speed/quality
+    args.push(
+      '-c:v', 'libx264',
+      '-preset', 'fast',
+      '-crf', '22',
+      '-maxrate', '6M',
+      '-bufsize', '12M',
+      '-profile:v', 'high',
+      '-pix_fmt', 'yuv420p',
+    )
+  }
 
   // Audio: AAC stereo
   args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
@@ -251,12 +277,20 @@ async function extractSubtitles(filePath, streamIndex) {
     ]
     const proc = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
+    let stderr = ''
     proc.stdout.on('data', d => { stdout += d })
+    proc.stderr.on('data', d => { stderr += d })
     proc.on('close', code => {
-      if (code !== 0 || !stdout.trim()) return resolve(null)
+      if (code !== 0 || !stdout.trim()) {
+        console.warn(`[Subtitle] ffmpeg extract failed: code=${code}, stderr=${stderr.slice(0, 300)}`)
+        return resolve(null)
+      }
       resolve(stdout)
     })
-    proc.on('error', () => resolve(null))
+    proc.on('error', (err) => {
+      console.error('[Subtitle] ffmpeg spawn error:', err)
+      resolve(null)
+    })
   })
 }
 

@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { refractive } from '@hashintel/refractive'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function UpdatePrompt() {
   const [phase, setPhase] = useState('idle') // idle | available | downloading | ready
@@ -6,6 +8,7 @@ export default function UpdatePrompt() {
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState(null)
   const [installing, setInstalling] = useState(false)
+  const updatePromptGlass = useGlassConfig('update-prompt')
 
   useEffect(() => {
     // Pull: check if an update was already found before this component mounted
@@ -58,7 +61,7 @@ export default function UpdatePrompt() {
   if (phase === 'idle') return null
 
   return (
-    <div className="update-prompt">
+    <refractive.div className="update-prompt" refraction={updatePromptGlass}>
       <div className="update-prompt-body">
         {phase === 'available' && (
           <>
@@ -100,6 +103,6 @@ export default function UpdatePrompt() {
           </>
         )}
       </div>
-    </div>
+    </refractive.div>
   )
 }

@@ -1,9 +1,25 @@
 #!/bin/bash
-# Dev launch: build React, then start Electron
+# Dev launch: start Vite dev server with HMR, then launch Electron pointing at it.
+# This gives instant hot-reload for the playground and all React components.
+# Production builds (npm run build) still use vite build → dist-react/.
 set -e
 
-echo "Building React frontend..."
-npx vite build
+# Start Vite dev server in the background
+echo "Starting Vite dev server..."
+npx vite --port 5173 &
+VITE_PID=$!
 
-echo "Starting Electron..."
-npx electron .
+# Wait for the dev server to be ready
+echo "Waiting for dev server on http://localhost:5173 ..."
+for i in $(seq 1 30); do
+  if curl -s http://localhost:5173 > /dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+
+echo "Starting Electron (connected to Vite HMR)..."
+VITE_DEV_URL=http://localhost:5173 npx electron .
+
+# When Electron exits, kill the Vite dev server
+kill $VITE_PID 2>/dev/null

@@ -54,7 +54,6 @@ function register() {
 
       // Pick subtitle track: saved preference (by language / off) > first text sub
       let subtitleStreamIndex = null
-      let subtitleUrl = null
       if (prefs && prefs.subtitleOff) {
         subtitleStreamIndex = null
       } else if (prefs && prefs.subtitleLanguage) {
@@ -65,29 +64,39 @@ function register() {
         if (textSub) subtitleStreamIndex = textSub.index
       }
 
-      // Extract subtitles if a track was selected
-      if (subtitleStreamIndex != null) {
-        try {
-          const vtt = await transcoder.extractSubtitles(filePath, subtitleStreamIndex)
-          if (vtt) {
-            const main = require('../main')
-            main.setSubtitleCache(vtt)
-            subtitleUrl = 'subtitle://track?t=' + Date.now()
-          }
-        } catch {}
-      }
-
-      // Start transcoding
+      // Start transcoding FIRST — don't wait for subtitle extraction
       transcoder.start(filePath, startTime, { audioStreamIndex })
       currentSeekBase = startTime
       currentDuration = info.duration
       currentAudioStreamIndex = audioStreamIndex
 
+      // Extract subtitles in the background (non-blocking).
+      // The video starts playing immediately; subtitles arrive asynchronously
+      // via a push event once extraction finishes.
+      if (subtitleStreamIndex != null) {
+        transcoder.extractSubtitles(filePath, subtitleStreamIndex)
+          .then(vtt => {
+            if (!vtt) return
+            const main = require('../main')
+            main.setSubtitleCache(vtt)
+            const url = 'subtitle://track?t=' + Date.now()
+            // Push subtitle URL to renderer
+            try {
+              const { BrowserWindow } = require('electron')
+              const win = BrowserWindow.getAllWindows()[0]
+              if (win) win.webContents.send('playback:subtitles-ready', { subtitleUrl: url, subtitleStreamIndex })
+            } catch {}
+          })
+          .catch(err => {
+            console.error('[Subtitle] background extraction failed:', err)
+          })
+      }
+
       return {
         streamUrl: 'stream://video',
         duration: info.duration,
         startTime,
-        subtitleUrl,
+        subtitleUrl: null, // subtitles arrive asynchronously
         video: info.video,
         audioStreams: info.audioStreams,
         subtitleStreams: info.subtitleStreams,
@@ -155,10 +164,16 @@ function register() {
         try {
           const main = require('../main')
           main.setSubtitleCache(vtt)
-        } catch {}
+        } catch (cacheErr) {
+          console.error('[Subtitle] failed to set subtitle cache:', cacheErr)
+        }
         return { subtitleUrl: 'subtitle://track?t=' + Date.now() }
+      } else {
+        console.warn('[Subtitle] extraction returned null for stream', subtitleStreamIndex)
       }
-    } catch {}
+    } catch (extractErr) {
+      console.error('[Subtitle] extraction error:', extractErr)
+    }
 
     return { subtitleUrl: null }
   })

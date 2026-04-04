@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import { genresList, premiereYear, statusClass } from '../utils'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 // -- SVG Icons ----------------------------------------------------
 
@@ -35,11 +37,10 @@ function ShowCard({ show, onToggleWatchlist, onClick }) {
           )}
           <div className="card-overlay">
             {show.rating ? <span className="card-rating">{show.rating}</span> : <span />}
-            {show.in_library && <span className="card-badge-library">In Library</span>}
           </div>
         </div>
         <div className="card-body">
-          <h3 className="card-title">{show.name}</h3>
+          <h3 className="card-title">{show.name}{show.in_library && <span className="card-badge-library">In Library</span>}</h3>
           <p className="card-meta">
             {year && <span>{year}</span>}
             {show.status && (
@@ -81,11 +82,10 @@ function MovieCard({ movie, onClick, onToggleWatchlist }) {
           )}
           <div className="card-overlay">
             {movie.rating ? <span className="card-rating">{movie.rating}</span> : <span />}
-            {movie.in_library && <span className="card-badge-library">In Library</span>}
           </div>
         </div>
         <div className="card-body">
-          <h3 className="card-title">{movie.name}</h3>
+          <h3 className="card-title">{movie.name}{movie.in_library && <span className="card-badge-library">In Library</span>}</h3>
           <p className="card-meta">
             {movie.year && <span>{movie.year}</span>}
           </p>
@@ -110,6 +110,10 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
   const [detail, setDetail] = useState(null)
   const [activeSeason, setActiveSeason] = useState(null)
   const overlayRef = useRef(null)
+  const discoverModalGlass = useGlassConfig('discover-modal')
+  const dmCloseGlass = useGlassConfig('dm-close')
+  const dmActionGlass = useGlassConfig('dm-action')
+  const seasonTabGlass = useGlassConfig('season-tab')
 
   const isMovie = item._type === 'movie'
 
@@ -196,9 +200,9 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
 
   return (
     <div className="dm-overlay" ref={overlayRef} onClick={handleOverlayClick}>
-      <div className="dm-container">
+      <refractive.div className="dm-container" refraction={discoverModalGlass}>
         {/* Close button */}
-        <button className="dm-close" onClick={onClose}><CloseSvg /></button>
+        <refractive.button className="dm-close" onClick={onClose} refraction={dmCloseGlass}><CloseSvg /></refractive.button>
 
         {/* Hero — same style as library show-hero */}
         <header
@@ -237,24 +241,26 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
               {/* Action buttons in hero */}
               <div className="dm-actions">
                 {item.in_library && item.library_slug && (
-                  <button
+                  <refractive.button
                     className="dm-library-btn"
                     onClick={() => {
                       onClose()
                       navigate(isMovie ? `/movies/${item.library_slug}` : `/series/${item.library_slug}`)
                     }}
+                    refraction={dmActionGlass}
                   >
                     <span className="dm-library-dot" />
                     <span>In Library</span>
-                  </button>
+                  </refractive.button>
                 )}
-                <button
+                <refractive.button
                   className={`dm-watchlist-btn${item.in_watchlist ? ' active' : ''}`}
                   onClick={() => onToggleWatchlist(item)}
+                  refraction={dmActionGlass}
                 >
                   {item.in_watchlist ? <BookmarkFilled /> : <BookmarkOutline />}
                   <span>{item.in_watchlist ? 'In Watchlist' : 'Add to Watchlist'}</span>
-                </button>
+                </refractive.button>
               </div>
             </div>
           </div>
@@ -283,13 +289,14 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
               {seasonNums.length > 0 && (
                 <div className="dm-season-tabs">
                   {seasonNums.map(num => (
-                    <button
+                    <refractive.button
                       key={num}
                       className={`dm-season-tab${activeSeason === num ? ' active' : ''}`}
                       onClick={() => setActiveSeason(num)}
+                      refraction={seasonTabGlass}
                     >
                       {num === 0 ? 'Specials' : `S${num}`}
-                    </button>
+                    </refractive.button>
                   ))}
                 </div>
               )}
@@ -347,7 +354,7 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
             <p className="dm-loading">No additional details available.</p>
           )}
         </div>
-      </div>
+      </refractive.div>
     </div>
   )
 }
@@ -366,6 +373,8 @@ export default function Discover() {
   const [modalItem, setModalItem] = useState(null)
   const debounceRef = useRef(null)
   const inputRef = useRef(null)
+  const clearBtnGlass = useGlassConfig('clear-btn')
+  const filterBtnGlass = useGlassConfig('filter-btn')
 
   const loadWatchlist = useCallback(async () => {
     try {
@@ -474,23 +483,24 @@ export default function Discover() {
           />
           {searching && <div className="discover-spinner" />}
           {!searching && query && (
-            <button className="discover-clear-btn" onClick={handleClearSearch} title="Clear search">
+            <refractive.button className="discover-clear-btn" onClick={handleClearSearch} title="Clear search" refraction={clearBtnGlass}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                 <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
               </svg>
-            </button>
+            </refractive.button>
           )}
         </div>
 
         <div className="discover-filters">
           {['all', 'shows', 'movies'].map(type => (
-            <button
+            <refractive.button
               key={type}
               className={`discover-filter-btn${searchType === type ? ' active' : ''}`}
               onClick={() => setSearchType(type)}
+              refraction={filterBtnGlass}
             >
               {type === 'all' ? 'All' : type === 'shows' ? 'TV Shows' : 'Movies'}
-            </button>
+            </refractive.button>
           ))}
         </div>
 

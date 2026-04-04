@@ -1,15 +1,17 @@
 /* ================================================================
-   Caramba — Apple TV+ Inspired Design
+   Caramba — Apple TV+ Inspired Design with Liquid Glass
    ================================================================
    Design principles:
    - Pure black canvas (#000)
    - Inter font (closest web analog to SF Pro)
    - Generous whitespace
-   - Subtle glassmorphism on cards
+   - Liquid Glass: lensing/refraction via @hashintel/refractive,
+     specular highlights, multi-layer shadows, interaction glow,
+     materialization animations, scroll-edge dissolve
    - Minimal accent color (soft blue #0A84FF for interactive,
      green #30D158 for watched states)
-   - Rounded corners everywhere
-   - Elegant, restrained animations
+   - Rounded corners everywhere (concentric with device edges)
+   - Elegant, restrained animations with spring physics
    ================================================================ */
 
 /* -- Reset & Base ------------------------------------------------ */
@@ -34,6 +36,23 @@
   --radius-sm: 8px;
   --radius-lg: 16px;
   --nav-h: 52px;
+
+  /* -- Liquid Glass tokens ---------------------------------------- */
+  /* Interaction glow — radial illumination from center, used on hover/active */
+  --glass-glow: radial-gradient(
+    ellipse at var(--glow-x, 50%) var(--glow-y, 50%),
+    rgba(255,255,255,.08) 0%,
+    transparent 70%
+  );
+  /* Multi-layer shadow for depth — Apple uses soft, layered shadows */
+  --glass-shadow-sm: 0 1px 2px rgba(0,0,0,.2), 0 4px 12px rgba(0,0,0,.15);
+  --glass-shadow-md: 0 2px 4px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.2), 0 16px 48px rgba(0,0,0,.1);
+  --glass-shadow-lg: 0 4px 8px rgba(0,0,0,.2), 0 16px 40px rgba(0,0,0,.25), 0 32px 80px rgba(0,0,0,.15);
+  /* Bezel edge: thin inner highlight at the very top edge */
+  --glass-edge-top: inset 0 1px 0 rgba(255,255,255,.08);
+  --glass-edge-all: inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(255,255,255,.02);
+  /* Scroll-edge fade mask for content dissolving under navbar */
+  --scroll-fade: linear-gradient(to bottom, transparent 0px, black 32px);
 }
 
 html { scroll-behavior: smooth; }
@@ -41,7 +60,7 @@ html { scroll-behavior: smooth; }
 body {
   background: var(--bg);
   color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
@@ -64,48 +83,73 @@ body {
 }
 
 .toast {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--surface-elevated);
+  background: rgba(44, 44, 46, 0.22);
   color: var(--text-primary);
   padding: 12px 20px;
-  border-radius: 980px;
   font-size: 14px;
   font-weight: 500;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
-  box-shadow: 0 8px 32px rgba(0,0,0,.4);
-  animation: toast-in .4s cubic-bezier(.16,1,.3,1);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
+  animation: glass-materialize-in .4s cubic-bezier(.16,1,.3,1);
   cursor: pointer;
   pointer-events: auto;
+  overflow: hidden;
 }
+/* Specular highlight */
+/* Interaction glow on hover */
+.toast::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-glow);
+  opacity: 0;
+  transition: opacity .2s;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.toast:hover::after { opacity: 1; }
 .toast--error {
-  background: rgba(255,69,58,.15);
-  border-color: rgba(255,69,58,.3);
+  background: rgba(255,69,58,.08);
+  border-color: rgba(255,69,58,.15);
   color: var(--text-primary);
 }
-.toast--error .toast-icon { color: var(--red); }
 .toast--success {
-  background: rgba(48,209,88,.12);
-  border-color: rgba(48,209,88,.25);
+  background: rgba(48,209,88,.06);
+  border-color: rgba(48,209,88,.12);
 }
-.toast--success .toast-icon { color: var(--green); }
-.toast--info .toast-icon { color: var(--accent); }
 
-.toast-icon {
-  font-size: 15px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
 .toast-message {
   line-height: 1.4;
 }
 
-.toast.fade-out { animation: toast-out .4s ease forwards; }
-@keyframes toast-in  { from { opacity:0; transform: translateY(-20px); } }
-@keyframes toast-out { to   { opacity:0; transform: translateY(-20px); } }
+.toast.fade-out { animation: glass-materialize-out .4s ease forwards; }
+
+/* Liquid Glass materialization: elements appear by scaling up and increasing
+   backdrop-filter intensity, not simply fading opacity.  The subtle scale
+   simulates the "lensing increases" effect described in the WWDC25 session. */
+@keyframes glass-materialize-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(.92);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes glass-materialize-out {
+  to {
+    opacity: 0;
+    transform: translateY(-12px) scale(.92);
+    filter: blur(4px);
+  }
+}
 
 .alert {
   background: rgba(255,69,58,.12);
@@ -136,11 +180,22 @@ body {
   display: flex;
   align-items: center;
   padding: 0 48px 0 84px;
-  background: rgba(0,0,0,.72);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,.55);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
   -webkit-app-region: drag;
+}
+/* Specular highlight layer on navbar */
+/* Scroll-edge dissolve: content fades out as it scrolls under the navbar */
+.topnav::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: 100%;
+  height: 32px;
+  background: linear-gradient(to bottom, rgba(0,0,0,.6), transparent);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .topnav-brand,
@@ -186,7 +241,6 @@ body {
   font-size: 14px;
   font-weight: 600;
   padding: 6px 18px;
-  border-radius: 980px;
   border: 1.5px solid var(--accent);
   transition: background .2s, color .2s;
   cursor: pointer;
@@ -203,7 +257,6 @@ body {
   color: var(--text-secondary);
   border: 1px solid var(--border);
   padding: 5px 14px;
-  border-radius: 980px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -216,16 +269,21 @@ body {
 
 /* -- Now Playing Bar --------------------------------------------- */
 .now-playing-bar {
+  position: relative;
   margin: 12px 48px;
   padding: 12px 20px;
-  background: rgba(48,209,88,.08);
-  border: 1px solid rgba(48,209,88,.15);
+  background: rgba(48,209,88,.03);
+  border: 1px solid rgba(48,209,88,.08);
   border-radius: var(--radius);
   display: flex;
   align-items: center;
   gap: 14px;
   font-size: 13px;
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-sm);
+  overflow: hidden;
+  animation: glass-materialize-in .5s cubic-bezier(.16,1,.3,1);
 }
+/* Green-tinted specular highlight */
 .np-dot {
   width: 8px; height: 8px;
   background: var(--green);
@@ -274,7 +332,6 @@ body {
   color: #fff;
   border: none;
   padding: 12px 28px;
-  border-radius: 980px;
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -381,14 +438,17 @@ body {
 }
 
 .card-rating {
-  background: rgba(0,0,0,.6);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  position: relative;
+  background: rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 8px;
   color: #fff;
   font-size: 12px;
   font-weight: 700;
   padding: 4px 10px;
-  border-radius: 8px;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
 }
 
 .card-badge-resume {
@@ -436,6 +496,21 @@ body {
   letter-spacing: -.01em;
   margin-bottom: 4px;
   line-height: 1.3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-badge-library {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(48, 209, 88, 0.85);
+  color: #fff;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .card-meta {
   font-size: 13px;
@@ -590,25 +665,45 @@ body {
 
 /* -- CTA / Continue Watching Cards ------------------------------- */
 .cta-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 24px;
   padding: 24px 28px;
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
+  background: rgba(28, 28, 30, 0.2);
+  border: 1px solid rgba(255,255,255,.06);
   margin-bottom: 12px;
   margin-top: 24px;
-  transition: background .2s, border-color .2s;
+  transition: background .2s, border-color .2s, box-shadow .3s;
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-sm);
+  overflow: hidden;
+}
+/* Specular highlight */
+/* Interaction glow */
+.cta-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-glow);
+  opacity: 0;
+  transition: opacity .25s;
+  pointer-events: none;
+  border-radius: inherit;
 }
 .cta-card:first-of-type { margin-top: 32px; }
-.cta-card:hover { background: var(--surface-hover); border-color: var(--border-focus); }
+.cta-card:hover {
+  background: rgba(44, 44, 46, 0.25);
+  border-color: rgba(255,255,255,.1);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
+}
+.cta-card:hover::after { opacity: 1; }
 
 .cta-resume {
-  border-color: rgba(255,159,10,.2);
-  background: rgba(255,159,10,.04);
+  border-color: rgba(255,159,10,.1);
+  background: rgba(255,159,10,.02);
 }
-.cta-resume:hover { background: rgba(255,159,10,.08); border-color: rgba(255,159,10,.3); }
+/* Amber-tinted specular highlight for resume CTA */
+.cta-resume:hover { background: rgba(255,159,10,.04); border-color: rgba(255,159,10,.18); }
 
 .cta-content { flex: 1; min-width: 0; }
 
@@ -680,7 +775,6 @@ body {
   border: none;
   padding: 12px 28px;
   min-width: 144px;
-  border-radius: 980px;
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -688,6 +782,7 @@ body {
   text-decoration: none;
   font-family: inherit;
   flex-shrink: 0;
+  overflow: hidden;
 }
 .btn-play-cta:hover { background: var(--accent-hover); transform: scale(1.03); }
 .btn-play-cta:disabled { opacity: 0.7; cursor: wait; transform: none; }
@@ -714,15 +809,18 @@ body {
   margin: 24px 0 8px;
 }
 .stat {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   flex: 1;
   padding: 20px 16px;
-  background: var(--surface);
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
+  background: rgba(28, 28, 30, 0.18);
+  border: 1px solid rgba(255,255,255,.05);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
 }
+/* Specular highlight */
 .stat-val {
   font-size: 28px;
   font-weight: 700;
@@ -928,10 +1026,11 @@ body {
   align-items: center;
   flex-shrink: 0;
   margin-top: 2px;
-  opacity: 0;
-  transition: opacity .2s;
+  opacity: 0.01;
+  pointer-events: none;
+  transition: opacity .15s;
 }
-.ep-row:hover .ep-actions { opacity: 1; }
+.ep-row:hover .ep-actions { opacity: 1; pointer-events: auto; }
 
 .btn-ep-play {
   width: 36px;
@@ -942,10 +1041,10 @@ body {
   background: var(--accent);
   color: #fff;
   border: none;
-  border-radius: 50%;
   cursor: pointer;
   transition: background .2s, transform .15s;
   font-family: inherit;
+  overflow: hidden;
 }
 .btn-ep-play:hover { background: var(--accent-hover); transform: scale(1.1); }
 
@@ -958,10 +1057,10 @@ body {
   background: rgba(255,255,255,.08);
   color: var(--text-tertiary);
   border: none;
-  border-radius: 50%;
   cursor: pointer;
   transition: background .2s, transform .15s, color .2s;
   font-family: inherit;
+  overflow: hidden;
 }
 .btn-ep-more:hover { background: rgba(255,255,255,.14); color: var(--text-primary); transform: scale(1.1); }
 .btn-ep-more.active { background: rgba(255,255,255,.18); color: var(--text-primary); }
@@ -977,14 +1076,27 @@ body {
   top: calc(100% + 6px);
   right: 0;
   min-width: 190px;
-  background: rgba(28, 28, 30, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 10px;
+  background: rgba(28, 28, 30, 0.22);
+  border: 1px solid rgba(255,255,255,.08);
   padding: 4px 0;
-  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
   z-index: 100;
+  overflow: hidden;
+  animation: glass-pop-open .2s cubic-bezier(.16,1,.3,1);
+}
+/* Specular highlight */
+/* Popover materialization: "bubble pops open" per Apple's description */
+@keyframes glass-pop-open {
+  from {
+    opacity: 0;
+    transform: scale(.9) translateY(-4px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
 }
 
 .ep-popover-item {
@@ -1207,7 +1319,7 @@ body {
 
 .movie-file-info {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   padding: 16px 0;
   border-top: 1px solid var(--border);
@@ -1227,6 +1339,7 @@ body {
   color: var(--text-secondary);
   font-size: 13px;
   word-break: break-all;
+  flex: 1;
 }
 
 /* ================================================================
@@ -1270,7 +1383,6 @@ body {
   height: 24px;
   border: none;
   background: var(--border);
-  border-radius: 50%;
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
@@ -1309,7 +1421,6 @@ body {
   font-family: inherit;
   font-weight: 500;
   border: 1px solid var(--border);
-  border-radius: 20px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -1367,22 +1478,25 @@ body {
   right: 8px;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
   border: none;
-  background: rgba(0,0,0,.6);
-  backdrop-filter: blur(8px);
+  border-radius: 16px;
+  background: rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color .2s, background .2s;
+  transition: color .2s, background .2s, box-shadow .2s;
   z-index: 2;
   -webkit-app-region: no-drag;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
 }
 .discover-watchlist-btn:hover {
-  background: rgba(0,0,0,.8);
+  background: rgba(0,0,0,.4);
   color: var(--text-primary);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-md);
 }
 .discover-watchlist-btn.active {
   color: var(--accent);
@@ -1394,10 +1508,12 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .04em;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
   background: rgba(48, 209, 88, 0.85);
   color: #fff;
+  vertical-align: middle;
+  margin-left: 6px;
 }
 
 /* -- Detail Modal ------------------------------------------------- */
@@ -1425,15 +1541,24 @@ body {
   max-height: 90vh;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--bg);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .7);
-  animation: dm-slide-up .25s ease;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-lg);
+  animation: glass-modal-in .3s cubic-bezier(.16,1,.3,1);
 }
-@keyframes dm-slide-up {
-  from { opacity: 0; transform: translateY(24px) scale(.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+/* Specular highlight — large surface, softer spread */
+/* Materialization: scale + blur fade, not just opacity */
+@keyframes glass-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(.96);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
 }
 
 .dm-close {
@@ -1443,21 +1568,23 @@ body {
   z-index: 10;
   width: 36px;
   height: 36px;
-  border-radius: 50%;
   border: none;
-  background: rgba(0, 0, 0, .5);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, .15);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s, color .15s;
+  transition: background .15s, color .15s, box-shadow .2s;
   -webkit-app-region: no-drag;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
 }
+/* Specular highlight */
 .dm-close:hover {
-  background: rgba(0, 0, 0, .75);
+  background: rgba(0, 0, 0, .4);
   color: var(--text-primary);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-md);
 }
 
 /* Hero */
@@ -1535,7 +1662,6 @@ body {
   align-items: center;
   gap: 8px;
   padding: 9px 20px;
-  border-radius: 980px;
   border: 1.5px solid var(--green);
   background: rgba(48, 209, 88, .12);
   color: var(--green);
@@ -1562,7 +1688,6 @@ body {
   align-items: center;
   gap: 8px;
   padding: 9px 20px;
-  border-radius: 980px;
   border: 1.5px solid var(--border);
   background: transparent;
   color: var(--text-secondary);
@@ -1610,7 +1735,6 @@ body {
   padding: 7px 16px;
   background: transparent;
   border: 1.5px solid var(--border);
-  border-radius: 980px;
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
@@ -1873,7 +1997,7 @@ body {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* -- Top Bar (title + close) ------------------------------------- */
+/* -- Top Bar (close button, right-aligned) ----------------------- */
 .video-player-top {
   position: absolute;
   top: 0;
@@ -1881,9 +2005,9 @@ body {
   right: 0;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  padding: 20px 24px 20px 84px; /* 84px left to clear macOS traffic lights */
-  background: linear-gradient(to bottom, rgba(0,0,0,.7) 0%, transparent 100%);
+  justify-content: flex-end;
+  padding: 16px 24px 40px;
+  background: linear-gradient(to bottom, rgba(0,0,0,.5) 0%, transparent 100%);
   opacity: 0;
   transition: opacity .3s ease;
   pointer-events: none;
@@ -1894,71 +2018,259 @@ body {
   pointer-events: auto;
 }
 
-.video-player-title-group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.video-player-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.video-player-subtitle {
-  font-size: 13px;
-  color: rgba(255,255,255,.6);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* -- Close Button (glass circle) --------------------------------- */
 .video-player-close {
-  background: rgba(255,255,255,.1);
-  border: none;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255,255,255,.18);
   color: #fff;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: background .2s;
   flex-shrink: 0;
+  box-shadow: var(--glass-shadow-sm);
 }
 .video-player-close:hover {
-  background: rgba(255,255,255,.25);
+  background: rgba(255,255,255,.28);
 }
 
-/* -- Bottom Controls --------------------------------------------- */
-.video-player-controls {
+/* -- Glass Utility Buttons ---------------------------------------- */
+/* Individual icon buttons inside the glass utility pill — no background, no border */
+.video-player-util-icon {
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,.85);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color .15s, transform .1s;
+  padding: 0;
+  flex-shrink: 0;
+}
+.video-player-util-icon:hover {
+  color: #fff;
+}
+.video-player-util-icon:active {
+  transform: scale(0.9);
+}
+.video-player-util-icon.active {
+  color: #fff;
+}
+
+/* Thin vertical divider between volume and settings/fullscreen icons */
+/* -- Volume slider (inside utility pill) -------------------------- */
+.video-player-volume-slider {
+  width: 64px;
+  height: 3px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,.3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.video-player-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,.5);
+}
+
+/* -- Center Playback Controls (skip back, play/pause, skip fwd) -- */
+.video-player-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  opacity: 0;
+  transition: opacity .3s ease;
+  pointer-events: none;
+  z-index: 5;
+}
+.video-player-center.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Skip buttons (glass circles) */
+.video-player-skip-btn {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255,255,255,.18);
+  color: #fff;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .2s, transform .15s;
+  position: relative;
+}
+.video-player-skip-btn:hover {
+  background: rgba(255,255,255,.28);
+  transform: scale(1.05);
+}
+.video-player-skip-btn:active {
+  transform: scale(0.95);
+}
+.video-player-skip-num {
+  position: absolute;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Play/Pause button (large glass circle — radius handled by refractive) */
+.video-player-play-btn {
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255,255,255,.2);
+  color: #fff;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .2s, transform .15s;
+}
+.video-player-play-btn:hover {
+  background: rgba(255,255,255,.28);
+  transform: scale(1.06);
+}
+.video-player-play-btn:active {
+  transform: scale(0.94);
+}
+
+/* -- Bottom: Title + Utilities + Seek ----------------------------- */
+.video-player-bottom {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0 24px 20px;
-  background: linear-gradient(to top, rgba(0,0,0,.7) 0%, transparent 100%);
+  padding: 40px 24px 20px;
+  background: linear-gradient(to top, rgba(0,0,0,.6) 0%, transparent 100%);
   opacity: 0;
   transition: opacity .3s ease;
   pointer-events: none;
   z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 10px;
 }
-.video-player-controls.visible {
+.video-player-bottom.visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Upper row: title spans left column, utility pill in right column */
+.video-player-bottom-info {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  align-self: center;
+}
+.video-player-bottom-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.video-player-bottom-subtitle {
+  font-size: 14px;
+  color: rgba(255,255,255,.50);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Utility pill — right column of upper row */
+.video-player-track-menu-anchor {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  justify-self: end;
+  align-self: center;
+}
+
+/* Lower row: elapsed + seek bar + remaining time — spans full width */
+.video-player-seek-left {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Remove old per-element grid placements — they are flex children of .video-player-seek-left now */
+.video-player-time-elapsed {
+  flex-shrink: 0;
+}
+.video-player-seek {
+  flex: 1;
+  min-width: 0;
+}
+.video-player-time-remaining {
+  flex-shrink: 0;
+  text-align: right;
+}
+
+/* -- Utilities pill (single glass group above progress, right) ---- */
+.video-player-utilities {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.08);
+  flex-shrink: 0;
+}
+
+.video-player-time-elapsed,
+.video-player-time-remaining {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255,255,255,.6);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* -- Seek Bar ---------------------------------------------------- */
 .video-player-seek {
   position: relative;
-  height: 24px;
+  height: 20px;
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  flex: 1;
 }
 .video-player-seek-track {
   position: absolute;
@@ -1967,21 +2279,38 @@ body {
   height: 4px;
   background: rgba(255,255,255,.2);
   border-radius: 2px;
-  overflow: hidden;
   pointer-events: none;
+  transition: height .15s;
 }
 .video-player-seek-fill {
   height: 100%;
-  background: var(--accent);
+  background: #fff;
   border-radius: 2px;
   transition: width .1s linear;
+}
+.video-player-seek-head {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  pointer-events: none;
+  transition: transform .15s, opacity .15s;
+  opacity: 0;
+}
+.video-player-seek:hover .video-player-seek-head {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.15);
 }
 .video-player-seek-input {
   position: absolute;
   left: 0;
   right: 0;
   width: 100%;
-  height: 24px;
+  height: 20px;
   margin: 0;
   opacity: 0;
   cursor: pointer;
@@ -1992,97 +2321,20 @@ body {
   height: 6px;
 }
 
-/* -- Controls Row ------------------------------------------------ */
-.video-player-controls-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.video-player-btn {
-  background: transparent;
-  border: none;
-  color: #fff;
-  width: 40px;
-  height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 50%;
-  transition: background .2s;
-  position: relative;
-}
-.video-player-btn:hover {
-  background: rgba(255,255,255,.1);
-}
-
-.video-player-skip-label {
-  position: absolute;
-  font-size: 9px;
-  font-weight: 700;
-  color: #fff;
-  bottom: 4px;
-  right: 4px;
-}
-
-.video-player-time {
-  font-size: 13px;
-  color: rgba(255,255,255,.7);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
-/* -- Volume ------------------------------------------------------ */
-.video-player-volume {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.video-player-volume-slider {
-  width: 80px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: rgba(255,255,255,.2);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-.video-player-volume-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  background: #fff;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-/* -- Track Selector (Audio / Subtitles) -------------------------- */
-.video-player-track-menu-anchor {
-  position: relative;
-}
-.video-player-btn.active {
-  background: rgba(255,255,255,.15);
-}
-
+/* -- Track Selector (Audio / Subtitles) Popover ------------------ */
 .video-player-track-popover {
   position: absolute;
   bottom: calc(100% + 12px);
   right: 0;
   min-width: 220px;
   max-width: 320px;
-  background: rgba(28, 28, 30, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 12px;
+  background: rgba(28, 28, 30, 0.55);
+  border: 1px solid rgba(255,255,255,.1);
   padding: 8px 0;
-  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-lg);
   z-index: 20;
+  overflow: hidden;
+  animation: glass-pop-open .2s cubic-bezier(.16,1,.3,1);
 }
 
 .track-popover-section + .track-popover-section {
@@ -2216,20 +2468,19 @@ body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 500;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 8px 40px rgba(0,0,0,.6);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(44, 44, 46, 0.2);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
   padding: 14px 18px;
   display: flex;
   align-items: center;
   gap: 14px;
   min-width: 400px;
   max-width: 540px;
-  animation: toast-in .4s cubic-bezier(.16,1,.3,1);
+  animation: glass-materialize-in .4s cubic-bezier(.16,1,.3,1);
+  overflow: hidden;
 }
+/* Specular highlight */
 
 .update-prompt-body { flex: 1; min-width: 0; }
 .update-prompt-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }

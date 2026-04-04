@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
+import { refractive } from '@hashintel/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { formatTime } from '../utils'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function NowPlaying() {
   const { playerState } = usePlayer()
   const [vlcStatus, setVlcStatus] = useState(null)
+  const nowPlayingGlass = useGlassConfig('now-playing')
 
   // Poll playback:status for VLC external playback
   useEffect(() => {
@@ -47,11 +50,11 @@ export default function NowPlaying() {
       : playerState.title
 
     return (
-      <div className="now-playing-bar">
+      <refractive.div className="now-playing-bar" refraction={nowPlayingGlass}>
         <div className="np-dot" />
         <span className="np-label">Now Playing</span>
         <span className="np-title">{title}</span>
-      </div>
+      </refractive.div>
     )
   }
 
@@ -73,7 +76,7 @@ export default function NowPlaying() {
     const pct = duration > 0 ? (time / duration) * 100 : 0
 
     return (
-      <div className="now-playing-bar">
+      <refractive.div className="now-playing-bar" refraction={nowPlayingGlass}>
         <div className="np-dot" />
         <span className="np-label">VLC</span>
         <span className="np-title">{title}</span>
@@ -85,7 +88,7 @@ export default function NowPlaying() {
             </div>
           </>
         )}
-      </div>
+      </refractive.div>
     )
   }
 

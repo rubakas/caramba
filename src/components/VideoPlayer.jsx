@@ -1,6 +1,8 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
+import { refractive } from '@hashintel/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { formatTime } from '../utils'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 // Human-readable language names for common ISO 639 codes
 const LANG_NAMES = {
@@ -54,10 +56,9 @@ function subtitleLabel(stream) {
 
 // Subtitle size presets
 const SUB_SIZES = [
-  { id: 'small',  label: 'S',  em: '0.9em' },
-  { id: 'medium', label: 'M',  em: '1.2em' },
-  { id: 'large',  label: 'L',  em: '1.6em' },
-  { id: 'xl',     label: 'XL', em: '2.2em' },
+  { id: 'small',  label: 'S',  em: '0.7em' },
+  { id: 'medium', label: 'M',  em: '0.9em' },
+  { id: 'large',  label: 'L',  em: '1.2em' },
 ]
 
 // Subtitle appearance presets
@@ -95,6 +96,12 @@ export default function VideoPlayer() {
   const totalDuration = playerState.duration || 0
   const subtitleSize = playerState.subtitleSize || 'medium'
   const subtitleStyle = playerState.subtitleStyle || 'classic'
+
+  const closeBtnGlass = useGlassConfig('close-btn')
+  const skipBtnGlass = useGlassConfig('skip-btn')
+  const playBtnGlass = useGlassConfig('play-btn')
+  const utilityPillGlass = useGlassConfig('utility-pill')
+  const trackPopoverGlass = useGlassConfig('track-popover')
 
   // Reset local state when player opens with new session
   useEffect(() => {
@@ -385,7 +392,13 @@ export default function VideoPlayer() {
   const handleVolumeChange = useCallback((e) => {
     const val = parseFloat(e.target.value)
     setVolume(val)
-    if (videoRef.current) videoRef.current.volume = val
+    if (videoRef.current) {
+      videoRef.current.volume = val
+      // Unmute when the user actively drags the slider to a non-zero value
+      if (val > 0 && videoRef.current.muted) {
+        videoRef.current.muted = false
+      }
+    }
   }, [])
 
   // --- Keyboard controls ---
@@ -447,8 +460,6 @@ export default function VideoPlayer() {
   if (!playerState.open) return null
 
   const progressPct = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0
-  // Always show gear icon — at minimum we have size/appearance options
-  const hasTrackOptions = true
 
   return (
     <div
@@ -493,106 +504,71 @@ export default function VideoPlayer() {
         )}
       </video>
 
-      {/* Buffering spinner */}
-      {buffering && (
-        <div className="video-player-spinner">
-          <div className="spinner" />
-        </div>
-      )}
-
-      {/* Top bar: title + close */}
+      {/* Top-right: close button */}
       <div
         className={`video-player-top${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="video-player-title-group">
-          <span className="video-player-title">{playerState.title}</span>
-          {playerState.subtitle && (
-            <span className="video-player-subtitle">{playerState.subtitle}</span>
-          )}
-        </div>
-        <button className="video-player-close" onClick={(e) => { e.stopPropagation(); handleClose() }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <refractive.button className="video-player-close" onClick={(e) => { e.stopPropagation(); handleClose() }} refraction={closeBtnGlass}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
-        </button>
+        </refractive.button>
       </div>
 
-      {/* Bottom controls */}
+      {/* Center playback controls: skip back, play/pause, skip forward */}
       <div
-        className={`video-player-controls${controlsVisible ? ' visible' : ''}`}
+        className={`video-player-center${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Seek bar */}
-        <div className="video-player-seek">
-          <div className="video-player-seek-track">
-            <div className="video-player-seek-fill" style={{ width: `${progressPct}%` }} />
-          </div>
-          <input
-            type="range"
-            className="video-player-seek-input"
-            min={0}
-            max={totalDuration || 1}
-            step={1}
-            value={currentTime}
-            onChange={handleSeekBarChange}
-          />
+        <refractive.button className="video-player-skip-btn" onClick={() => handleSeekRelative(-10)} refraction={skipBtnGlass}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+          <span className="video-player-skip-num">10</span>
+        </refractive.button>
+
+        <refractive.button
+          className="video-player-play-btn"
+          onClick={() => {
+            const v = videoRef.current
+            if (v) v.paused ? v.play() : v.pause()
+          }}
+          refraction={playBtnGlass}
+        >
+          {buffering ? (
+            <div className="spinner" style={{ width: 28, height: 28 }} />
+          ) : paused ? (
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21"/></svg>
+          ) : (
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="3" width="5" height="18" rx="1"/><rect x="14" y="3" width="5" height="18" rx="1"/></svg>
+          )}
+        </refractive.button>
+
+        <refractive.button className="video-player-skip-btn" onClick={() => handleSeekRelative(30)} refraction={skipBtnGlass}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
+          </svg>
+          <span className="video-player-skip-num">10</span>
+        </refractive.button>
+      </div>
+
+      {/* Bottom: title + utilities + seek */}
+      <div
+        className={`video-player-bottom${controlsVisible ? ' visible' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="video-player-bottom-info">
+          <span className="video-player-bottom-title">{playerState.title}</span>
+          {playerState.subtitle && (
+            <span className="video-player-bottom-subtitle">{playerState.subtitle}</span>
+          )}
         </div>
 
-        <div className="video-player-controls-row">
-          {/* Play/Pause */}
-          <button
-            className="video-player-btn"
-            onClick={() => {
-              const v = videoRef.current
-              if (v) v.paused ? v.play() : v.pause()
-            }}
-          >
-            {paused ? (
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
-            ) : (
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            )}
-          </button>
-
-          {/* Skip back/forward */}
-          <button className="video-player-btn" onClick={() => handleSeekRelative(-10)}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-            </svg>
-            <span className="video-player-skip-label">10</span>
-          </button>
-          <button className="video-player-btn" onClick={() => handleSeekRelative(30)}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
-            </svg>
-            <span className="video-player-skip-label">30</span>
-          </button>
-
-          {/* Time */}
-          <span className="video-player-time">
-            {formatTime(Math.round(currentTime))} / {formatTime(Math.round(totalDuration))}
-          </span>
-
-          {/* Spacer */}
-          <span style={{ flex: 1 }} />
-
-          {/* Volume */}
-          <div className="video-player-volume">
-            <button className="video-player-btn" onClick={() => {
-              const v = videoRef.current
-              if (v) { v.muted = !v.muted; setVolume(v.muted ? 0 : v.volume) }
-            }}>
-              {volume === 0 ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
-                </svg>
-              )}
-            </button>
+        {/* Utility group: single glass pill, right column */}
+        <div className="video-player-track-menu-anchor" ref={trackMenuRef}>
+          <refractive.div className="video-player-utilities" refraction={utilityPillGlass}>
+            {/* Volume slider */}
             <input
               type="range"
               className="video-player-volume-slider"
@@ -601,135 +577,168 @@ export default function VideoPlayer() {
               step={0.05}
               value={volume}
               onChange={handleVolumeChange}
+              style={{ background: `linear-gradient(to right, #fff 0%, #fff ${volume * 100}%, rgba(255,255,255,.3) ${volume * 100}%, rgba(255,255,255,.3) 100%)` }}
             />
-          </div>
-
-          {/* Track selector (audio/subtitles) */}
-          {hasTrackOptions && (
-            <div className="video-player-track-menu-anchor" ref={trackMenuRef}>
-              <button
-                className={`video-player-btn${trackMenuOpen ? ' active' : ''}`}
-                onClick={() => setTrackMenuOpen(v => !v)}
-                title="Audio & Subtitles"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            {/* Volume icon (mute toggle) */}
+            <button className="video-player-util-icon" onClick={() => {
+              const v = videoRef.current
+              if (v) {
+                v.muted = !v.muted
+                setVolume(v.muted ? 0 : v.volume)
+              }
+            }}>
+              {volume === 0 ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
                 </svg>
-              </button>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                </svg>
+              )}
+            </button>
+            {/* Settings icon */}
+            <button
+              className={`video-player-util-icon${trackMenuOpen ? ' active' : ''}`}
+              onClick={() => setTrackMenuOpen(v => !v)}
+              title="Audio & Subtitles"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+            {/* Fullscreen icon */}
+            <button className="video-player-util-icon" onClick={toggleFullscreen}>
+              {isFullscreen ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/>
+                </svg>
+              )}
+            </button>
+          </refractive.div>
 
-              {trackMenuOpen && (
-                <div className="video-player-track-popover">
-                  {/* Audio section */}
-                  {playerState.audioStreams.length > 1 && (
-                    <div className="track-popover-section">
-                      <div className="track-popover-heading">Audio</div>
-                      {playerState.audioStreams.map((s) => (
-                        <button
-                          key={s.index}
-                          className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
-                          onClick={() => {
-                            if (s.index !== playerState.activeAudioIndex) {
-                              handleSwitchAudio(s.index)
-                            }
-                            setTrackMenuOpen(false)
-                          }}
-                        >
-                          <span className="track-popover-check">
-                            {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
-                          </span>
-                          <span className="track-popover-label">{audioLabel(s)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Subtitles section */}
-                  {playerState.subtitleStreams.length > 0 && (
-                    <div className="track-popover-section">
-                      <div className="track-popover-heading">Subtitles</div>
-                      <button
-                        className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
-                        onClick={() => {
-                          if (playerState.activeSubtitleIndex != null) {
-                            handleSwitchSubtitle(null)
-                          }
-                          setTrackMenuOpen(false)
-                        }}
-                      >
-                        <span className="track-popover-check">
-                          {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
-                        </span>
-                        <span className="track-popover-label">Off</span>
-                      </button>
-                      {playerState.subtitleStreams.filter(s => s.isText).map((s) => (
-                        <button
-                          key={s.index}
-                          className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
-                          onClick={() => {
-                            if (s.index !== playerState.activeSubtitleIndex) {
-                              handleSwitchSubtitle(s.index)
-                            }
-                            setTrackMenuOpen(false)
-                          }}
-                        >
-                          <span className="track-popover-check">
-                            {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
-                          </span>
-                          <span className="track-popover-label">{subtitleLabel(s)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Subtitle Size */}
-                  <div className="track-popover-section">
-                    <div className="track-popover-heading">Size</div>
-                    <div className="track-popover-sizes">
-                      {SUB_SIZES.map((s) => (
-                        <button
-                          key={s.id}
-                          className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
-                          onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Subtitle Appearance */}
-                  <div className="track-popover-section">
-                    <div className="track-popover-heading">Appearance</div>
-                    {SUB_STYLES.map((s) => (
-                      <button
-                        key={s.id}
-                        className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
-                        onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
-                      >
-                        <span className="track-popover-check">
-                          {s.id === subtitleStyle ? '\u2713' : ''}
-                        </span>
-                        <span className="track-popover-label">{s.label}</span>
-                      </button>
-                    ))}
-                  </div>
+          {trackMenuOpen && (
+            <refractive.div className="video-player-track-popover" refraction={trackPopoverGlass}>
+              {/* Audio section */}
+              {playerState.audioStreams.length > 1 && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Audio</div>
+                  {playerState.audioStreams.map((s) => (
+                    <button
+                      key={s.index}
+                      className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
+                      onClick={() => {
+                        if (s.index !== playerState.activeAudioIndex) {
+                          handleSwitchAudio(s.index)
+                        }
+                        setTrackMenuOpen(false)
+                      }}
+                    >
+                      <span className="track-popover-check">
+                        {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
+                      </span>
+                      <span className="track-popover-label">{audioLabel(s)}</span>
+                    </button>
+                  ))}
                 </div>
               )}
-            </div>
-          )}
 
-          {/* Fullscreen */}
-          <button className="video-player-btn" onClick={toggleFullscreen}>
-            {isFullscreen ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
-              </svg>
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/>
-              </svg>
-            )}
-          </button>
+              {/* Subtitles section */}
+              {playerState.subtitleStreams.length > 0 && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Subtitles</div>
+                  <button
+                    className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
+                    onClick={() => {
+                      if (playerState.activeSubtitleIndex != null) {
+                        handleSwitchSubtitle(null)
+                      }
+                      setTrackMenuOpen(false)
+                    }}
+                  >
+                    <span className="track-popover-check">
+                      {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
+                    </span>
+                    <span className="track-popover-label">Off</span>
+                  </button>
+                  {playerState.subtitleStreams.filter(s => s.isText).map((s) => (
+                    <button
+                      key={s.index}
+                      className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
+                      onClick={() => {
+                        if (s.index !== playerState.activeSubtitleIndex) {
+                          handleSwitchSubtitle(s.index)
+                        }
+                        setTrackMenuOpen(false)
+                      }}
+                    >
+                      <span className="track-popover-check">
+                        {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
+                      </span>
+                      <span className="track-popover-label">{subtitleLabel(s)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Subtitle Size */}
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Size</div>
+                <div className="track-popover-sizes">
+                  {SUB_SIZES.map((s) => (
+                    <button
+                      key={s.id}
+                      className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
+                      onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Subtitle Appearance */}
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Appearance</div>
+                {SUB_STYLES.map((s) => (
+                  <button
+                    key={s.id}
+                    className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
+                    onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
+                  >
+                    <span className="track-popover-check">
+                      {s.id === subtitleStyle ? '\u2713' : ''}
+                    </span>
+                    <span className="track-popover-label">{s.label}</span>
+                  </button>
+                ))}
+              </div>
+            </refractive.div>
+          )}
+        </div>
+
+        <div className="video-player-seek-left">
+          <span className="video-player-time-elapsed">{formatTime(Math.round(currentTime))}</span>
+          <div className="video-player-seek">
+            <div className="video-player-seek-track">
+              <div className="video-player-seek-fill" style={{ width: `${progressPct}%` }} />
+              <div className="video-player-seek-head" style={{ left: `${progressPct}%` }} />
+            </div>
+            <input
+              type="range"
+              className="video-player-seek-input"
+              min={0}
+              max={totalDuration || 1}
+              step={1}
+              value={currentTime}
+              onChange={handleSeekBarChange}
+            />
+          </div>
+          <span className="video-player-time-remaining">-{formatTime(Math.max(0, Math.round(totalDuration - currentTime)))}</span>
         </div>
       </div>
     </div>

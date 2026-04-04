@@ -1,5 +1,6 @@
-const { app, BrowserWindow, shell, protocol, net } = require('electron')
+const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const { Readable } = require('stream')
 const db = require('./db')
 const dbSync = require('./services/db-sync')
@@ -102,20 +103,26 @@ function shiftVtt(vtt, offset) {
 let mainWindow = null
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOpts = {
     width: 1280,
     height: 860,
     minWidth: 800,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
-  })
+  }
+
+  // macOS: hide title bar, show traffic lights inset
+  if (process.platform === 'darwin') {
+    windowOpts.titleBarStyle = 'hiddenInset'
+    windowOpts.trafficLightPosition = { x: 16, y: 16 }
+  }
+
+  mainWindow = new BrowserWindow(windowOpts)
 
   // Register IPC handlers (dialogs needs the window reference)
   seriesIpc.register()
@@ -127,6 +134,15 @@ function createWindow() {
   dialogsIpc.register(mainWindow)
   discoverIpc.register()
   updaterIpc.register(mainWindow)
+
+  // Dev-only: save glass config to src/config/glass.json for playground persistence
+  if (!app.isPackaged) {
+    ipcMain.handle('dev:saveGlassConfig', async (_event, config) => {
+      const configPath = path.join(__dirname, '..', 'src', 'config', 'glass.json')
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8')
+      return { ok: true }
+    })
+  }
 
   // Load the React app
   if (process.env.VITE_DEV_URL) {
@@ -187,7 +203,7 @@ app.whenReady().then(() => {
   // Register subtitle:// protocol — serves VTT with timestamps shifted by seek offset
   protocol.handle('subtitle', () => {
     if (!rawSubtitleCache) {
-      return new Response('No subtitles', { status: 404 })
+      return new Response('No subtitles', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } })
     }
 
     // Shift timestamps so cues align with video.currentTime (which starts at 0 after each seek)
@@ -198,6 +214,7 @@ app.whenReady().then(() => {
       headers: {
         'Content-Type': 'text/vtt; charset=utf-8',
         'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
       },
     })
   })

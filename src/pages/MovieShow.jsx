@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import { usePlayer } from '../context/PlayerContext'
 import { useToast } from '../context/ToastContext'
+import { useGlassConfig } from '../config/useGlassConfig'
 import { genresList, formatTime, progressPercent, runtimeDisplay, isInProgress } from '../utils'
 
 const PlaySvg = ({ size = 20 }) => (
@@ -29,6 +31,12 @@ export default function MovieShow() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   const menuBtnRef = useRef(null)
+  const ctaCardGlass = useGlassConfig('cta-card')
+  const playCtaGlass = useGlassConfig('play-cta')
+  const navBtnGlass = useGlassConfig('nav-btn')
+  const epMoreGlass = useGlassConfig('ep-more')
+  const popoverGlass = useGlassConfig('popover')
+  const statChipGlass = useGlassConfig('stat-chip')
 
   const loadData = useCallback(async () => {
     try {
@@ -135,8 +143,8 @@ export default function MovieShow() {
         active="Movies"
         actions={
           <>
-            <button className="topnav-btn" onClick={handleRefresh}>Refresh</button>
-            <button className="topnav-btn topnav-btn--danger" onClick={handleRemove}>Remove</button>
+            <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
+            <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
         }
       />
@@ -185,7 +193,7 @@ export default function MovieShow() {
       <main className="show-main">
         {/* Play / Resume CTA */}
         {inProgress ? (
-          <div className="cta-card cta-resume">
+          <refractive.div className="cta-card cta-resume" refraction={ctaCardGlass}>
             <div className="cta-content">
               <span className="cta-label">Resume Where You Left Off</span>
               <div className="cta-progress-row">
@@ -197,82 +205,121 @@ export default function MovieShow() {
                 </span>
               </div>
             </div>
-            <button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={handlePlay}>
+            <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
               {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
-            </button>
-          </div>
+            </refractive.button>
+          </refractive.div>
         ) : (
-          <div className="cta-card">
+          <refractive.div className="cta-card" refraction={ctaCardGlass}>
             <div className="cta-content">
               <span className="cta-label">{movie.watched ? 'Watch Again' : 'Start Watching'}</span>
               <div className="cta-episode">
                 <span className="cta-ep-title">{movie.title}</span>
               </div>
             </div>
-            <button className="btn-play-cta" disabled={launching} onClick={handlePlay}>
+            <refractive.button className="btn-play-cta" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
               {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
-            </button>
-          </div>
+            </refractive.button>
+          </refractive.div>
         )}
 
         {/* Movie Info Cards */}
         <div className="movie-detail-section">
           <div className="stats-row">
             {movie.runtime && (
-              <div className="stat"><span className="stat-val">{runtime}</span><span className="stat-lbl">Runtime</span></div>
+              <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{runtime}</span><span className="stat-lbl">Runtime</span></refractive.div>
             )}
             {movie.rating && (
-              <div className="stat"><span className="stat-val">{movie.rating}</span><span className="stat-lbl">IMDb Rating</span></div>
+              <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{movie.rating}</span><span className="stat-lbl">IMDb Rating</span></refractive.div>
             )}
-            <div className="stat">
+            <refractive.div className="stat" refraction={statChipGlass}>
               <span className="stat-val" dangerouslySetInnerHTML={{ __html: movie.watched ? '&#10003;' : '&mdash;' }} />
               <span className="stat-lbl">Watched</span>
-            </div>
-          </div>
-
-          <div className="movie-actions-row">
-            <div className="ep-more-wrap">
-              <button
-                ref={menuBtnRef}
-                className={`btn-ep-more${menuOpen ? ' active' : ''}`}
-                onClick={() => setMenuOpen(!menuOpen)}
-              >
-                <MoreSvg />
-              </button>
-              {menuOpen && (
-                <div ref={menuRef} className="ep-popover">
-                  <button
-                    className="ep-popover-item"
-                    onClick={() => { handleToggle(); setMenuOpen(false) }}
-                  >
-                    <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
-                    <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
-                  </button>
-                  {vlcAvailable && (
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{'\u25B6'}</span>
-                      <span>Open in VLC</span>
-                    </button>
-                  )}
-                  <button
-                    className="ep-popover-item"
-                    onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
-                  >
-                    <span className="ep-popover-icon">{'\u2197'}</span>
-                    <span>Open in Default Player</span>
-                  </button>
-                </div>
-              )}
-            </div>
+            </refractive.div>
           </div>
 
           {filename && (
             <div className="movie-file-info">
               <span className="movie-file-label">File</span>
               <span className="movie-file-path">{filename}</span>
+              <div className="ep-more-wrap">
+                <refractive.button
+                  ref={menuBtnRef}
+                  className={`btn-ep-more${menuOpen ? ' active' : ''}`}
+                  onClick={() => setMenuOpen(!menuOpen)}
+                  refraction={epMoreGlass}
+                >
+                  <MoreSvg />
+                </refractive.button>
+                {menuOpen && (
+                  <refractive.div ref={menuRef} className="ep-popover" refraction={popoverGlass}>
+                    <button
+                      className="ep-popover-item"
+                      onClick={() => { handleToggle(); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
+                      <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
+                    </button>
+                    {vlcAvailable && (
+                      <button
+                        className="ep-popover-item"
+                        onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
+                      >
+                        <span className="ep-popover-icon">{'\u25B6'}</span>
+                        <span>Open in VLC</span>
+                      </button>
+                    )}
+                    <button
+                      className="ep-popover-item"
+                      onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{'\u2197'}</span>
+                      <span>Open in Default Player</span>
+                    </button>
+                  </refractive.div>
+                )}
+              </div>
+            </div>
+          )}
+          {!filename && (
+            <div className="movie-actions-row">
+              <div className="ep-more-wrap">
+                <refractive.button
+                  ref={menuBtnRef}
+                  className={`btn-ep-more${menuOpen ? ' active' : ''}`}
+                  onClick={() => setMenuOpen(!menuOpen)}
+                  refraction={epMoreGlass}
+                >
+                  <MoreSvg />
+                </refractive.button>
+                {menuOpen && (
+                  <refractive.div ref={menuRef} className="ep-popover" refraction={popoverGlass}>
+                    <button
+                      className="ep-popover-item"
+                      onClick={() => { handleToggle(); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
+                      <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
+                    </button>
+                    {vlcAvailable && (
+                      <button
+                        className="ep-popover-item"
+                        onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
+                      >
+                        <span className="ep-popover-icon">{'\u25B6'}</span>
+                        <span>Open in VLC</span>
+                      </button>
+                    )}
+                    <button
+                      className="ep-popover-item"
+                      onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{'\u2197'}</span>
+                      <span>Open in Default Player</span>
+                    </button>
+                  </refractive.div>
+                )}
+              </div>
             </div>
           )}
         </div>
