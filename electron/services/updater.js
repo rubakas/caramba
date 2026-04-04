@@ -14,7 +14,7 @@ const GITHUB_REPO = 'rubakas/caramba'
 const API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
 
 // Allowed download hosts for update assets — prevents redirect-based SSRF
-const ALLOWED_DOWNLOAD_HOSTS = ['github.com', 'objects.githubusercontent.com']
+const ALLOWED_DOWNLOAD_HOSTS = ['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com']
 
 /**
  * Parse a version string like "1.0.5" into an integer tuple [1, 0, 5].
