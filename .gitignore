@@ -12,7 +12,6 @@ storage/sync_config.json
 rails
 
 # Build artifacts
-.build-commit
 
 # Bundled binaries (downloaded by bin/setup-ffmpeg)
 vendor/ffmpeg
