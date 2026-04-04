@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import { genresList, premiereYear, statusClass } from '../utils'
 
@@ -196,9 +197,9 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
 
   return (
     <div className="dm-overlay" ref={overlayRef} onClick={handleOverlayClick}>
-      <div className="dm-container">
+      <refractive.div className="dm-container" refraction={{ radius: 16, blur: 6, bezelWidth: 2 }}>
         {/* Close button */}
-        <button className="dm-close" onClick={onClose}><CloseSvg /></button>
+        <refractive.button className="dm-close" onClick={onClose} refraction={{ radius: 18, blur: 4, bezelWidth: 1 }}><CloseSvg /></refractive.button>
 
         {/* Hero — same style as library show-hero */}
         <header
@@ -347,7 +348,7 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
             <p className="dm-loading">No additional details available.</p>
           )}
         </div>
-      </div>
+      </refractive.div>
     </div>
   )
 }

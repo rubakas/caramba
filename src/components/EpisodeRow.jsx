@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { refractive } from '@hashintel/refractive'
 import { formatTime, progressPercent, truncate } from '../utils'
 
 const PlaySvg = () => (
@@ -93,7 +94,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
             <MoreSvg />
           </button>
           {menuOpen && (
-            <div ref={menuRef} className="ep-popover">
+            <refractive.div ref={menuRef} className="ep-popover" refraction={{ radius: 10, blur: 8, bezelWidth: 2 }}>
               <button
                 className="ep-popover-item"
                 onClick={() => { onToggle(ep.id); setMenuOpen(false) }}
@@ -117,7 +118,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                 <span className="ep-popover-icon">{'\u2197'}</span>
                 <span>Open in Default Player</span>
               </button>
-            </div>
+            </refractive.div>
           )}
         </div>
       </div>

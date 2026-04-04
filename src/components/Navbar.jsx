@@ -1,4 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 
 const PlayIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -17,7 +18,10 @@ export default function Navbar({ active, actions, rightContent }) {
   ]
 
   return (
-    <nav className="topnav">
+    <refractive.nav
+      className="topnav"
+      refraction={{ radius: 0, blur: 8, bezelWidth: 1 }}
+    >
       <a className="topnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
         Caramba
       </a>
@@ -38,6 +42,6 @@ export default function Navbar({ active, actions, rightContent }) {
           {actions}
         </div>
       )}
-    </nav>
+    </refractive.nav>
   )
 }

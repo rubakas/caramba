@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { refractive } from '@hashintel/refractive'
 
 export default function UpdatePrompt() {
   const [phase, setPhase] = useState('idle') // idle | available | downloading | ready
@@ -58,7 +59,7 @@ export default function UpdatePrompt() {
   if (phase === 'idle') return null
 
   return (
-    <div className="update-prompt">
+    <refractive.div className="update-prompt" refraction={{ radius: 16, blur: 6, bezelWidth: 2 }}>
       <div className="update-prompt-body">
         {phase === 'available' && (
           <>
@@ -100,6 +101,6 @@ export default function UpdatePrompt() {
           </>
         )}
       </div>
-    </div>
+    </refractive.div>
   )
 }

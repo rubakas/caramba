@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import SeasonTabs from '../components/SeasonTabs'
@@ -220,7 +221,7 @@ export default function SeriesShow() {
           <>
             {/* Resume CTA */}
             {showResumeCta && (
-              <div className="cta-card cta-resume">
+              <refractive.div className="cta-card cta-resume" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
                 <div className="cta-content">
                   <span className="cta-label">Resume Where You Left Off</span>
                   <div className="cta-episode">
@@ -239,12 +240,12 @@ export default function SeriesShow() {
                 <button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)}>
                   {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
                 </button>
-              </div>
+              </refractive.div>
             )}
 
             {/* Next Up / Start / All Caught Up */}
             {nextEp ? (
-              <div className="cta-card">
+              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
                 <div className="cta-content">
                   <span className="cta-label">Up Next</span>
                   <div className="cta-episode">
@@ -258,10 +259,10 @@ export default function SeriesShow() {
                 <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)}>
                   {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
                 </button>
-              </div>
+              </refractive.div>
             ) : !lastWatched ? (
               episodes.length > 0 && (
-                <div className="cta-card">
+                <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
                   <div className="cta-content">
                     <span className="cta-label">Start Watching</span>
                     <div className="cta-episode">
@@ -272,26 +273,26 @@ export default function SeriesShow() {
                   <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)}>
                     {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
                   </button>
-                </div>
+                </refractive.div>
               )
             ) : allWatched ? (
-              <div className="cta-card">
+              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2 }}>
                 <div className="cta-content">
                   <span className="cta-label">All Caught Up</span>
                   <div className="cta-episode">
                     <span className="cta-ep-title">You've watched all {seasons.length} seasons</span>
                   </div>
                 </div>
-              </div>
+              </refractive.div>
             ) : null}
 
             {/* Stats */}
             <div className="stats-row">
-              <div className="stat"><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></div>
-              <div className="stat"><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></div>
-              <div className="stat"><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></div>
-              {totalEps > 0 && <div className="stat"><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></div>}
-              {totalHours && <div className="stat"><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></div>}
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></refractive.div>
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></refractive.div>
+              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></refractive.div>
+              {totalEps > 0 && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></refractive.div>}
+              {totalHours && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1 }}><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></refractive.div>}
             </div>
 
             {/* Season Tabs */}
