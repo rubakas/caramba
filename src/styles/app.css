@@ -1,15 +1,17 @@
 /* ================================================================
-   Caramba — Apple TV+ Inspired Design
+   Caramba — Apple TV+ Inspired Design with Liquid Glass
    ================================================================
    Design principles:
    - Pure black canvas (#000)
    - Inter font (closest web analog to SF Pro)
    - Generous whitespace
-   - Subtle glassmorphism on cards
+   - Liquid Glass: lensing/refraction via @hashintel/refractive,
+     specular highlights, multi-layer shadows, interaction glow,
+     materialization animations, scroll-edge dissolve
    - Minimal accent color (soft blue #0A84FF for interactive,
      green #30D158 for watched states)
-   - Rounded corners everywhere
-   - Elegant, restrained animations
+   - Rounded corners everywhere (concentric with device edges)
+   - Elegant, restrained animations with spring physics
    ================================================================ */
 
 /* -- Reset & Base ------------------------------------------------ */
@@ -34,6 +36,37 @@
   --radius-sm: 8px;
   --radius-lg: 16px;
   --nav-h: 52px;
+
+  /* -- Liquid Glass tokens ---------------------------------------- */
+  /* Specular highlight: top-left light source, simulates environment lighting */
+  --glass-highlight: linear-gradient(
+    135deg,
+    rgba(255,255,255,.12) 0%,
+    rgba(255,255,255,.04) 40%,
+    transparent 70%
+  );
+  /* Larger surface highlight (modals, CTA cards) — thicker glass = softer glow */
+  --glass-highlight-lg: linear-gradient(
+    135deg,
+    rgba(255,255,255,.10) 0%,
+    rgba(255,255,255,.03) 50%,
+    transparent 75%
+  );
+  /* Interaction glow — radial illumination from center, used on hover/active */
+  --glass-glow: radial-gradient(
+    ellipse at var(--glow-x, 50%) var(--glow-y, 50%),
+    rgba(255,255,255,.08) 0%,
+    transparent 70%
+  );
+  /* Multi-layer shadow for depth — Apple uses soft, layered shadows */
+  --glass-shadow-sm: 0 1px 2px rgba(0,0,0,.2), 0 4px 12px rgba(0,0,0,.15);
+  --glass-shadow-md: 0 2px 4px rgba(0,0,0,.2), 0 8px 24px rgba(0,0,0,.2), 0 16px 48px rgba(0,0,0,.1);
+  --glass-shadow-lg: 0 4px 8px rgba(0,0,0,.2), 0 16px 40px rgba(0,0,0,.25), 0 32px 80px rgba(0,0,0,.15);
+  /* Bezel edge: thin inner highlight at the very top edge */
+  --glass-edge-top: inset 0 1px 0 rgba(255,255,255,.08);
+  --glass-edge-all: inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(255,255,255,.02);
+  /* Scroll-edge fade mask for content dissolving under navbar */
+  --scroll-fade: linear-gradient(to bottom, transparent 0px, black 32px);
 }
 
 html { scroll-behavior: smooth; }
@@ -64,29 +97,52 @@ body {
 }
 
 .toast {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  background: rgba(44, 44, 46, 0.4);
+  background: rgba(44, 44, 46, 0.22);
   color: var(--text-primary);
   padding: 12px 20px;
   font-size: 14px;
   font-weight: 500;
-  border: 1px solid var(--border);
-  box-shadow: 0 8px 32px rgba(0,0,0,.4);
-  animation: toast-in .4s cubic-bezier(.16,1,.3,1);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
+  animation: glass-materialize-in .4s cubic-bezier(.16,1,.3,1);
   cursor: pointer;
   pointer-events: auto;
+  overflow: hidden;
 }
+/* Specular highlight */
+.toast::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+  border-radius: inherit;
+}
+/* Interaction glow on hover */
+.toast::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-glow);
+  opacity: 0;
+  transition: opacity .2s;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.toast:hover::after { opacity: 1; }
 .toast--error {
-  background: rgba(255,69,58,.15);
-  border-color: rgba(255,69,58,.3);
+  background: rgba(255,69,58,.08);
+  border-color: rgba(255,69,58,.15);
   color: var(--text-primary);
 }
 .toast--error .toast-icon { color: var(--red); }
 .toast--success {
-  background: rgba(48,209,88,.12);
-  border-color: rgba(48,209,88,.25);
+  background: rgba(48,209,88,.06);
+  border-color: rgba(48,209,88,.12);
 }
 .toast--success .toast-icon { color: var(--green); }
 .toast--info .toast-icon { color: var(--accent); }
@@ -100,9 +156,30 @@ body {
   line-height: 1.4;
 }
 
-.toast.fade-out { animation: toast-out .4s ease forwards; }
-@keyframes toast-in  { from { opacity:0; transform: translateY(-20px); } }
-@keyframes toast-out { to   { opacity:0; transform: translateY(-20px); } }
+.toast.fade-out { animation: glass-materialize-out .4s ease forwards; }
+
+/* Liquid Glass materialization: elements appear by scaling up and increasing
+   backdrop-filter intensity, not simply fading opacity.  The subtle scale
+   simulates the "lensing increases" effect described in the WWDC25 session. */
+@keyframes glass-materialize-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(.92);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes glass-materialize-out {
+  to {
+    opacity: 0;
+    transform: translateY(-12px) scale(.92);
+    filter: blur(4px);
+  }
+}
 
 .alert {
   background: rgba(255,69,58,.12);
@@ -133,9 +210,29 @@ body {
   display: flex;
   align-items: center;
   padding: 0 48px 0 84px;
-  background: rgba(0,0,0,.35);
-  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,.18);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
   -webkit-app-region: drag;
+}
+/* Specular highlight layer on navbar */
+.topnav::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+}
+/* Scroll-edge dissolve: content fades out as it scrolls under the navbar */
+.topnav::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: 100%;
+  height: 32px;
+  background: linear-gradient(to bottom, rgba(0,0,0,.6), transparent);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .topnav-brand,
@@ -211,15 +308,33 @@ body {
 
 /* -- Now Playing Bar --------------------------------------------- */
 .now-playing-bar {
+  position: relative;
   margin: 12px 48px;
   padding: 12px 20px;
-  background: rgba(48,209,88,.05);
-  border: 1px solid rgba(48,209,88,.15);
+  background: rgba(48,209,88,.03);
+  border: 1px solid rgba(48,209,88,.08);
   border-radius: var(--radius);
   display: flex;
   align-items: center;
   gap: 14px;
   font-size: 13px;
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-sm);
+  overflow: hidden;
+  animation: glass-materialize-in .5s cubic-bezier(.16,1,.3,1);
+}
+/* Green-tinted specular highlight */
+.now-playing-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(48,209,88,.08) 0%,
+    rgba(255,255,255,.04) 40%,
+    transparent 70%
+  );
+  pointer-events: none;
+  border-radius: inherit;
 }
 .np-dot {
   width: 8px; height: 8px;
@@ -376,11 +491,22 @@ body {
 }
 
 .card-rating {
-  background: rgba(0,0,0,.3);
+  position: relative;
+  background: rgba(0,0,0,.18);
   color: #fff;
   font-size: 12px;
   font-weight: 700;
   padding: 4px 10px;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
+}
+.card-rating::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+  border-radius: inherit;
 }
 
 .card-badge-resume {
@@ -582,24 +708,61 @@ body {
 
 /* -- CTA / Continue Watching Cards ------------------------------- */
 .cta-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 24px;
   padding: 24px 28px;
-  background: rgba(28, 28, 30, 0.4);
-  border: 1px solid var(--border);
+  background: rgba(28, 28, 30, 0.2);
+  border: 1px solid rgba(255,255,255,.06);
   margin-bottom: 12px;
   margin-top: 24px;
-  transition: background .2s, border-color .2s;
+  transition: background .2s, border-color .2s, box-shadow .3s;
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-sm);
+  overflow: hidden;
+}
+/* Specular highlight */
+.cta-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight-lg);
+  pointer-events: none;
+  border-radius: inherit;
+}
+/* Interaction glow */
+.cta-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-glow);
+  opacity: 0;
+  transition: opacity .25s;
+  pointer-events: none;
+  border-radius: inherit;
 }
 .cta-card:first-of-type { margin-top: 32px; }
-.cta-card:hover { background: var(--surface-hover); border-color: var(--border-focus); }
+.cta-card:hover {
+  background: rgba(44, 44, 46, 0.25);
+  border-color: rgba(255,255,255,.1);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
+}
+.cta-card:hover::after { opacity: 1; }
 
 .cta-resume {
-  border-color: rgba(255,159,10,.2);
-  background: rgba(255,159,10,.03);
+  border-color: rgba(255,159,10,.1);
+  background: rgba(255,159,10,.02);
 }
-.cta-resume:hover { background: rgba(255,159,10,.06); border-color: rgba(255,159,10,.3); }
+/* Amber-tinted specular highlight for resume CTA */
+.cta-resume::before {
+  background: linear-gradient(
+    135deg,
+    rgba(255,159,10,.08) 0%,
+    rgba(255,255,255,.03) 50%,
+    transparent 75%
+  );
+}
+.cta-resume:hover { background: rgba(255,159,10,.04); border-color: rgba(255,159,10,.18); }
 
 .cta-content { flex: 1; min-width: 0; }
 
@@ -705,13 +868,25 @@ body {
   margin: 24px 0 8px;
 }
 .stat {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   flex: 1;
   padding: 20px 16px;
-  background: rgba(28, 28, 30, 0.4);
-  border: 1px solid var(--border);
+  background: rgba(28, 28, 30, 0.18);
+  border: 1px solid rgba(255,255,255,.05);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
+}
+/* Specular highlight */
+.stat::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+  border-radius: inherit;
 }
 .stat-val {
   font-size: 28px;
@@ -967,11 +1142,35 @@ body {
   top: calc(100% + 6px);
   right: 0;
   min-width: 190px;
-  background: rgba(28, 28, 30, 0.45);
-  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(28, 28, 30, 0.22);
+  border: 1px solid rgba(255,255,255,.08);
   padding: 4px 0;
-  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
   z-index: 100;
+  overflow: hidden;
+  animation: glass-pop-open .2s cubic-bezier(.16,1,.3,1);
+}
+/* Specular highlight */
+.ep-popover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight-lg);
+  pointer-events: none;
+  border-radius: inherit;
+}
+/* Popover materialization: "bubble pops open" per Apple's description */
+@keyframes glass-pop-open {
+  from {
+    opacity: 0;
+    transform: scale(.9) translateY(-4px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
 }
 
 .ep-popover-item {
@@ -1356,19 +1555,21 @@ body {
   height: 32px;
   border-radius: 50%;
   border: none;
-  background: rgba(0,0,0,.6);
+  background: rgba(0,0,0,.25);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color .2s, background .2s;
+  transition: color .2s, background .2s, box-shadow .2s;
   z-index: 2;
   -webkit-app-region: no-drag;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
 }
 .discover-watchlist-btn:hover {
-  background: rgba(0,0,0,.8);
+  background: rgba(0,0,0,.4);
   color: var(--text-primary);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-md);
 }
 .discover-watchlist-btn.active {
   color: var(--accent);
@@ -1411,14 +1612,33 @@ body {
   max-height: 90vh;
   overflow-y: auto;
   overflow-x: hidden;
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid var(--border);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .7);
-  animation: dm-slide-up .25s ease;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-lg);
+  animation: glass-modal-in .3s cubic-bezier(.16,1,.3,1);
 }
-@keyframes dm-slide-up {
-  from { opacity: 0; transform: translateY(24px) scale(.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+/* Specular highlight — large surface, softer spread */
+.dm-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight-lg);
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 1;
+}
+/* Materialization: scale + blur fade, not just opacity */
+@keyframes glass-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(.96);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
 }
 
 .dm-close {
@@ -1429,18 +1649,30 @@ body {
   width: 36px;
   height: 36px;
   border: none;
-  background: rgba(0, 0, 0, .25);
+  background: rgba(0, 0, 0, .15);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background .15s, color .15s;
+  transition: background .15s, color .15s, box-shadow .2s;
   -webkit-app-region: no-drag;
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-sm);
+  overflow: hidden;
+}
+/* Specular highlight */
+.dm-close::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+  border-radius: inherit;
 }
 .dm-close:hover {
-  background: rgba(0, 0, 0, .75);
+  background: rgba(0, 0, 0, .4);
   color: var(--text-primary);
+  box-shadow: var(--glass-edge-top), var(--glass-shadow-md);
 }
 
 /* Hero */
@@ -2058,12 +2290,23 @@ body {
   right: 0;
   min-width: 220px;
   max-width: 320px;
-  background: rgba(28, 28, 30, 0.45);
-  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(28, 28, 30, 0.22);
+  border: 1px solid rgba(255,255,255,.08);
   border-radius: 12px;
   padding: 8px 0;
-  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
   z-index: 20;
+  overflow: hidden;
+  animation: glass-pop-open .2s cubic-bezier(.16,1,.3,1);
+}
+/* Specular highlight */
+.video-player-track-popover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight-lg);
+  pointer-events: none;
+  border-radius: inherit;
 }
 
 .track-popover-section + .track-popover-section {
@@ -2197,16 +2440,26 @@ body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 500;
-  background: rgba(44, 44, 46, 0.4);
-  border: 1px solid var(--border);
-  box-shadow: 0 8px 40px rgba(0,0,0,.6);
+  background: rgba(44, 44, 46, 0.2);
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow: var(--glass-edge-all), var(--glass-shadow-md);
   padding: 14px 18px;
   display: flex;
   align-items: center;
   gap: 14px;
   min-width: 400px;
   max-width: 540px;
-  animation: toast-in .4s cubic-bezier(.16,1,.3,1);
+  animation: glass-materialize-in .4s cubic-bezier(.16,1,.3,1);
+  overflow: hidden;
+}
+/* Specular highlight */
+.update-prompt::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--glass-highlight);
+  pointer-events: none;
+  border-radius: inherit;
 }
 
 .update-prompt-body { flex: 1; min-width: 0; }
