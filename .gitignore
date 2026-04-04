@@ -11,8 +11,6 @@ storage/*.sqlite3-*
 storage/sync_config.json
 rails
 
-# Build artifacts
-
 # Bundled binaries (downloaded by bin/setup-ffmpeg)
 vendor/ffmpeg
 vendor/ffmpeg-linux
