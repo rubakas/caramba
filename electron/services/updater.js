@@ -222,9 +222,9 @@ async function installUpdate(filePath) {
 async function installMac(dmgPath) {
   const log = (...args) => console.log('Updater [installMac]:', ...args)
 
-  // Mount the DMG
+  // Mount the DMG (-nobrowse prevents Finder from showing it, no -quiet so we get mount point output)
   log('Mounting', dmgPath)
-  const { stdout } = await execFileAsync('hdiutil', ['attach', '-nobrowse', '-quiet', dmgPath])
+  const { stdout } = await execFileAsync('hdiutil', ['attach', '-nobrowse', dmgPath])
 
   // Parse mount point: last tab-delimited field of last non-empty line
   const mountPoint = stdout.trim().split('\n').pop().split('\t').pop().trim()
