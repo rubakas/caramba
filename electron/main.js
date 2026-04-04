@@ -1,5 +1,6 @@
-const { app, BrowserWindow, shell, protocol, net } = require('electron')
+const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const { Readable } = require('stream')
 const db = require('./db')
 const dbSync = require('./services/db-sync')
@@ -128,6 +129,15 @@ function createWindow() {
   discoverIpc.register()
   updaterIpc.register(mainWindow)
 
+  // Dev-only: save glass config to src/config/glass.json for playground persistence
+  if (!app.isPackaged) {
+    ipcMain.handle('dev:saveGlassConfig', async (_event, config) => {
+      const configPath = path.join(__dirname, '..', 'src', 'config', 'glass.json')
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8')
+      return { ok: true }
+    })
+  }
+
   // Load the React app
   if (process.env.VITE_DEV_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_URL)
@@ -187,7 +197,7 @@ app.whenReady().then(() => {
   // Register subtitle:// protocol — serves VTT with timestamps shifted by seek offset
   protocol.handle('subtitle', () => {
     if (!rawSubtitleCache) {
-      return new Response('No subtitles', { status: 404 })
+      return new Response('No subtitles', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } })
     }
 
     // Shift timestamps so cues align with video.currentTime (which starts at 0 after each seek)
@@ -198,6 +208,7 @@ app.whenReady().then(() => {
       headers: {
         'Content-Type': 'text/vtt; charset=utf-8',
         'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
       },
     })
   })

@@ -1,9 +1,11 @@
 import { useNavigate } from 'react-router-dom'
-import { refractive, lip } from '@hashintel/refractive'
+import { refractive } from '@hashintel/refractive'
 import { genresList, premiereYear, statusClass, progressPercent, runtimeDisplay, isInProgress } from '../utils'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function PosterCard({ item, type = 'series', resumable = false }) {
   const navigate = useNavigate()
+  const ratingBadgeGlass = useGlassConfig('rating-badge')
 
   const name = type === 'series' ? item.name : item.title
   const poster = item.poster_url
@@ -33,7 +35,7 @@ export default function PosterCard({ item, type = 'series', resumable = false })
           <div className="card-poster-fallback">{name?.[0] || '?'}</div>
         )}
         <div className="card-overlay">
-          {rating ? <refractive.span className="card-rating" refraction={{ radius: 8, blur: 4, bezelWidth: 1, glassThickness: 50, specularOpacity: 0.3, refractiveIndex: 1.6, bezelHeightFn: lip }}>{rating}</refractive.span> : <span />}
+          {rating ? <refractive.span className="card-rating" refraction={ratingBadgeGlass}>{rating}</refractive.span> : <span />}
           {type === 'series' && resumable && <span className="card-badge-resume">Resume</span>}
           {type === 'movie' && movieInProgress && <span className="card-badge-resume">Resume</span>}
           {type === 'movie' && item.watched && !movieInProgress && <span className="card-badge-watched">Watched</span>}

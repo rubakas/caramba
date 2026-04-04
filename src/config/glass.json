@@ -1,0 +1,101 @@
+{
+  "defaults": {
+    "blur": 2,
+    "bezelWidth": 6,
+    "glassThickness": 50,
+    "specularOpacity": 0.1,
+    "refractiveIndex": 1.3,
+    "bezelHeightFn": "convexCircle"
+  },
+  "navbar": {
+    "radius": 11,
+    "blur": 8
+  },
+  "now-playing": {
+    "radius": 12
+  },
+  "toast": {
+    "radius": 24
+  },
+  "rating-badge": {
+    "radius": 8,
+    "blur": 8,
+    "bezelHeightFn": "lip"
+  },
+  "popover": {
+    "radius": 10,
+    "blur": 8
+  },
+  "update-prompt": {
+    "radius": 16
+  },
+  "close-btn": {
+    "radius": 18,
+    "bezelHeightFn": "lip"
+  },
+  "skip-btn": {
+    "radius": 24
+  },
+  "play-btn": {
+    "radius": 36
+  },
+  "utility-pill": {
+    "radius": 14
+  },
+  "track-popover": {
+    "radius": 12,
+    "blur": 8
+  },
+  "discover-modal": {
+    "radius": 16,
+    "bezelHeightFn": "convex"
+  },
+  "dm-close": {
+    "radius": 18
+  },
+  "cta-card": {
+    "radius": 16
+  },
+  "stat-chip": {
+    "radius": 12,
+    "bezelHeightFn": "convex"
+  },
+  "watchlist-btn": {
+    "radius": 16,
+    "blur": 8,
+    "bezelHeightFn": "lip"
+  },
+  "nav-action": {
+    "radius": 20
+  },
+  "nav-btn": {
+    "radius": 20
+  },
+  "primary-btn": {
+    "radius": 24
+  },
+  "play-cta": {
+    "radius": 24
+  },
+  "filter-btn": {
+    "radius": 20
+  },
+  "clear-btn": {
+    "radius": 12,
+    "bezelHeightFn": "lip"
+  },
+  "dm-action": {
+    "radius": 24
+  },
+  "season-tab": {
+    "radius": 20
+  },
+  "ep-play": {
+    "radius": 18,
+    "bezelHeightFn": "lip"
+  },
+  "ep-more": {
+    "radius": 18,
+    "bezelHeightFn": "lip"
+  }
+}

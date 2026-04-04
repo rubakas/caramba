@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
+import { useGlassConfig } from '../config/useGlassConfig'
 import NowPlaying from '../components/NowPlaying'
 import SeasonTabs from '../components/SeasonTabs'
 import EpisodeRow from '../components/EpisodeRow'
@@ -141,6 +142,12 @@ export default function SeriesShow() {
   const completePct = totalEps > 0 ? Math.round((watchedCount / totalEps) * 100) : 0
   const totalHours = series.total_watch_time > 0 ? (series.total_watch_time / 3600).toFixed(1) : null
 
+  const ctaCardGlass = useGlassConfig('cta-card')
+  const statChipGlass = useGlassConfig('stat-chip')
+  const navBtnGlass = useGlassConfig('nav-btn')
+  const playCtaGlass = useGlassConfig('play-cta')
+  const primaryBtnGlass = useGlassConfig('primary-btn')
+
   // Determine last watched episode
   const lastWatched = [...episodes].filter(e => e.watched).sort((a, b) => {
     if (a.season_number !== b.season_number) return b.season_number - a.season_number
@@ -157,9 +164,9 @@ export default function SeriesShow() {
         active="Episodes"
         actions={
           <>
-            <button className="topnav-btn" onClick={handleScan}>Rescan</button>
-            <button className="topnav-btn" onClick={handleRefresh}>Refresh</button>
-            <button className="topnav-btn topnav-btn--danger" onClick={handleRemove}>Remove</button>
+            <refractive.button className="topnav-btn" onClick={handleScan} refraction={navBtnGlass}>Rescan</refractive.button>
+            <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
+            <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
         }
       />
@@ -215,13 +222,13 @@ export default function SeriesShow() {
           <div className="empty-hero" style={{ padding: '60px 0' }}>
             <h2>No episodes found</h2>
             <p>Scan the media folder to load episodes.</p>
-            <button className="btn-primary" onClick={handleScan}>Scan Media Folder</button>
+            <refractive.button className="btn-primary" onClick={handleScan} refraction={primaryBtnGlass}>Scan Media Folder</refractive.button>
           </div>
         ) : (
           <>
             {/* Resume CTA */}
             {showResumeCta && (
-              <refractive.div className="cta-card cta-resume" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
+              <refractive.div className="cta-card cta-resume" refraction={ctaCardGlass}>
                 <div className="cta-content">
                   <span className="cta-label">Resume Where You Left Off</span>
                   <div className="cta-episode">
@@ -237,15 +244,15 @@ export default function SeriesShow() {
                     </span>
                   </div>
                 </div>
-                <button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)}>
+                <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass}>
                   {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
-                </button>
+                </refractive.button>
               </refractive.div>
             )}
 
             {/* Next Up / Start / All Caught Up */}
             {nextEp ? (
-              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
+              <refractive.div className="cta-card" refraction={ctaCardGlass}>
                 <div className="cta-content">
                   <span className="cta-label">Up Next</span>
                   <div className="cta-episode">
@@ -256,13 +263,13 @@ export default function SeriesShow() {
                     <p className="cta-desc">{truncate(nextEp.description, 150)}</p>
                   )}
                 </div>
-                <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)}>
+                <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass}>
                   {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
-                </button>
+                </refractive.button>
               </refractive.div>
             ) : !lastWatched ? (
               episodes.length > 0 && (
-                <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
+                <refractive.div className="cta-card" refraction={ctaCardGlass}>
                   <div className="cta-content">
                     <span className="cta-label">Start Watching</span>
                     <div className="cta-episode">
@@ -270,13 +277,13 @@ export default function SeriesShow() {
                       <span className="cta-ep-title">{episodes[0].title}</span>
                     </div>
                   </div>
-                  <button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)}>
+                  <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass}>
                     {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
-                  </button>
+                  </refractive.button>
                 </refractive.div>
               )
             ) : allWatched ? (
-              <refractive.div className="cta-card" refraction={{ radius: 16, blur: 4, bezelWidth: 2, glassThickness: 90, specularOpacity: 0.12, refractiveIndex: 1.4 }}>
+              <refractive.div className="cta-card" refraction={ctaCardGlass}>
                 <div className="cta-content">
                   <span className="cta-label">All Caught Up</span>
                   <div className="cta-episode">
@@ -288,11 +295,11 @@ export default function SeriesShow() {
 
             {/* Stats */}
             <div className="stats-row">
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></refractive.div>
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></refractive.div>
-              <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></refractive.div>
-              {totalEps > 0 && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></refractive.div>}
-              {totalHours && <refractive.div className="stat" refraction={{ radius: 12, blur: 4, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></refractive.div>}
+              <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{seasons.length}</span><span className="stat-lbl">Seasons</span></refractive.div>
+              <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{totalEps}</span><span className="stat-lbl">Episodes</span></refractive.div>
+              <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{watchedCount}</span><span className="stat-lbl">Watched</span></refractive.div>
+              {totalEps > 0 && <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{completePct}%</span><span className="stat-lbl">Complete</span></refractive.div>}
+              {totalHours && <refractive.div className="stat" refraction={statChipGlass}><span className="stat-val">{totalHours}</span><span className="stat-lbl">Hours</span></refractive.div>}
             </div>
 
             {/* Season Tabs */}

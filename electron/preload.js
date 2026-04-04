@@ -84,4 +84,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('updater:download-progress', handler)
     return () => ipcRenderer.removeListener('updater:download-progress', handler)
   },
+
+  // Dev-only: save glass config (playground → glass.json)
+  saveGlassConfig: (config) => ipcRenderer.invoke('dev:saveGlassConfig', config),
 })

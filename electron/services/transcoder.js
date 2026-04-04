@@ -251,12 +251,20 @@ async function extractSubtitles(filePath, streamIndex) {
     ]
     const proc = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
+    let stderr = ''
     proc.stdout.on('data', d => { stdout += d })
+    proc.stderr.on('data', d => { stderr += d })
     proc.on('close', code => {
-      if (code !== 0 || !stdout.trim()) return resolve(null)
+      if (code !== 0 || !stdout.trim()) {
+        console.warn(`[Subtitle] ffmpeg extract failed: code=${code}, stderr=${stderr.slice(0, 300)}`)
+        return resolve(null)
+      }
       resolve(stdout)
     })
-    proc.on('error', () => resolve(null))
+    proc.on('error', (err) => {
+      console.error('[Subtitle] ffmpeg spawn error:', err)
+      resolve(null)
+    })
   })
 }
 

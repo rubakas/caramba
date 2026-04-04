@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import PosterCard from '../components/PosterCard'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 const FilmIcon = () => (
   <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -19,6 +21,8 @@ export default function Library() {
   const [seriesList, setSeriesList] = useState([])
   const [resumables, setResumables] = useState({})
   const [loading, setLoading] = useState(true)
+  const navActionGlass = useGlassConfig('nav-action')
+  const primaryBtnGlass = useGlassConfig('primary-btn')
 
   const loadData = useCallback(async () => {
     try {
@@ -52,7 +56,7 @@ export default function Library() {
   if (loading) return (
     <>
       <Navbar active="Library" rightContent={
-        <a className="topnav-action" onClick={() => navigate('/series/new')}>+ Add Series</a>
+        <refractive.a className="topnav-action" onClick={() => navigate('/series/new')} refraction={navActionGlass}>+ Add Series</refractive.a>
       } />
       <div style={{ padding: '120px 48px', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading...</div>
     </>
@@ -61,7 +65,7 @@ export default function Library() {
   return (
     <>
       <Navbar active="Library" rightContent={
-        <a className="topnav-action" onClick={() => navigate('/series/new')}>+ Add Series</a>
+        <refractive.a className="topnav-action" onClick={() => navigate('/series/new')} refraction={navActionGlass}>+ Add Series</refractive.a>
       } />
       <NowPlaying />
       {seriesList.length === 0 ? (
@@ -69,7 +73,7 @@ export default function Library() {
           <div className="empty-icon"><FilmIcon /></div>
           <h2>Your Library is Empty</h2>
           <p>Add a series by pointing to a media folder on your Mac.</p>
-          <a className="btn-primary" onClick={() => navigate('/series/new')}>Add Your First Series</a>
+          <refractive.a className="btn-primary" onClick={() => navigate('/series/new')} refraction={primaryBtnGlass}>Add Your First Series</refractive.a>
         </main>
       ) : (
         <main className="library">

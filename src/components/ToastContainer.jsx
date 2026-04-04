@@ -1,8 +1,10 @@
 import { refractive } from '@hashintel/refractive'
 import { useToast } from '../context/ToastContext'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function ToastContainer() {
   const { toasts, dismiss } = useToast()
+  const toastGlass = useGlassConfig('toast')
 
   if (toasts.length === 0) return null
 
@@ -13,7 +15,7 @@ export default function ToastContainer() {
           key={toast.id}
           className={`toast toast--${toast.type}${toast.fading ? ' fade-out' : ''}`}
           onClick={() => dismiss(toast.id)}
-          refraction={{ radius: 980, blur: 6, bezelWidth: 2, glassThickness: 70, specularOpacity: 0.18, refractiveIndex: 1.5 }}
+          refraction={toastGlass}
         >
           <span className="toast-icon">
             {toast.type === 'error' ? '\u2718' : toast.type === 'success' ? '\u2713' : '\u24D8'}

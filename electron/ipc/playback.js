@@ -155,10 +155,16 @@ function register() {
         try {
           const main = require('../main')
           main.setSubtitleCache(vtt)
-        } catch {}
+        } catch (cacheErr) {
+          console.error('[Subtitle] failed to set subtitle cache:', cacheErr)
+        }
         return { subtitleUrl: 'subtitle://track?t=' + Date.now() }
+      } else {
+        console.warn('[Subtitle] extraction returned null for stream', subtitleStreamIndex)
       }
-    } catch {}
+    } catch (extractErr) {
+      console.error('[Subtitle] extraction error:', extractErr)
+    }
 
     return { subtitleUrl: null }
   })

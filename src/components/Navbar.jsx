@@ -1,5 +1,6 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { refractive } from '@hashintel/refractive'
+import { useGlassConfig } from '../config/useGlassConfig'
 
 const PlayIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -8,6 +9,7 @@ const PlayIcon = () => (
 export default function Navbar({ active, actions, rightContent }) {
   const navigate = useNavigate()
   const location = useLocation()
+  const navbarGlass = useGlassConfig('navbar')
 
   const links = [
     { label: 'Library', path: '/' },
@@ -15,12 +17,13 @@ export default function Navbar({ active, actions, rightContent }) {
     { label: 'Discover', path: '/discover' },
     { label: 'History', path: '/history' },
     { label: 'Settings', path: '/settings' },
+    ...(import.meta.env.DEV ? [{ label: 'Playground', path: '/playground' }] : []),
   ]
 
   return (
     <refractive.nav
       className="topnav"
-      refraction={{ radius: 0, blur: 8, bezelWidth: 1, glassThickness: 70, specularOpacity: 0.15, refractiveIndex: 1.5 }}
+      refraction={navbarGlass}
     >
       <a className="topnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
         Caramba

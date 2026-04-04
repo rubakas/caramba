@@ -191,6 +191,9 @@ export function PlayerProvider({ children }) {
     try {
       const result = await window.api.switchSubtitle(subtitleStreamIndex)
       if (result) {
+        if (result.error) {
+          console.warn('[Subtitle] switchSubtitle error:', result.error)
+        }
         setPlayerState(prev => {
           const next = { ...prev, activeSubtitleIndex: subtitleStreamIndex, subtitleUrl: result.subtitleUrl }
           savePreferences(next, { activeSubtitleIndex: subtitleStreamIndex })
