@@ -1,6 +1,6 @@
 {
   "name": "caramba",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "Caramba — Apple TV+ style episode tracker",
   "author": "Vladyslav <vladyslav@hey.com>",
   "main": "electron/main.js",
@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "electron": "vite build && electron .",
-    "dist": "vite build && electron-builder --mac --publish never",
+    "dist": "vite build && electron-builder --mac --x64 --arm64 --publish never",
     "dist:linux": "bin/build --linux"
   },
   "build": {
@@ -16,7 +16,12 @@
     "productName": "Caramba",
     "mac": {
       "category": "public.app-category.entertainment",
-      "target": "dmg",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
       "icon": "public/icon.icns",
       "extraResources": [
         {
