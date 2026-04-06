@@ -174,8 +174,9 @@ export default function MovieShow() {
   // Download state
   const dl = movie.download
   const isDownloaded = dl && dl.status === 'complete'
-  const isDownloading = dl && dl.status === 'downloading'
-  const liveDlPct = isDownloading ? (dlProgress != null ? dlProgress : dl.progress) : 0
+  // Consider downloading if either the DB record says so OR we have live progress from IPC
+  const isDownloading = (dl && dl.status === 'downloading') || dlProgress != null
+  const liveDlPct = isDownloading ? (dlProgress != null ? dlProgress : (dl ? dl.progress : 0)) : 0
 
   const renderMenu = () => (
     <>
