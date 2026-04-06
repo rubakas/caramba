@@ -42,7 +42,7 @@ contextBridge.exposeInMainWorld('api', {
   getPlaybackPreferences: (query) => ipcRenderer.invoke('playback:getPreferences', query),
   checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),
   openInVlc: (opts) => ipcRenderer.invoke('playback:openInVlc', opts),
-  openInDefault: (filePath) => ipcRenderer.invoke('playback:openInDefault', filePath),
+  openInDefault: (filePath, episodeId, movieId) => ipcRenderer.invoke('playback:openInDefault', filePath, episodeId, movieId),
   onVlcPlaybackEnded: (cb) => {
     const handler = () => cb()
     ipcRenderer.on('vlc-playback-ended', handler)
@@ -93,4 +93,20 @@ contextBridge.exposeInMainWorld('api', {
 
   // Dev-only: save glass config (playground → glass.json)
   saveGlassConfig: (config) => ipcRenderer.invoke('dev:saveGlassConfig', config),
+
+  // Downloads (offline media cache)
+  downloadEpisode: (episodeId) => ipcRenderer.invoke('downloads:episode', episodeId),
+  downloadSeason: (seriesId, seasonNumber) => ipcRenderer.invoke('downloads:season', seriesId, seasonNumber),
+  downloadMovie: (movieId) => ipcRenderer.invoke('downloads:movie', movieId),
+  cancelDownload: (downloadId) => ipcRenderer.invoke('downloads:cancel', downloadId),
+  deleteDownloadEpisode: (episodeId) => ipcRenderer.invoke('downloads:deleteEpisode', episodeId),
+  deleteDownloadSeason: (seriesId, seasonNumber) => ipcRenderer.invoke('downloads:deleteSeason', seriesId, seasonNumber),
+  deleteDownloadMovie: (movieId) => ipcRenderer.invoke('downloads:deleteMovie', movieId),
+  listDownloads: () => ipcRenderer.invoke('downloads:list'),
+  getStorageInfo: () => ipcRenderer.invoke('downloads:storageInfo'),
+  onMediaDownloadProgress: (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('downloads:progress', handler)
+    return () => ipcRenderer.removeListener('downloads:progress', handler)
+  },
 })

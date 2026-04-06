@@ -2,11 +2,16 @@
 
 const { ipcMain } = require('electron')
 const db = require('../db')
+const { resolvePlaybackPath } = require('./downloads')
 
 function register() {
   ipcMain.handle('episodes:play', async (_e, episodeId) => {
     const episode = db.episodes.findById(episodeId)
     if (!episode) return { error: 'Episode not found' }
+
+    // Resolve file path: prefer downloaded copy, fall back to original
+    const filePath = resolvePlaybackPath(episode.file_path, episodeId, null)
+    if (!filePath) return { error: 'File not found: ' + (episode.file_path || '(no path)') }
 
     // Mark all prior episodes as watched
     db.episodes.markPriorWatched(episode.series_id, episode.season_number, episode.episode_number)
@@ -28,7 +33,7 @@ function register() {
       episode_id: episodeId,
       series_id: episode.series_id,
       watch_history_id: wh.id,
-      file_path: episode.file_path,
+      file_path: filePath,
       start_time: startTime,
     }
   })

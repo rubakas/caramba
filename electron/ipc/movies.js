@@ -3,6 +3,7 @@
 const { ipcMain } = require('electron')
 const db = require('../db')
 const movieMetadata = require('../services/movie-metadata')
+const { resolvePlaybackPath } = require('./downloads')
 
 function register() {
   ipcMain.handle('movies:list', () => {
@@ -10,7 +11,10 @@ function register() {
   })
 
   ipcMain.handle('movies:get', (_e, slug) => {
-    return db.movies.findBySlug(slug)
+    const movie = db.movies.findBySlug(slug)
+    if (!movie) return null
+    const dl = db.downloads.forMovie(movie.id)
+    return { ...movie, download: dl }
   })
 
   ipcMain.handle('movies:add', async (_e, filePaths) => {
@@ -31,6 +35,10 @@ function register() {
     const movie = db.movies.findBySlug(slug)
     if (!movie) return { error: 'Movie not found' }
 
+    // Resolve file path: prefer downloaded copy, fall back to original
+    const filePath = resolvePlaybackPath(movie.file_path, null, movie.id)
+    if (!filePath) return { error: 'File not found: ' + (movie.file_path || '(no path)') }
+
     db.movies.markWatched(movie.id)
 
     const startTime = movie.progress_seconds > 0 &&
@@ -41,7 +49,7 @@ function register() {
     // Return info the renderer needs to start the stream
     return {
       movie_id: movie.id,
-      file_path: movie.file_path,
+      file_path: filePath,
       start_time: startTime,
     }
   })
@@ -66,6 +74,11 @@ function register() {
   ipcMain.handle('movies:destroy', (_e, slug) => {
     const movie = db.movies.findBySlug(slug)
     if (!movie) return false
+    // Clean up downloaded file before destroying (CASCADE will delete DB record)
+    const dl = db.downloads.forMovie(movie.id)
+    if (dl) {
+      try { fs.unlinkSync(dl.file_path) } catch {}
+    }
     db.movies.destroy(movie.id)
     return true
   })

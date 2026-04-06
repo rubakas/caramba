@@ -27,6 +27,7 @@ export default function SeriesShow() {
   const [activeSeason, setActiveSeason] = useState(null)
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState({}) // episodeId -> progress (0-1)
 
   const loadData = useCallback(async () => {
     try {
@@ -60,9 +61,28 @@ export default function SeriesShow() {
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
     const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+
+    // Listen for download progress events
+    const unsubDl = window.api.onMediaDownloadProgress((data) => {
+      if (data.episodeId) {
+        if (data.status === 'downloading') {
+          setDownloadProgress(prev => ({ ...prev, [data.episodeId]: data.progress }))
+        } else {
+          // On complete/failed, clear live progress and reload data
+          setDownloadProgress(prev => {
+            const next = { ...prev }
+            delete next[data.episodeId]
+            return next
+          })
+          loadData()
+        }
+      }
+    })
+
     return () => {
       window.removeEventListener('playback-stopped', handleStop)
       unsubVlc()
+      unsubDl()
     }
   }, [loadData])
 
@@ -99,8 +119,50 @@ export default function SeriesShow() {
   const handleOpenInDefault = async (episodeId) => {
     const ep = episodes.find(e => e.id === episodeId)
     if (!ep?.file_path) return
-    const result = await window.api.openInDefault(ep.file_path)
+    const result = await window.api.openInDefault(ep.file_path, episodeId)
     if (result?.error) showToast(result.error, { type: 'error' })
+  }
+
+  const handleDownloadEpisode = async (episodeId) => {
+    showToast('Starting download...', { type: 'info', duration: 2000 })
+    const result = await window.api.downloadEpisode(episodeId)
+    if (result?.error) {
+      showToast(result.error, { type: 'error' })
+    } else if (result?.ok) {
+      showToast('Download complete', { type: 'success' })
+      loadData()
+    }
+  }
+
+  const handleDeleteDownloadEpisode = async (episodeId) => {
+    await window.api.deleteDownloadEpisode(episodeId)
+    showToast('Download deleted', { type: 'info', duration: 2000 })
+    loadData()
+  }
+
+  const handleDownloadSeason = async (seasonNumber) => {
+    if (!series) return
+    showToast(`Downloading Season ${seasonNumber}...`, { type: 'info', duration: 3000 })
+    const result = await window.api.downloadSeason(series.id, seasonNumber)
+    if (result?.error) {
+      showToast(result.error, { type: 'error' })
+    } else if (result?.results) {
+      const ok = result.results.filter(r => r.ok).length
+      const skipped = result.results.filter(r => r.skipped).length
+      const failed = result.results.filter(r => r.error).length
+      let msg = `Season ${seasonNumber}: ${ok} downloaded`
+      if (skipped > 0) msg += `, ${skipped} skipped`
+      if (failed > 0) msg += `, ${failed} failed`
+      showToast(msg, { type: failed > 0 ? 'error' : 'success' })
+      loadData()
+    }
+  }
+
+  const handleDeleteSeasonDownloads = async (seasonNumber) => {
+    if (!series) return
+    await window.api.deleteDownloadSeason(series.id, seasonNumber)
+    showToast(`Season ${seasonNumber} downloads deleted`, { type: 'info', duration: 2000 })
+    loadData()
   }
 
   const handleScan = async () => {
@@ -310,6 +372,11 @@ export default function SeriesShow() {
               const watchedInSeason = seasonEps.filter(e => e.watched).length
               const pct = seasonEps.length > 0 ? Math.round((watchedInSeason / seasonEps.length) * 100) : 0
 
+              // Season download stats
+              const downloadedInSeason = seasonEps.filter(e => e.download && e.download.status === 'complete').length
+              const hasAnyDownloads = downloadedInSeason > 0
+              const allDownloaded = downloadedInSeason === seasonEps.length
+
               return (
                 <section
                   key={num}
@@ -319,7 +386,29 @@ export default function SeriesShow() {
                     <h2>{num === 0 ? 'Specials' : `Season ${num}`}</h2>
                     <span className="season-detail">
                       {seasonEps.length} episodes &middot; {watchedInSeason} watched
+                      {hasAnyDownloads && (
+                        <> &middot; {downloadedInSeason} downloaded</>
+                      )}
                     </span>
+                    <div className="season-header-actions">
+                      {hasAnyDownloads ? (
+                        <button
+                          className="btn-season-dl btn-season-dl--delete"
+                          onClick={() => handleDeleteSeasonDownloads(num)}
+                          title="Delete season downloads"
+                        >
+                          {allDownloaded ? 'Delete All Downloads' : `Delete ${downloadedInSeason} Downloads`}
+                        </button>
+                      ) : (
+                        <button
+                          className="btn-season-dl"
+                          onClick={() => handleDownloadSeason(num)}
+                          title="Download entire season"
+                        >
+                          Download Season
+                        </button>
+                      )}
+                    </div>
                     <div className="season-bar">
                       <div className="season-bar-fill" style={{ width: `${pct}%` }} />
                     </div>
@@ -334,7 +423,10 @@ export default function SeriesShow() {
                         onToggle={handleToggle}
                         onOpenInVlc={handleOpenInVlc}
                         onOpenInDefault={handleOpenInDefault}
+                        onDownload={handleDownloadEpisode}
+                        onDeleteDownload={handleDeleteDownloadEpisode}
                         vlcAvailable={vlcAvailable}
+                        downloadProgress={downloadProgress[ep.id]}
                       />
                     ))}
                   </div>

@@ -1133,6 +1133,140 @@ body {
   flex-shrink: 0;
 }
 
+/* Popover divider */
+.ep-popover-divider {
+  height: 1px;
+  background: rgba(255,255,255,.08);
+  margin: 4px 0;
+}
+
+/* Danger-styled popover item (e.g. Delete Download) */
+.ep-popover-item--danger {
+  color: var(--red, #ff453a);
+}
+.ep-popover-item--danger:hover {
+  background: rgba(255,69,58,.12);
+}
+
+/* -- Download badges (inline with episode title) -- */
+.ep-dl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.ep-dl-badge--complete {
+  color: var(--green, #30d158);
+}
+.ep-dl-badge--progress {
+  color: var(--accent, #0a84ff);
+}
+.ep-dl-pct {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* -- Download progress bar (episode row) -- */
+.ep-dl-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.ep-dl-progress-track {
+  flex: 1;
+  max-width: 200px;
+  height: 3px;
+  background: rgba(255,255,255,.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.ep-dl-progress-fill {
+  height: 100%;
+  background: var(--accent, #0a84ff);
+  border-radius: 2px;
+  transition: width .3s ease;
+}
+.ep-dl-progress-label {
+  font-size: 11px;
+  color: var(--accent, #0a84ff);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* -- Download progress bar (movie page) -- */
+.movie-dl-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.movie-dl-progress-track {
+  flex: 1;
+  max-width: 320px;
+  height: 4px;
+  background: rgba(255,255,255,.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.movie-dl-progress-fill {
+  height: 100%;
+  background: var(--accent, #0a84ff);
+  border-radius: 2px;
+  transition: width .3s ease;
+}
+.movie-dl-progress-label {
+  font-size: 12px;
+  color: var(--accent, #0a84ff);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* -- Season header download actions -- */
+.season-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.btn-season-dl {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.btn-season-dl:hover {
+  background: rgba(255,255,255,.12);
+  color: var(--text-primary);
+  border-color: rgba(255,255,255,.2);
+}
+.btn-season-dl--delete {
+  color: var(--red, #ff453a);
+  border-color: rgba(255,69,58,.2);
+}
+.btn-season-dl--delete:hover {
+  background: rgba(255,69,58,.1);
+  border-color: rgba(255,69,58,.35);
+  color: var(--red, #ff453a);
+}
+
+/* -- Movie download stat chips -- */
+.stat--downloaded .stat-val {
+  color: var(--green, #30d158);
+}
+
 /* ================================================================
    ADD SERIES PAGE
    ================================================================ */

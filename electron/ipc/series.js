@@ -35,6 +35,15 @@ function register() {
     const resumeEp = db.episodes.resumable(s.id) || null
     const nextEp = db.episodes.nextUp(s.id) || null
     const vlcAvailable = process.platform === 'darwin' ? fs.existsSync(VLC_APP_PATH) : false
+
+    // Attach download status to each episode
+    const seriesDownloads = db.downloads.forSeries(s.id)
+    const dlByEpisode = new Map(seriesDownloads.map(d => [d.episode_id, d]))
+    const episodesWithDl = episodes.map(ep => ({
+      ...ep,
+      download: dlByEpisode.get(ep.id) || null,
+    }))
+
     return {
       series: {
         ...s,
@@ -43,7 +52,7 @@ function register() {
         total_episodes: episodes.length,
         watched_episodes: episodes.filter(e => e.watched).length,
       },
-      episodes,
+      episodes: episodesWithDl,
       seasons,
       resumeEp,
       nextEp,
@@ -101,6 +110,11 @@ function register() {
   ipcMain.handle('series:destroy', (_e, slug) => {
     const s = db.series.findBySlug(slug)
     if (!s) return false
+    // Clean up downloaded files before destroying (CASCADE will delete DB records)
+    const seriesDownloads = db.downloads.forSeries(s.id)
+    for (const dl of seriesDownloads) {
+      try { fs.unlinkSync(dl.file_path) } catch {}
+    }
     db.series.destroy(s.id)
     return true
   })

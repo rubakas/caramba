@@ -112,3 +112,21 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_tvmaze ON watchlist(tvmaze_id) WHERE tvmaze_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_imdb ON watchlist(imdb_id) WHERE imdb_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS downloads (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  episode_id  INTEGER UNIQUE REFERENCES episodes(id) ON DELETE CASCADE,
+  movie_id    INTEGER UNIQUE REFERENCES movies(id)   ON DELETE CASCADE,
+  file_path   TEXT    NOT NULL,
+  file_size   INTEGER NOT NULL DEFAULT 0,
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  progress    REAL    NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  CHECK (
+    (episode_id IS NOT NULL AND movie_id IS NULL) OR
+    (episode_id IS NULL AND movie_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_downloads_episode ON downloads(episode_id) WHERE episode_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_downloads_movie   ON downloads(movie_id)   WHERE movie_id IS NOT NULL;
