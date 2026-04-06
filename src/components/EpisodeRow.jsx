@@ -13,7 +13,21 @@ const MoreSvg = () => (
   </svg>
 )
 
-export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpenInVlc, onOpenInDefault, vlcAvailable }) {
+const DownloadSvg = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+)
+
+const DownloadedSvg = ({ size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="0">
+    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+  </svg>
+)
+
+export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpenInVlc, onOpenInDefault, onDownload, onDeleteDownload, vlcAvailable, downloadProgress }) {
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
@@ -25,6 +39,13 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
   const pct = progressPercent(ep.progress_seconds, ep.duration_seconds)
   const desc = ep.description || ''
   const isLong = desc.length > 120
+
+  // Download state
+  const dl = ep.download
+  const isDownloaded = dl && dl.status === 'complete'
+  const isDownloading = dl && dl.status === 'downloading'
+  // Use live progress from IPC event if available, otherwise DB value
+  const dlProgress = isDownloading ? (downloadProgress != null ? downloadProgress : dl.progress) : 0
 
   // Click-outside to close menu
   useEffect(() => {
@@ -56,7 +77,20 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
       </div>
       <div className="ep-body">
         <div className="ep-top-row">
-          <span className="ep-name">{ep.title || ep.code}</span>
+          <span className="ep-name">
+            {ep.title || ep.code}
+            {isDownloaded && (
+              <span className="ep-dl-badge ep-dl-badge--complete" title="Downloaded">
+                <DownloadedSvg size={13} />
+              </span>
+            )}
+            {isDownloading && (
+              <span className="ep-dl-badge ep-dl-badge--progress" title={`Downloading ${Math.round(dlProgress * 100)}%`}>
+                <DownloadSvg size={13} />
+                <span className="ep-dl-pct">{Math.round(dlProgress * 100)}%</span>
+              </span>
+            )}
+          </span>
           {ep.air_date && <span className="ep-date">{ep.air_date}</span>}
         </div>
         <span className="ep-code-label">{ep.code}</span>
@@ -117,6 +151,24 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                 <span className="ep-popover-icon">{'\u2197'}</span>
                 <span>Open in Default Player</span>
               </button>
+              <div className="ep-popover-divider" />
+              {isDownloaded ? (
+                <button
+                  className="ep-popover-item ep-popover-item--danger"
+                  onClick={() => { onDeleteDownload(ep.id); setMenuOpen(false) }}
+                >
+                  <span className="ep-popover-icon">{'\u2715'}</span>
+                  <span>Delete Download</span>
+                </button>
+              ) : !isDownloading ? (
+                <button
+                  className="ep-popover-item"
+                  onClick={() => { onDownload(ep.id); setMenuOpen(false) }}
+                >
+                  <span className="ep-popover-icon">{'\u2913'}</span>
+                  <span>Download</span>
+                </button>
+              ) : null}
             </div>
           )}
         </div>

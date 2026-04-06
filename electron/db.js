@@ -21,6 +21,12 @@ function getDbPath() {
   return path.join(getStoragePath(), 'development.sqlite3')
 }
 
+function getDownloadsPath() {
+  const p = path.join(getStoragePath(), 'downloads')
+  fs.mkdirSync(p, { recursive: true })
+  return p
+}
+
 function open() {
   if (db) return db
   const dbPath = getDbPath()
@@ -179,6 +185,10 @@ function slugify(text) {
 function isKnownMediaPath(filePath) {
   if (!filePath || !db) return false
   const normalized = path.resolve(filePath)
+
+  // Check if it's a downloaded file (inside the downloads directory)
+  const downloadsDir = getDownloadsPath()
+  if (normalized.startsWith(downloadsDir + path.sep)) return true
 
   // Check against all series media directories
   const allSeries = get().prepare('SELECT media_path FROM series').all()
@@ -624,4 +634,77 @@ const playbackPreferences = {
   },
 }
 
-module.exports = { open, close, get, getDbPath, getStoragePath, slugify, isKnownMediaPath, safeWrite, series, episodes, movies, watchHistories, watchlist, playbackPreferences }
+// -- Downloads (offline media cache) --
+
+const downloads = {
+  forEpisode(episodeId) {
+    return get().prepare('SELECT * FROM downloads WHERE episode_id = ?').get(episodeId) || null
+  },
+
+  forMovie(movieId) {
+    return get().prepare('SELECT * FROM downloads WHERE movie_id = ?').get(movieId) || null
+  },
+
+  forSeason(seriesId, seasonNumber) {
+    return get().prepare(`
+      SELECT d.* FROM downloads d
+      JOIN episodes e ON d.episode_id = e.id
+      WHERE e.series_id = ? AND e.season_number = ?
+    `).all(seriesId, seasonNumber)
+  },
+
+  forSeries(seriesId) {
+    return get().prepare(`
+      SELECT d.* FROM downloads d
+      JOIN episodes e ON d.episode_id = e.id
+      WHERE e.series_id = ?
+    `).all(seriesId)
+  },
+
+  all() {
+    return get().prepare('SELECT * FROM downloads ORDER BY created_at DESC').all()
+  },
+
+  findById(id) {
+    return get().prepare('SELECT * FROM downloads WHERE id = ?').get(id) || null
+  },
+
+  create({ episode_id, movie_id, file_path, file_size, status }) {
+    const result = get().prepare(`
+      INSERT INTO downloads (episode_id, movie_id, file_path, file_size, status)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(episode_id || null, movie_id || null, file_path, file_size || 0, status || 'pending')
+    return this.findById(result.lastInsertRowid)
+  },
+
+  updateStatus(id, status, progress = null) {
+    if (progress != null) {
+      get().prepare('UPDATE downloads SET status = ?, progress = ? WHERE id = ?').run(status, progress, id)
+    } else {
+      get().prepare('UPDATE downloads SET status = ? WHERE id = ?').run(status, id)
+    }
+  },
+
+  updateFileSize(id, fileSize) {
+    get().prepare('UPDATE downloads SET file_size = ? WHERE id = ?').run(fileSize, id)
+  },
+
+  destroy(id) {
+    get().prepare('DELETE FROM downloads WHERE id = ?').run(id)
+  },
+
+  destroyForEpisode(episodeId) {
+    get().prepare('DELETE FROM downloads WHERE episode_id = ?').run(episodeId)
+  },
+
+  destroyForMovie(movieId) {
+    get().prepare('DELETE FROM downloads WHERE movie_id = ?').run(movieId)
+  },
+
+  totalSize() {
+    const row = get().prepare("SELECT COALESCE(SUM(file_size), 0) AS total FROM downloads WHERE status = 'complete'").get()
+    return row ? row.total : 0
+  },
+}
+
+module.exports = { open, close, get, getDbPath, getStoragePath, getDownloadsPath, slugify, isKnownMediaPath, safeWrite, series, episodes, movies, watchHistories, watchlist, playbackPreferences, downloads }

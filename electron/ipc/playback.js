@@ -7,6 +7,7 @@ const fs = require('fs')
 const crypto = require('crypto')
 const db = require('../db')
 const transcoder = require('../services/transcoder')
+const { resolvePlaybackPath } = require('./downloads')
 
 const VLC_APP_PATH = '/Applications/VLC.app'
 const VLC_BIN_PATH = '/Applications/VLC.app/Contents/MacOS/VLC'
@@ -366,11 +367,14 @@ function register() {
     if (!fs.existsSync(VLC_APP_PATH)) {
       return { error: 'VLC is not installed. Install it from https://www.videolan.org/' }
     }
-    if (!filePath || !fs.existsSync(filePath)) {
+
+    // Resolve file path: prefer downloaded copy, fall back to original
+    const resolvedPath = resolvePlaybackPath(filePath, episodeId || null, movieId || null)
+    if (!resolvedPath) {
       return { error: 'File not found: ' + filePath }
     }
     // Security: only allow opening files within registered media directories
-    if (!db.isKnownMediaPath(filePath)) {
+    if (!db.isKnownMediaPath(resolvedPath)) {
       return { error: 'File is not in a registered media directory' }
     }
 
@@ -420,7 +424,7 @@ function register() {
         // Enqueue file into running VLC
         // Build a proper file:// URI — encode each path component individually
         // to correctly handle spaces, #, ?, and other special characters in filenames
-        const fileUri = 'file://' + filePath.split('/').map(c => encodeURIComponent(c)).join('/')
+        const fileUri = 'file://' + resolvedPath.split('/').map(c => encodeURIComponent(c)).join('/')
         await vlcRequest('?command=pl_empty')
         await vlcRequest(`?command=in_play&input=${fileUri}`)
         if (startTime > 0) {
@@ -430,7 +434,7 @@ function register() {
       } else {
         // Launch VLC with HTTP interface
         const args = [
-          filePath,
+          resolvedPath,
           '--extraintf', 'http',
           '--http-host', '127.0.0.1',
           '--http-port', String(VLC_HTTP_PORT),
@@ -457,16 +461,18 @@ function register() {
   })
 
   // Open file in default OS player
-  ipcMain.handle('playback:openInDefault', async (_e, filePath) => {
-    if (!filePath || !fs.existsSync(filePath)) {
+  ipcMain.handle('playback:openInDefault', async (_e, filePath, episodeId, movieId) => {
+    // Resolve file path: prefer downloaded copy, fall back to original
+    const resolvedPath = resolvePlaybackPath(filePath, episodeId || null, movieId || null)
+    if (!resolvedPath) {
       return { error: 'File not found: ' + filePath }
     }
     // Security: only allow opening files within registered media directories
-    if (!db.isKnownMediaPath(filePath)) {
+    if (!db.isKnownMediaPath(resolvedPath)) {
       return { error: 'File is not in a registered media directory' }
     }
     try {
-      const result = await shell.openPath(filePath)
+      const result = await shell.openPath(resolvedPath)
       // shell.openPath returns empty string on success, error string on failure
       if (result) {
         return { error: result }

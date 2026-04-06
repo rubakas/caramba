@@ -29,6 +29,7 @@ export default function MovieShow() {
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [dlProgress, setDlProgress] = useState(null) // live download progress 0-1
   const menuRef = useRef(null)
   const menuBtnRef = useRef(null)
   const ctaCardGlass = useGlassConfig('cta-card')
@@ -59,9 +60,23 @@ export default function MovieShow() {
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
     const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+
+    // Listen for download progress events
+    const unsubDl = window.api.onDownloadProgress((data) => {
+      if (data.movieId) {
+        if (data.status === 'downloading') {
+          setDlProgress(data.progress)
+        } else {
+          setDlProgress(null)
+          loadData()
+        }
+      }
+    })
+
     return () => {
       window.removeEventListener('playback-stopped', handleStop)
       unsubVlc()
+      unsubDl()
     }
   }, [loadData])
 
@@ -94,8 +109,27 @@ export default function MovieShow() {
 
   const handleOpenInDefault = async () => {
     if (!movie?.file_path) return
-    const result = await window.api.openInDefault(movie.file_path)
+    const result = await window.api.openInDefault(movie.file_path, null, movie.id)
     if (result?.error) showToast(result.error, { type: 'error' })
+  }
+
+  const handleDownload = async () => {
+    if (!movie) return
+    showToast('Starting download...', { type: 'info', duration: 2000 })
+    const result = await window.api.downloadMovie(movie.id)
+    if (result?.error) {
+      showToast(result.error, { type: 'error' })
+    } else if (result?.ok) {
+      showToast('Download complete', { type: 'success' })
+      loadData()
+    }
+  }
+
+  const handleDeleteDownload = async () => {
+    if (!movie) return
+    await window.api.deleteDownloadMovie(movie.id)
+    showToast('Download deleted', { type: 'info', duration: 2000 })
+    loadData()
   }
 
   // Click-outside to close menu
@@ -136,6 +170,58 @@ export default function MovieShow() {
   const pct = progressPercent(movie.progress_seconds, movie.duration_seconds)
   const runtime = runtimeDisplay(movie.runtime)
   const filename = movie.file_path ? movie.file_path.split('/').pop() : null
+
+  // Download state
+  const dl = movie.download
+  const isDownloaded = dl && dl.status === 'complete'
+  const isDownloading = dl && dl.status === 'downloading'
+  const liveDlPct = isDownloading ? (dlProgress != null ? dlProgress : dl.progress) : 0
+
+  const renderMenu = () => (
+    <>
+      <button
+        className="ep-popover-item"
+        onClick={() => { handleToggle(); setMenuOpen(false) }}
+      >
+        <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
+        <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
+      </button>
+      {vlcAvailable && (
+        <button
+          className="ep-popover-item"
+          onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
+        >
+          <span className="ep-popover-icon">{'\u25B6'}</span>
+          <span>Open in VLC</span>
+        </button>
+      )}
+      <button
+        className="ep-popover-item"
+        onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
+      >
+        <span className="ep-popover-icon">{'\u2197'}</span>
+        <span>Open in Default Player</span>
+      </button>
+      <div className="ep-popover-divider" />
+      {isDownloaded ? (
+        <button
+          className="ep-popover-item ep-popover-item--danger"
+          onClick={() => { handleDeleteDownload(); setMenuOpen(false) }}
+        >
+          <span className="ep-popover-icon">{'\u2715'}</span>
+          <span>Delete Download</span>
+        </button>
+      ) : !isDownloading ? (
+        <button
+          className="ep-popover-item"
+          onClick={() => { handleDownload(); setMenuOpen(false) }}
+        >
+          <span className="ep-popover-icon">{'\u2913'}</span>
+          <span>Download</span>
+        </button>
+      ) : null}
+    </>
+  )
 
   return (
     <>
@@ -236,6 +322,18 @@ export default function MovieShow() {
               <span className="stat-val" dangerouslySetInnerHTML={{ __html: movie.watched ? '&#10003;' : '&mdash;' }} />
               <span className="stat-lbl">Watched</span>
             </refractive.div>
+            {isDownloaded && (
+              <refractive.div className="stat stat--downloaded" refraction={statChipGlass}>
+                <span className="stat-val">{'\u2913'}</span>
+                <span className="stat-lbl">Downloaded</span>
+              </refractive.div>
+            )}
+            {isDownloading && (
+              <refractive.div className="stat stat--downloading" refraction={statChipGlass}>
+                <span className="stat-val">{Math.round(liveDlPct * 100)}%</span>
+                <span className="stat-lbl">Downloading</span>
+              </refractive.div>
+            )}
           </div>
 
           {filename && (
@@ -253,29 +351,7 @@ export default function MovieShow() {
                 </refractive.button>
                 {menuOpen && (
                   <refractive.div ref={menuRef} className="ep-popover" refraction={popoverGlass}>
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { handleToggle(); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
-                      <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
-                    </button>
-                    {vlcAvailable && (
-                      <button
-                        className="ep-popover-item"
-                        onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
-                      >
-                        <span className="ep-popover-icon">{'\u25B6'}</span>
-                        <span>Open in VLC</span>
-                      </button>
-                    )}
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{'\u2197'}</span>
-                      <span>Open in Default Player</span>
-                    </button>
+                    {renderMenu()}
                   </refractive.div>
                 )}
               </div>
@@ -294,29 +370,7 @@ export default function MovieShow() {
                 </refractive.button>
                 {menuOpen && (
                   <refractive.div ref={menuRef} className="ep-popover" refraction={popoverGlass}>
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { handleToggle(); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
-                      <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
-                    </button>
-                    {vlcAvailable && (
-                      <button
-                        className="ep-popover-item"
-                        onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
-                      >
-                        <span className="ep-popover-icon">{'\u25B6'}</span>
-                        <span>Open in VLC</span>
-                      </button>
-                    )}
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{'\u2197'}</span>
-                      <span>Open in Default Player</span>
-                    </button>
+                    {renderMenu()}
                   </refractive.div>
                 )}
               </div>
