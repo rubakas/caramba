@@ -84,12 +84,6 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                 <DownloadedSvg size={13} />
               </span>
             )}
-            {isDownloading && (
-              <span className="ep-dl-badge ep-dl-badge--progress" title={`Downloading ${Math.round(dlProgress * 100)}%`}>
-                <DownloadSvg size={13} />
-                <span className="ep-dl-pct">{Math.round(dlProgress * 100)}%</span>
-              </span>
-            )}
           </span>
           {ep.air_date && <span className="ep-date">{ep.air_date}</span>}
         </div>
@@ -111,6 +105,14 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
             <span className="ep-progress-label">
               {formatTime(ep.progress_seconds)} / {formatTime(ep.duration_seconds)}
             </span>
+          </div>
+        )}
+        {isDownloading && (
+          <div className="ep-dl-progress">
+            <div className="ep-dl-progress-track">
+              <div className="ep-dl-progress-fill" style={{ width: `${Math.round(dlProgress * 100)}%` }} />
+            </div>
+            <span className="ep-dl-progress-label">Downloading {Math.round(dlProgress * 100)}%</span>
           </div>
         )}
       </div>

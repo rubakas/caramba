@@ -104,7 +104,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteDownloadMovie: (movieId) => ipcRenderer.invoke('downloads:deleteMovie', movieId),
   listDownloads: () => ipcRenderer.invoke('downloads:list'),
   getStorageInfo: () => ipcRenderer.invoke('downloads:storageInfo'),
-  onDownloadProgress: (cb) => {
+  onMediaDownloadProgress: (cb) => {
     const handler = (_e, data) => cb(data)
     ipcRenderer.on('downloads:progress', handler)
     return () => ipcRenderer.removeListener('downloads:progress', handler)

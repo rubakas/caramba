@@ -63,7 +63,7 @@ export default function SeriesShow() {
     const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
 
     // Listen for download progress events
-    const unsubDl = window.api.onDownloadProgress((data) => {
+    const unsubDl = window.api.onMediaDownloadProgress((data) => {
       if (data.episodeId) {
         if (data.status === 'downloading') {
           setDownloadProgress(prev => ({ ...prev, [data.episodeId]: data.progress }))

@@ -62,7 +62,7 @@ export default function MovieShow() {
     const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
 
     // Listen for download progress events
-    const unsubDl = window.api.onDownloadProgress((data) => {
+    const unsubDl = window.api.onMediaDownloadProgress((data) => {
       if (data.movieId) {
         if (data.status === 'downloading') {
           setDlProgress(data.progress)
@@ -328,13 +328,15 @@ export default function MovieShow() {
                 <span className="stat-lbl">Downloaded</span>
               </refractive.div>
             )}
-            {isDownloading && (
-              <refractive.div className="stat stat--downloading" refraction={statChipGlass}>
-                <span className="stat-val">{Math.round(liveDlPct * 100)}%</span>
-                <span className="stat-lbl">Downloading</span>
-              </refractive.div>
-            )}
           </div>
+          {isDownloading && (
+            <div className="movie-dl-progress">
+              <div className="movie-dl-progress-track">
+                <div className="movie-dl-progress-fill" style={{ width: `${Math.round(liveDlPct * 100)}%` }} />
+              </div>
+              <span className="movie-dl-progress-label">Downloading {Math.round(liveDlPct * 100)}%</span>
+            </div>
+          )}
 
           {filename && (
             <div className="movie-file-info">
