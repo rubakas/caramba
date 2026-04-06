@@ -25,7 +25,7 @@
       "icon": "public/icon.icns",
       "extraResources": [
         {
-          "from": "vendor/ffmpeg",
+          "from": "vendor/ffmpeg-${arch}",
           "to": "ffmpeg"
         }
       ]

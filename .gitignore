@@ -10,8 +10,7 @@ storage
 rails
 
 # Bundled binaries (downloaded by bin/setup-ffmpeg)
-vendor/ffmpeg
-vendor/ffmpeg-linux
+vendor/ffmpeg*
 
 # OS
 .DS_Store

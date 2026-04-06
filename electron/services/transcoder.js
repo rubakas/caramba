@@ -17,7 +17,10 @@ function findBinary(name) {
   }
 
   // 2. Bundled binary relative to project root (dev mode)
-  const devBundled = path.join(__dirname, '..', '..', 'vendor', 'ffmpeg', name)
+  const vendorDir = process.platform === 'linux'
+    ? 'ffmpeg-linux'
+    : process.arch === 'arm64' ? 'ffmpeg-arm64' : 'ffmpeg-x64'
+  const devBundled = path.join(__dirname, '..', '..', 'vendor', vendorDir, name)
   if (fs.existsSync(devBundled)) return devBundled
 
   // 3. Explicit env var override
