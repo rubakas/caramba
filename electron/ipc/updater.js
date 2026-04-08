@@ -56,8 +56,7 @@ function register(mainWindow) {
     }
     try {
       await updater.installUpdate(pendingInstallPath)
-      // On macOS, installUpdate calls app.quit() — we never reach here.
-      // On Linux, installUpdate calls app.relaunch() + app.quit() — same.
+      // installUpdate calls app.quit() — we never reach here.
     } catch (err) {
       return { error: err.message }
     }

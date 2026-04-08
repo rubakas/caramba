@@ -8,8 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "electron": "vite build && electron .",
-    "dist": "vite build && electron-builder --mac --x64 --arm64 --publish never",
-    "dist:linux": "bin/build --linux"
+    "dist": "vite build && electron-builder --mac --x64 --arm64 --publish never"
   },
   "build": {
     "appId": "com.cupatea.caramba",
@@ -29,20 +28,6 @@
       "extraResources": [
         {
           "from": "vendor/ffmpeg-${arch}",
-          "to": "ffmpeg"
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "AudioVideo",
-      "icon": "public/icon.png",
-      "extraResources": [
-        {
-          "from": "vendor/ffmpeg-linux",
           "to": "ffmpeg"
         }
       ]

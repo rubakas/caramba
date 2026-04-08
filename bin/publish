@@ -2,7 +2,7 @@
 #
 # Publish build artifacts to GitHub Releases.
 #
-# Reads version from package.json, collects .dmg/.AppImage/.deb from dist/,
+# Reads version from package.json, collects .dmg from dist/,
 # and creates (or updates) a GitHub release via `gh`.
 #
 # Usage: bin/publish
@@ -34,7 +34,7 @@ HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 # Collect artifacts
 ARTIFACTS=()
-for f in dist/*.dmg dist/*.AppImage dist/*.deb; do
+for f in dist/*.dmg; do
   [ -f "$f" ] && ARTIFACTS+=("$f")
 done
 

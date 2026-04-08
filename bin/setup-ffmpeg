@@ -2,127 +2,56 @@
 #
 # Download static ffmpeg + ffprobe binaries for bundling into the Electron app.
 #
-# macOS:  https://evermeet.cx/ffmpeg/ (arm64/x86_64 universal static builds)
-# Linux:  https://johnvansickle.com/ffmpeg/ (amd64 static builds)
+# macOS: https://evermeet.cx/ffmpeg/ (arm64/x86_64 universal static builds)
 #
-# Usage: bin/setup-ffmpeg          # current platform
-#        bin/setup-ffmpeg --linux   # force Linux (for cross-compile on macOS)
-#        bin/setup-ffmpeg --mac     # force macOS
-#        bin/setup-ffmpeg --all     # both platforms
+# Usage: bin/setup-ffmpeg
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-setup_mac() {
-  local dir="vendor/ffmpeg"
+dir="vendor/ffmpeg"
 
-  if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
-    echo "macOS ffmpeg already present:"
-    "$dir/ffmpeg" -version | head -1
-    return 0
-  fi
-
-  # Require 7z for extraction
-  if ! command -v 7z &>/dev/null; then
-    echo "Installing p7zip..."
-    brew install p7zip
-  fi
-
-  mkdir -p "$dir"
-
-  echo "Downloading static ffmpeg (macOS)..."
-  curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z" -o /tmp/ffmpeg.7z
-
-  echo "Downloading static ffprobe (macOS)..."
-  curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z" -o /tmp/ffprobe.7z
-
-  # Verify downloads are non-empty (basic integrity check)
-  for f in /tmp/ffmpeg.7z /tmp/ffprobe.7z; do
-    if [ ! -s "$f" ]; then
-      echo "Error: Downloaded file is empty: $f"
-      exit 1
-    fi
-  done
-
-  echo "Extracting..."
-  7z e /tmp/ffmpeg.7z -o"$dir" -y >/dev/null
-  7z e /tmp/ffprobe.7z -o"$dir" -y >/dev/null
-
-  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
-
-  # Record checksums for audit/reproducibility
-  echo "Recording SHA256 checksums..."
-  shasum -a 256 "$dir/ffmpeg" "$dir/ffprobe" | tee "$dir/SHA256SUMS"
-
-  rm -f /tmp/ffmpeg.7z /tmp/ffprobe.7z
-
-  echo "Done (macOS):"
+if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
+  echo "macOS ffmpeg already present:"
   "$dir/ffmpeg" -version | head -1
-  ls -lh "$dir/"
-}
+  exit 0
+fi
 
-setup_linux() {
-  local dir="vendor/ffmpeg-linux"
+# Require 7z for extraction
+if ! command -v 7z &>/dev/null; then
+  echo "Installing p7zip..."
+  brew install p7zip
+fi
 
-  if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
-    echo "Linux ffmpeg already present:"
-    echo "  $(ls -lh "$dir/ffmpeg" | awk '{print $5, $9}')"
-    return 0
-  fi
+mkdir -p "$dir"
 
-  mkdir -p "$dir"
+echo "Downloading static ffmpeg (macOS)..."
+curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/7z" -o /tmp/ffmpeg.7z
 
-  echo "Downloading static ffmpeg (Linux amd64)..."
-  curl -sL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" -o /tmp/ffmpeg-linux.tar.xz
+echo "Downloading static ffprobe (macOS)..."
+curl -sL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/7z" -o /tmp/ffprobe.7z
 
-  # Verify download is non-empty (basic integrity check)
-  if [ ! -s /tmp/ffmpeg-linux.tar.xz ]; then
-    echo "Error: Downloaded file is empty: /tmp/ffmpeg-linux.tar.xz"
+# Verify downloads are non-empty (basic integrity check)
+for f in /tmp/ffmpeg.7z /tmp/ffprobe.7z; do
+  if [ ! -s "$f" ]; then
+    echo "Error: Downloaded file is empty: $f"
     exit 1
   fi
+done
 
-  echo "Extracting..."
-  tar -xf /tmp/ffmpeg-linux.tar.xz -C /tmp/
+echo "Extracting..."
+7z e /tmp/ffmpeg.7z -o"$dir" -y >/dev/null
+7z e /tmp/ffprobe.7z -o"$dir" -y >/dev/null
 
-  cp /tmp/ffmpeg-*-static/ffmpeg /tmp/ffmpeg-*-static/ffprobe "$dir/"
-  chmod +x "$dir/ffmpeg" "$dir/ffprobe"
+chmod +x "$dir/ffmpeg" "$dir/ffprobe"
 
-  # Record checksums for audit/reproducibility
-  echo "Recording SHA256 checksums..."
-  shasum -a 256 "$dir/ffmpeg" "$dir/ffprobe" | tee "$dir/SHA256SUMS"
+# Record checksums for audit/reproducibility
+echo "Recording SHA256 checksums..."
+shasum -a 256 "$dir/ffmpeg" "$dir/ffprobe" | tee "$dir/SHA256SUMS"
 
-  # Clean up
-  rm -rf /tmp/ffmpeg-linux.tar.xz /tmp/ffmpeg-*-static
+rm -f /tmp/ffmpeg.7z /tmp/ffprobe.7z
 
-  echo "Done (Linux x64):"
-  ls -lh "$dir/"
-}
-
-# Parse args
-TARGET="${1:-auto}"
-
-case "$TARGET" in
-  --all)
-    setup_mac
-    echo ""
-    setup_linux
-    ;;
-  --linux)
-    setup_linux
-    ;;
-  --mac)
-    setup_mac
-    ;;
-  auto|"")
-    case "$(uname -s)" in
-      Darwin) setup_mac ;;
-      Linux)  setup_linux ;;
-      *)      echo "Unknown platform: $(uname -s)"; exit 1 ;;
-    esac
-    ;;
-  *)
-    echo "Usage: bin/setup-ffmpeg [--mac|--linux|--all]"
-    exit 1
-    ;;
-esac
+echo "Done:"
+"$dir/ffmpeg" -version | head -1
+ls -lh "$dir/"

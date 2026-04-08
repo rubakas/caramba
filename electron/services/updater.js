@@ -75,8 +75,8 @@ async function checkForUpdate() {
   if (!latestParsed || !currentParsed) return null
   if (!isNewer(latestParsed, currentParsed)) return null
 
-  // Select the right asset for the current platform
-  const ext = process.platform === 'darwin' ? '.dmg' : '.AppImage'
+  // Select the .dmg asset for macOS
+  const ext = '.dmg'
   const asset = (release.assets || []).find(a => a.name.endsWith(ext))
   if (!asset) return null
 
@@ -202,21 +202,12 @@ function downloadUpdate(assetUrl, onProgress, expectedSha256 = null) {
 
 /**
  * Install the downloaded file and relaunch the app.
- * On macOS: mount DMG, copy .app to a staging dir, then spawn a detached
- *   shell script that waits for this process to exit, copies the staged .app
- *   to /Applications/, unmounts the DMG, and relaunches the app. Then quit.
- * On Linux: replace the current AppImage executable in-place, relaunch.
+ * Mounts the DMG, copies the .app to a staging dir, then spawns a detached
+ * shell script that waits for this process to exit, copies the staged .app
+ * to /Applications/, unmounts the DMG, and relaunches the app. Then quits.
  */
 async function installUpdate(filePath) {
-  if (process.platform === 'darwin') {
-    await installMac(filePath)
-  } else if (process.platform === 'linux') {
-    await installLinux(filePath)
-    app.relaunch()
-    app.quit()
-  } else {
-    throw new Error(`Unsupported platform: ${process.platform}`)
-  }
+  await installMac(filePath)
 }
 
 async function installMac(dmgPath) {
@@ -300,19 +291,6 @@ echo "Done at $(date)"
 
   // Now quit — the script will take over
   app.quit()
-}
-
-async function installLinux(appImagePath) {
-  const target = process.execPath
-  try {
-    fs.copyFileSync(appImagePath, target)
-    fs.chmodSync(target, 0o755)
-  } catch (err) {
-    if (err.code === 'EACCES') {
-      throw new Error('Insufficient permissions to update. Please reinstall manually.')
-    }
-    throw err
-  }
 }
 
 module.exports = { checkForUpdate, downloadUpdate, installUpdate }
