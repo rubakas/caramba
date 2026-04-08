@@ -3,6 +3,7 @@ import Navbar from '../components/Navbar'
 
 export default function Settings() {
   const [syncFolder, setSyncFolder] = useState('')
+  const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
@@ -11,7 +12,9 @@ export default function Settings() {
   const loadData = useCallback(async () => {
     try {
       const settings = await window.api.getSettings()
-      setSyncFolder(settings.sync_folder || '')
+      const folder = settings.sync_folder || ''
+      setSyncFolder(folder)
+      setPathInput(folder)
       setStatus(settings.status || null)
     } catch (err) {
       console.error('Failed to load settings:', err)
@@ -35,12 +38,10 @@ export default function Settings() {
     setTimeout(() => { setMessage(null); setError(null) }, 4000)
   }
 
-  const handleChooseFolder = async () => {
-    const path = await window.api.selectFolder()
-    if (!path) return
-    setSyncFolder(path)
-    // Auto-save and sync immediately
-    const result = await window.api.setSyncFolder(path)
+  const saveSyncFolder = async (folder) => {
+    setSyncFolder(folder)
+    setPathInput(folder)
+    const result = await window.api.setSyncFolder(folder)
     if (result.error) {
       showToast(result.error, true)
     } else {
@@ -49,9 +50,24 @@ export default function Settings() {
     }
   }
 
+  const handleChooseFolder = async () => {
+    const path = await window.api.selectFolder()
+    if (!path) return
+    await saveSyncFolder(path)
+  }
+
+  const handlePathSubmit = async (e) => {
+    e.preventDefault()
+    const trimmed = pathInput.trim()
+    if (!trimmed) return
+    if (trimmed === syncFolder) return
+    await saveSyncFolder(trimmed)
+  }
+
   const handleDisable = async () => {
     const result = await window.api.setSyncFolder(null)
     setSyncFolder('')
+    setPathInput('')
     if (result.error) {
       showToast(result.error, true)
     } else {
@@ -89,6 +105,7 @@ export default function Settings() {
   )
 
   const isEnabled = !!syncFolder
+  const folderInaccessible = isEnabled && status && !status.folder_accessible
 
   return (
     <>
@@ -104,17 +121,29 @@ export default function Settings() {
           <h2 className="settings-section-title">Database Sync</h2>
           <p className="settings-help">
             Choose a shared folder (Dropbox, iCloud, NAS, etc.) to sync your database between machines.
+            For network shares, paste the local mount path directly.
           </p>
           <div className="settings-form">
             <div className="field">
-              <div className="folder-picker">
+              <form className="folder-picker" onSubmit={handlePathSubmit}>
                 <button type="button" className="btn-choose-folder" onClick={handleChooseFolder}>
-                  {syncFolder ? 'Change Folder...' : 'Choose Sync Folder...'}
+                  Browse...
                 </button>
-                <span className={`folder-path${syncFolder ? ' has-path' : ''}`}>
-                  {syncFolder || 'No folder selected'}
-                </span>
-              </div>
+                <input
+                  type="text"
+                  className={`folder-path-input${folderInaccessible ? ' folder-path-input--error' : ''}`}
+                  value={pathInput}
+                  onChange={e => setPathInput(e.target.value)}
+                  onBlur={handlePathSubmit}
+                  placeholder="/Volumes/NAS/sync-folder"
+                  spellCheck={false}
+                />
+              </form>
+              {folderInaccessible && (
+                <p className="settings-warning">
+                  Sync folder is not accessible. If this is a network share, make sure the remote volume is mounted.
+                </p>
+              )}
             </div>
             {isEnabled && (
               <div className="settings-actions">

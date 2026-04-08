@@ -1353,16 +1353,35 @@ body {
   background: rgba(255,255,255,.16);
   transform: scale(1.02);
 }
-.folder-path {
-  color: var(--text-tertiary);
-  font-size: 14px;
+.folder-path-input {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.folder-path.has-path {
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 8px;
+  padding: 10px 14px;
   color: var(--text-secondary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color .2s;
+}
+.folder-path-input::placeholder {
+  color: var(--text-tertiary);
+}
+.folder-path-input:focus {
+  border-color: rgba(255, 255, 255, .3);
+}
+.folder-path-input--error {
+  border-color: rgba(255, 107, 107, .5);
+  color: #ff6b6b;
+}
+
+.settings-warning {
+  color: #ff6b6b;
+  font-size: 13px;
+  margin-top: 8px;
+  line-height: 1.5;
 }
 
 .add-actions {
