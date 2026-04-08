@@ -118,6 +118,21 @@ function register() {
     db.series.destroy(s.id)
     return true
   })
+
+  ipcMain.handle('series:relocate', (_e, slug, newMediaPath) => {
+    const s = db.series.findBySlug(slug)
+    if (!s) return { error: 'Series not found' }
+    if (!newMediaPath) return { error: 'No folder path provided' }
+    if (!fs.existsSync(newMediaPath)) return { error: 'Folder does not exist: ' + newMediaPath }
+    try {
+      const updated = db.series.relocate(s.id, newMediaPath)
+      // Re-scan to pick up any new files and update paths for renamed files
+      mediaScanner.scan(s.id)
+      return { ok: true, series: updated }
+    } catch (err) {
+      return { error: err.message }
+    }
+  })
 }
 
 module.exports = { register }

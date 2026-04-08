@@ -1,6 +1,7 @@
 // IPC handlers for movie operations
 
 const { ipcMain } = require('electron')
+const fs = require('fs')
 const db = require('../db')
 const movieMetadata = require('../services/movie-metadata')
 const { resolvePlaybackPath } = require('./downloads')
@@ -81,6 +82,19 @@ function register() {
     }
     db.movies.destroy(movie.id)
     return true
+  })
+
+  ipcMain.handle('movies:relocate', (_e, slug, newFilePath) => {
+    const movie = db.movies.findBySlug(slug)
+    if (!movie) return { error: 'Movie not found' }
+    if (!newFilePath) return { error: 'No file path provided' }
+    if (!fs.existsSync(newFilePath)) return { error: 'File does not exist: ' + newFilePath }
+    try {
+      const updated = db.movies.relocate(movie.id, newFilePath)
+      return { ok: true, movie: updated }
+    } catch (err) {
+      return { error: err.message }
+    }
   })
 }
 

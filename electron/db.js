@@ -291,6 +291,44 @@ const series = {
     ).get(id)
     return row ? row.total || 0 : 0
   },
+
+  /**
+   * Relocate a series to a new folder path.
+   * Updates the series media_path and rebases every episode file_path
+   * from the old root to the new root. All progress/metadata is preserved.
+   * Runs in a transaction so it's all-or-nothing.
+   */
+  relocate(id, newMediaPath) {
+    const s = this.findById(id)
+    if (!s) throw new Error('Series not found')
+
+    const oldRoot = path.resolve(s.media_path)
+    const newRoot = path.resolve(newMediaPath)
+
+    const relocateTx = get().transaction(() => {
+      // Update series media_path
+      get().prepare(`UPDATE series SET media_path = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(newRoot, id)
+
+      // Rebase all episode file_paths
+      const eps = get().prepare('SELECT id, file_path FROM episodes WHERE series_id = ?').all(id)
+      const updateEp = get().prepare(`UPDATE episodes SET file_path = ?, updated_at = datetime('now') WHERE id = ?`)
+      for (const ep of eps) {
+        if (!ep.file_path) continue
+        const resolved = path.resolve(ep.file_path)
+        if (resolved.startsWith(oldRoot + path.sep)) {
+          const relative = resolved.slice(oldRoot.length) // includes leading separator
+          updateEp.run(path.join(newRoot, relative), ep.id)
+        } else if (resolved === oldRoot) {
+          updateEp.run(newRoot, ep.id)
+        }
+        // If the path doesn't start with oldRoot, leave it unchanged
+      }
+    })
+
+    relocateTx()
+    return this.findById(id)
+  },
 }
 
 // -- Episodes CRUD --
@@ -488,6 +526,19 @@ const movies = {
       UPDATE movies SET progress_seconds = ?, duration_seconds = ?, last_watched_at = datetime('now'), updated_at = datetime('now')
       WHERE id = ?
     `).run(progressSeconds, durationSeconds, id)
+  },
+
+  /**
+   * Relocate a movie to a new file path.
+   * Updates the movie file_path while preserving all progress/metadata.
+   */
+  relocate(id, newFilePath) {
+    const m = this.findById(id)
+    if (!m) throw new Error('Movie not found')
+    const resolved = path.resolve(newFilePath)
+    get().prepare(`UPDATE movies SET file_path = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(resolved, id)
+    return this.findById(id)
   },
 }
 

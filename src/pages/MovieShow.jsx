@@ -156,6 +156,18 @@ export default function MovieShow() {
     navigate('/movies')
   }
 
+  const handleRelocate = async () => {
+    const files = await window.api.selectFiles()
+    if (!files || files.length === 0) return
+    const result = await window.api.relocateMovie(slug, files[0])
+    if (result?.error) {
+      showToast(result.error, { type: 'error' })
+    } else {
+      showToast('Movie relocated successfully', { type: 'success' })
+      loadData()
+    }
+  }
+
   if (loading) return (
     <>
       <Navbar active="Movies" />
@@ -231,6 +243,7 @@ export default function MovieShow() {
         actions={
           <>
             <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
+            <refractive.button className="topnav-btn" onClick={handleRelocate} refraction={navBtnGlass}>Relocate</refractive.button>
             <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
         }

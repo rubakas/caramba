@@ -181,6 +181,18 @@ export default function SeriesShow() {
     navigate('/')
   }
 
+  const handleRelocate = async () => {
+    const newPath = await window.api.selectFolder()
+    if (!newPath) return
+    const result = await window.api.relocateSeries(slug, newPath)
+    if (result?.error) {
+      showToast(result.error, { type: 'error' })
+    } else {
+      showToast('Series relocated successfully', { type: 'success' })
+      loadData()
+    }
+  }
+
   if (loading) return (
     <>
       <Navbar active="Episodes" />
@@ -222,6 +234,7 @@ export default function SeriesShow() {
           <>
             <refractive.button className="topnav-btn" onClick={handleScan} refraction={navBtnGlass}>Rescan</refractive.button>
             <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
+            <refractive.button className="topnav-btn" onClick={handleRelocate} refraction={navBtnGlass}>Relocate</refractive.button>
             <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
         }

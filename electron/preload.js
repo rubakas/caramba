@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   scanSeries: (slug) => ipcRenderer.invoke('series:scan', slug),
   refreshSeriesMetadata: (slug) => ipcRenderer.invoke('series:refreshMetadata', slug),
   destroySeries: (slug) => ipcRenderer.invoke('series:destroy', slug),
+  relocateSeries: (slug, newPath) => ipcRenderer.invoke('series:relocate', slug, newPath),
 
   // Episodes
   playEpisode: (episodeId) => ipcRenderer.invoke('episodes:play', episodeId),
@@ -27,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   toggleMovie: (slug) => ipcRenderer.invoke('movies:toggle', slug),
   refreshMovieMetadata: (slug) => ipcRenderer.invoke('movies:refreshMetadata', slug),
   destroyMovie: (slug) => ipcRenderer.invoke('movies:destroy', slug),
+  relocateMovie: (slug, newPath) => ipcRenderer.invoke('movies:relocate', slug, newPath),
 
   // Playback (new transcoder-based)
   startPlayback: (filePath, startTime, prefs) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs),
