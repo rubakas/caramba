@@ -2172,6 +2172,7 @@ body {
   transition: background .2s;
   flex-shrink: 0;
   box-shadow: var(--glass-shadow-sm);
+  outline: none;
 }
 .video-player-close:hover {
   background: rgba(255,255,255,.28);
@@ -2192,6 +2193,7 @@ body {
   transition: color .15s, transform .1s;
   padding: 0;
   flex-shrink: 0;
+  outline: none;
 }
 .video-player-util-icon:hover {
   color: #fff;
@@ -2259,6 +2261,7 @@ body {
   cursor: pointer;
   transition: background .2s, transform .15s;
   position: relative;
+  outline: none;
 }
 .video-player-skip-btn:hover {
   background: rgba(255,255,255,.28);
@@ -2291,6 +2294,7 @@ body {
   justify-content: center;
   cursor: pointer;
   transition: background .2s, transform .15s;
+  outline: none;
 }
 .video-player-play-btn:hover {
   background: rgba(255,255,255,.28);
@@ -2505,6 +2509,7 @@ body {
   cursor: pointer;
   text-align: left;
   transition: background .15s;
+  outline: none;
 }
 .track-popover-item:hover {
   background: rgba(255,255,255,.1);
@@ -2546,6 +2551,7 @@ body {
   cursor: pointer;
   transition: all .15s;
   text-align: center;
+  outline: none;
 }
 .track-popover-size-btn:hover {
   background: rgba(255,255,255,.1);
