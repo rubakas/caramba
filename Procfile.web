@@ -1,2 +1,2 @@
-server: cd server && bin/rails server -p 3000
-web: cd web && pnpm exec vite --port 5174
+server: cd server && bin/rails server -p 3001
+web: cd web && pnpm exec vite --port 3000
