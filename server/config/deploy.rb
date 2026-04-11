@@ -3,8 +3,6 @@
 # Deploys the full monorepo, then runs bundle install in server/ and
 # builds the React web app into server/public/ for production serving.
 
-require "stringio"
-
 lock "~> 3.20"
 
 set :application, "caramba"
@@ -118,15 +116,18 @@ namespace :deploy do
       # Create LaunchAgents directory if it doesn't exist
       execute :mkdir, "-p ~/Library/LaunchAgents"
 
-      # Generate plist from template
-      plist_content = File.read("config/deploy/com.caramba.server.plist.erb")
+      # Read plist template from release directory
+      plist_template_path = release_path.join("server/config/deploy/com.caramba.server.plist.erb")
+      plist_content = capture(:cat, plist_template_path)
+
+      # Substitute placeholders
       plist_content = plist_content
         .gsub("DEPLOY_PATH", fetch(:deploy_to))
-        .gsub("HOME_PATH", Dir.home)
+        .gsub("HOME_PATH", capture(:echo, "$HOME").chomp)
 
-      # Upload plist to remote
-      plist_path = fetch(:launchd_plist)
-      upload! StringIO.new(plist_content), plist_path
+      # Write plist to remote LaunchAgents
+      plist_path = capture(:echo, "~/Library/LaunchAgents/com.caramba.server.plist").chomp
+      execute :tee, plist_path, input: plist_content
 
       puts "Launchd plist installed at #{plist_path}"
     end
