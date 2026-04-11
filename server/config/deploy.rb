@@ -14,9 +14,9 @@ set :branch, `git rev-parse --abbrev-ref HEAD`.chomp
 set :deploy_to, "/opt/caramba"
 
 # mise manages Ruby — tell Capistrano to use mise shims for all commands
-# The shims directory must come FIRST in PATH to take precedence over system Ruby
+# Include both mise shims and Homebrew binaries in PATH
 set :default_env, {
-  path: "/Users/mac/.local/share/mise/shims:$PATH"
+  path: "/Users/mac/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"
 }
 
 # Bundler runs inside the server/ subdirectory
