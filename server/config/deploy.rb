@@ -14,6 +14,7 @@ set :branch, `git rev-parse --abbrev-ref HEAD`.chomp
 set :deploy_to, "/opt/caramba"
 
 # mise manages Ruby — tell Capistrano to use mise shims for all commands
+# The shims directory must come FIRST in PATH to take precedence over system Ruby
 set :default_env, {
   path: "~/.local/share/mise/shims:$PATH"
 }
@@ -54,6 +55,21 @@ set :launchd_plist, -> { File.expand_path("~/Library/LaunchAgents/#{fetch(:launc
 # =============================================================================
 # Override default Rails tasks to run inside server/ subdirectory
 # =============================================================================
+
+# Verify Ruby version before deployment
+namespace :deploy do
+  task :check_ruby do
+    on primary(:app) do
+      with default_env do
+        ruby_version = capture(:ruby, "--version")
+        puts "Ruby version: #{ruby_version}"
+        raise "Ruby 4.x required!" unless ruby_version.include?("4.")
+      end
+    end
+  end
+end
+
+before "deploy:started", "deploy:check_ruby"
 
 Rake::Task["deploy:migrate"].clear_actions
 namespace :deploy do
