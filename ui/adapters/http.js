@@ -152,9 +152,9 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     removeFromWatchlist: (identifier) => {
       // identifier can be a tvmaze_id (number) or { _type: 'movie', imdb_id }
       if (typeof identifier === 'object' && identifier._type === 'movie') {
-        return del(`/api/watchlist/${encodeURIComponent(identifier.imdb_id)}?type=movie`)
+        return del(`/api/watchlist/0?imdb_id=${encodeURIComponent(identifier.imdb_id)}`)
       }
-      return del(`/api/watchlist/${encodeURIComponent(identifier)}`)
+      return del(`/api/watchlist/0?tvmaze_id=${encodeURIComponent(identifier)}`)
     },
 
     // History
