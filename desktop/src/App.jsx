@@ -1,22 +1,22 @@
 import { HashRouter, Routes, Route } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
-import { ToastProvider } from './context/ToastContext'
-import { PlayerProvider } from './context/PlayerContext'
-import ToastContainer from './components/ToastContainer'
-import VideoPlayer from './components/VideoPlayer'
-import Library from './pages/Library'
-import SeriesShow from './pages/SeriesShow'
-import SeriesNew from './pages/SeriesNew'
-import Movies from './pages/Movies'
-import MovieShow from './pages/MovieShow'
-import MoviesNew from './pages/MoviesNew'
-import History from './pages/History'
-import Settings from './pages/Settings'
-import Discover from './pages/Discover'
-import UpdatePrompt from './components/UpdatePrompt'
+import { ToastProvider } from '@caramba/ui/context/ToastContext'
+import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
+import ToastContainer from '@caramba/ui/components/ToastContainer'
+import VideoPlayer from '@caramba/ui/components/VideoPlayer'
+import Library from '@caramba/ui/pages/Library'
+import SeriesShow from '@caramba/ui/pages/SeriesShow'
+import SeriesNew from '@caramba/ui/pages/SeriesNew'
+import Movies from '@caramba/ui/pages/Movies'
+import MovieShow from '@caramba/ui/pages/MovieShow'
+import MoviesNew from '@caramba/ui/pages/MoviesNew'
+import History from '@caramba/ui/pages/History'
+import Settings from '@caramba/ui/pages/Settings'
+import Discover from '@caramba/ui/pages/Discover'
+import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Dev-only: lazy-load playground so it's tree-shaken from production builds
-const Playground = import.meta.env.DEV ? lazy(() => import('./pages/Playground')) : null
+const Playground = import.meta.env.DEV ? lazy(() => import('@caramba/ui/pages/Playground')) : null
 
 export default function App() {
   return (

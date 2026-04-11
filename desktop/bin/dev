@@ -4,9 +4,11 @@
 # Production builds (npm run build) still use vite build → dist-react/.
 set -e
 
+cd "$(dirname "$0")/.."
+
 # Start Vite dev server in the background
 echo "Starting Vite dev server..."
-npx vite --port 5173 &
+pnpm exec vite --port 5173 &
 VITE_PID=$!
 
 # Wait for the dev server to be ready
@@ -19,7 +21,7 @@ for i in $(seq 1 30); do
 done
 
 echo "Starting Electron (connected to Vite HMR)..."
-VITE_DEV_URL=http://localhost:5173 npx electron .
+VITE_DEV_URL=http://localhost:5173 pnpm exec electron .
 
 # When Electron exits, kill the Vite dev server
 kill $VITE_PID 2>/dev/null

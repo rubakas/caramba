@@ -140,7 +140,7 @@ function createWindow() {
   // Dev-only: save glass config to src/config/glass.json for playground persistence
   if (!app.isPackaged) {
     ipcMain.handle('dev:saveGlassConfig', async (_event, config) => {
-      const configPath = path.join(__dirname, '..', 'src', 'config', 'glass.json')
+      const configPath = path.join(__dirname, '..', '..', 'ui', 'config', 'glass.json')
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8')
       return { ok: true }
     })

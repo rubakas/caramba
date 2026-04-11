@@ -52,7 +52,7 @@ else
     pkg.version = '$NEW_VERSION';
     fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
   "
-  git add "$PACKAGE_JSON"
+  git add "desktop/$PACKAGE_JSON"
   git commit -m "v$NEW_VERSION" --no-verify
 
   echo "Version $CURRENT_VERSION → $NEW_VERSION"
@@ -62,7 +62,7 @@ fi
 # ── 3. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
-npx vite build
+pnpm exec vite build
 
 # ── 4. Setup ffmpeg binaries ───────────────────────────────────────
 echo "Ensuring macOS ffmpeg binaries..."
@@ -71,7 +71,7 @@ bin/setup-ffmpeg
 # ── 5. Build macOS package ─────────────────────────────────────────
 echo ""
 echo "Building macOS app v$CURRENT_VERSION..."
-npx electron-builder --mac --publish never
+pnpm exec electron-builder --mac --publish never
 
 # ── 6. Summary ─────────────────────────────────────────────────────
 echo ""
