@@ -95,9 +95,13 @@ export function PlayerProvider({ children }) {
   }, [showToast, api])
 
   const closePlayer = useCallback((finalTime, finalDuration) => {
-    setPlayerState(prev => ({ ...prev, open: false, streamUrl: null }))
+    let context = {}
+    setPlayerState(prev => {
+      context = { type: prev.type, episodeId: prev.episodeId, movieId: prev.movieId }
+      return { ...prev, open: false, streamUrl: null }
+    })
     window.dispatchEvent(new Event('playback-stopped'))
-    api.stopPlayback(finalTime, finalDuration).catch(() => {})
+    api.stopPlayback(finalTime, finalDuration, context).catch(() => {})
   }, [api])
 
   // Auto-play next episode in the series

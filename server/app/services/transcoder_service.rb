@@ -323,11 +323,11 @@ class TranscoderService
       # Seek before input for fast seeking
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
 
-      # Throttle input reading to ~1.5x realtime so ffmpeg builds a
+      # Throttle input reading to ~10x realtime so ffmpeg builds a
       # comfortable buffer ahead of playback without flooding the
       # browser's MSE SourceBuffer.  -re (1x) is too strict and
       # causes buffering stalls; uncapped is too fast and overflows.
-      args += %w[-readrate 1.5]
+      args += %w[-readrate 10]
 
       args += [ "-i", file_path ]
 

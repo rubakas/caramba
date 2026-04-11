@@ -69,11 +69,17 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
       }
       return result
     },
-    stopPlayback: async (finalTime, finalDuration) => {
+    stopPlayback: async (finalTime, finalDuration, context) => {
       const sid = activeSessionId
       activeSessionId = null
       if (!sid) return null
-      return post('/api/playback/stop', { session: sid })
+      return post('/api/playback/stop', {
+        session: sid,
+        time: finalTime,
+        duration: finalDuration,
+        episode_id: context?.episodeId,
+        movie_id: context?.movieId,
+      })
     },
     setPlaybackEpisode: noopAsync, // folded into server-side session state
     setPlaybackMovie: noopAsync,   // folded into server-side session state
@@ -81,8 +87,13 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
       if (!activeSessionId) return null
       return post('/api/playback/seek', { session: activeSessionId, seekTime })
     },
-    reportProgress: async (videoTime, videoDuration) => {
-      return post('/api/playback/report_progress', { time: videoTime, duration: videoDuration })
+    reportProgress: async (videoTime, videoDuration, context) => {
+      return post('/api/playback/report_progress', {
+        time: videoTime,
+        duration: videoDuration,
+        episode_id: context?.episodeId,
+        movie_id: context?.movieId,
+      })
     },
     getPlaybackStatus: noopAsync,
     getPlaybackPreferences: (opts) => {

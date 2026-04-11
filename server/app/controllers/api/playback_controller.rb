@@ -190,10 +190,33 @@ class Api::PlaybackController < Api::BaseController
   end
 
   # POST /api/playback/stop
-  # Body: { session }
+  # Body: { session, time, duration, episode_id, movie_id }
   def stop_playback
     session_id = params[:session]
     TranscoderService.stop_session(session_id) if session_id.present?
+
+    # Persist final progress so resume works on next play
+    time = params[:time].to_i
+    duration = params[:duration].to_i
+
+    if duration > 0
+      if params[:episode_id].present?
+        ep = Episode.find_by(id: params[:episode_id])
+        if ep
+          ep.update_progress!(time, duration)
+          ep.mark_watched! if time.to_f / duration >= Watchable::WATCHED_THRESHOLD
+        end
+      end
+
+      if params[:movie_id].present?
+        movie = Movie.find_by(id: params[:movie_id])
+        if movie
+          movie.update_progress!(time, duration)
+          movie.mark_watched! if time.to_f / duration >= Watchable::WATCHED_THRESHOLD
+        end
+      end
+    end
+
     render json: { ok: true }
   end
 

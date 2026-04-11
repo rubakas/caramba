@@ -279,8 +279,9 @@ function register() {
 
   // Report progress from renderer (called on timeupdate, every ~3s)
   ipcMain.handle('playback:progress', (_e, videoTime, videoDuration) => {
-    // videoTime is relative to the seek point, adjust to absolute
-    const absoluteTime = currentSeekBase + videoTime
+    // videoTime is already absolute (seekBase + video.currentTime),
+    // computed by the renderer before sending.
+    const absoluteTime = videoTime
     const duration = currentDuration || videoDuration
 
     saveProgress(absoluteTime, duration)

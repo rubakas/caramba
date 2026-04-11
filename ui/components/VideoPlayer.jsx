@@ -428,12 +428,16 @@ export default function VideoPlayer() {
     const timer = setInterval(() => {
       const video = videoRef.current
       if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-        api.reportProgress(seekBaseRef.current + video.currentTime, totalDuration)
+        api.reportProgress(seekBaseRef.current + video.currentTime, totalDuration, {
+          type: playerState.type,
+          episodeId: playerState.episodeId,
+          movieId: playerState.movieId,
+        })
       }
     }, 3000)
 
     return () => clearInterval(timer)
-  }, [playerState.open, totalDuration])
+  }, [playerState.open, playerState.type, playerState.episodeId, playerState.movieId, totalDuration])
 
   // Stall detection: if buffering persists for 10s without recovery,
   // automatically re-seek to the current position to restart the

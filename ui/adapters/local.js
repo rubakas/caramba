@@ -33,11 +33,11 @@ export function createLocalAdapter() {
 
     // Playback
     startPlayback: (filePath, startTime, prefs) => api.startPlayback(filePath, startTime, prefs),
-    stopPlayback: (finalTime, finalDuration) => api.stopPlayback(finalTime, finalDuration),
+    stopPlayback: (finalTime, finalDuration, _context) => api.stopPlayback(finalTime, finalDuration),
     setPlaybackEpisode: (id, whId) => api.setPlaybackEpisode(id, whId),
     setPlaybackMovie: (id) => api.setPlaybackMovie(id),
     seekPlayback: (time) => api.seekPlayback(time),
-    reportProgress: (data) => api.reportProgress(data),
+    reportProgress: (time, duration) => api.reportProgress(time, duration),
     getPlaybackStatus: () => api.getPlaybackStatus(),
     getPlaybackPreferences: (opts) => api.getPlaybackPreferences(opts),
     savePlaybackPreferences: (prefs) => api.savePlaybackPreferences(prefs),
