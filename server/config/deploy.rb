@@ -102,3 +102,6 @@ namespace :deploy do
     end
   end
 end
+
+# Disable Rails asset manifest backup task (using Propshaft, not Sprockets)
+Rake::Task["deploy:assets:backup_manifest"].clear_actions
