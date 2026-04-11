@@ -323,6 +323,16 @@ export default function VideoPlayer() {
 
     return () => {
       cleanupMse()
+      // For the direct-src path (stream://), clear the video src so the
+      // browser's internal loader stops requesting the old stream.
+      // Without this, re-firing the effect (e.g. stall recovery) leaves
+      // the old connection alive, and the video element may keep retrying
+      // a dead stream indefinitely.
+      const v = videoRef.current
+      if (v && !mseRef.current) {
+        v.removeAttribute('src')
+        v.load()  // forces the element to release the old connection
+      }
     }
   }, [playerState.open, playerState.streamUrl, playerState.sessionId, cleanupMse])
 

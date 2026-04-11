@@ -1,13 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
 import Navbar from '../components/Navbar'
 
-export default function Settings() {
+export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
   const [syncFolder, setSyncFolder] = useState('')
   const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  // API mode local state
+  const [serverUrlInput, setServerUrlInput] = useState(apiMode?.server_url || '')
+  const [localPlaybackOn, setLocalPlaybackOn] = useState(apiMode?.local_playback !== false)
+  const [apiSaving, setApiSaving] = useState(false)
+
+  // Sync serverUrlInput when apiMode prop changes (e.g. initial load)
+  useEffect(() => {
+    if (apiMode?.server_url != null) {
+      setServerUrlInput(apiMode.server_url || '')
+    }
+  }, [apiMode?.server_url])
+
+  // Sync localPlaybackOn when apiMode prop changes
+  useEffect(() => {
+    setLocalPlaybackOn(apiMode?.local_playback !== false)
+  }, [apiMode?.local_playback])
 
   const loadData = useCallback(async () => {
     try {
@@ -97,6 +114,76 @@ export default function Settings() {
     }
   }
 
+  // --- API Mode handlers ---
+
+  const handleApiToggle = async () => {
+    if (!window.api?.setApiMode) return
+    const newEnabled = !apiMode?.enabled
+    setApiSaving(true)
+    try {
+      const result = await window.api.setApiMode({ enabled: newEnabled })
+      if (result.error) {
+        showToast(result.error, true)
+      } else {
+        onApiModeChange?.({ enabled: result.enabled, server_url: result.server_url, local_playback: result.local_playback })
+        showToast(newEnabled ? 'API mode enabled.' : 'API mode disabled.')
+      }
+    } catch (err) {
+      showToast('Failed to update API mode.', true)
+    } finally {
+      setApiSaving(false)
+    }
+  }
+
+  const handleLocalPlaybackToggle = async () => {
+    if (!window.api?.setApiMode) return
+    const newValue = !localPlaybackOn
+    // Flip the switch immediately for responsiveness
+    setLocalPlaybackOn(newValue)
+    setApiSaving(true)
+    try {
+      const result = await window.api.setApiMode({ localPlayback: newValue })
+      if (result.error) {
+        // Revert on error
+        setLocalPlaybackOn(!newValue)
+        showToast(result.error, true)
+      } else {
+        onApiModeChange?.({
+          enabled: result.enabled,
+          server_url: result.server_url,
+          local_playback: result.local_playback,
+        })
+        showToast(newValue ? 'Local playback enabled.' : 'Local playback disabled — will stream from server.')
+      }
+    } catch (err) {
+      setLocalPlaybackOn(!newValue)
+      showToast('Failed to update playback setting.', true)
+    } finally {
+      setApiSaving(false)
+    }
+  }
+
+  const handleServerUrlSubmit = async (e) => {
+    e.preventDefault()
+    if (!window.api?.setApiMode) return
+    const trimmed = serverUrlInput.trim()
+    if (trimmed === (apiMode?.server_url || '')) return
+    setApiSaving(true)
+    try {
+      const result = await window.api.setApiMode({ serverUrl: trimmed || null })
+      if (result.error) {
+        showToast(result.error, true)
+      } else {
+        onApiModeChange?.({ enabled: result.enabled, server_url: result.server_url, local_playback: result.local_playback })
+        showToast(trimmed ? 'Server URL saved.' : 'Server URL cleared.')
+      }
+    } catch (err) {
+      showToast('Failed to save server URL.', true)
+    } finally {
+      setApiSaving(false)
+    }
+  }
+
   if (loading) return (
     <>
       <Navbar active="Settings" />
@@ -106,6 +193,7 @@ export default function Settings() {
 
   const isEnabled = !!syncFolder
   const folderInaccessible = isEnabled && status && !status.folder_accessible
+  const hasApiMode = !!onApiModeChange // Only show API mode section in desktop
 
   return (
     <>
@@ -115,6 +203,79 @@ export default function Settings() {
 
         {message && <div className="alert alert--success">{message}</div>}
         {error && <div className="alert">{error}</div>}
+
+        {/* API Mode Section — desktop only */}
+        {hasApiMode && (
+          <section className="settings-section">
+            <h2 className="settings-section-title">API Mode</h2>
+            <p className="settings-help">
+              Connect to a Caramba server to share your library across devices.
+              Data operations will use the API when reachable, with automatic fallback to local database.
+            </p>
+
+            <div className="settings-form">
+              <div className="api-mode-toggle">
+                <span className="api-mode-toggle-label">Enable API Mode</span>
+                <label className="toggle-switch">
+                  <input
+                    type="checkbox"
+                    checked={!!apiMode?.enabled}
+                    onChange={handleApiToggle}
+                    disabled={apiSaving || !apiMode?.server_url}
+                  />
+                  <span className="toggle-switch-track" />
+                  <span className="toggle-switch-thumb" />
+                </label>
+              </div>
+
+              <div className="field">
+                <div className="api-mode-url-row">
+                  {apiMode?.enabled && (
+                    <span className={`api-mode-status ${apiConnected ? 'api-mode-status--connected' : 'api-mode-status--disconnected'}`}>
+                      <span className="api-mode-status-dot" />
+                      {apiConnected ? 'Connected' : 'Disconnected'}
+                    </span>
+                  )}
+                  <form onSubmit={handleServerUrlSubmit} style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      className="api-mode-url-input"
+                      value={serverUrlInput}
+                      onChange={e => setServerUrlInput(e.target.value)}
+                      onBlur={handleServerUrlSubmit}
+                      placeholder="http://192.168.1.100:3000"
+                      spellCheck={false}
+                      disabled={apiSaving}
+                    />
+                  </form>
+                </div>
+              </div>
+
+              {apiMode?.enabled && (
+                <div className="api-mode-toggle" style={{ marginBottom: 0 }}>
+                  <div>
+                    <span className="api-mode-toggle-label">Local Playback</span>
+                    <span className="settings-hint" style={{ display: 'block', marginTop: 2 }}>
+                      {localPlaybackOn
+                        ? 'Uses local transcoder when file is accessible'
+                        : 'Always streams from server'}
+                    </span>
+                  </div>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={localPlaybackOn}
+                      onChange={handleLocalPlaybackToggle}
+                      disabled={apiSaving}
+                    />
+                    <span className="toggle-switch-track" />
+                    <span className="toggle-switch-thumb" />
+                  </label>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* Sync Folder Section */}
         <section className="settings-section">

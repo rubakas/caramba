@@ -2109,6 +2109,127 @@ body {
   font-size: 12px;
 }
 
+/* -- API Mode ---------------------------------------------------- */
+.api-mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.api-mode-toggle-label {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.api-mode-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 100px;
+}
+
+.api-mode-status--connected {
+  color: var(--green);
+  background: rgba(48, 209, 88, .1);
+}
+
+.api-mode-status--disconnected {
+  color: var(--text-tertiary);
+  background: rgba(255,255,255,.05);
+}
+
+.api-mode-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.api-mode-url-input {
+  width: 100%;
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  outline: none;
+  transition: border-color .15s;
+}
+
+.api-mode-url-input:focus {
+  border-color: var(--accent);
+}
+
+.api-mode-url-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.api-mode-url-input:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.api-mode-url-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Toggle switch */
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-switch-track {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,.1);
+  border-radius: 13px;
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.toggle-switch input:checked + .toggle-switch-track {
+  background: var(--accent);
+}
+
+.toggle-switch input:disabled + .toggle-switch-track {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.toggle-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform .2s;
+  pointer-events: none;
+}
+
+.toggle-switch input:checked ~ .toggle-switch-thumb {
+  transform: translateX(18px);
+}
+
 /* ================================================================
    VIDEO PLAYER OVERLAY
    ================================================================ */

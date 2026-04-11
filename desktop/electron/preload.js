@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld('api', {
   setSyncFolder: (folder) => ipcRenderer.invoke('settings:setSyncFolder', folder),
   syncNow: () => ipcRenderer.invoke('settings:syncNow'),
   loadFromSync: () => ipcRenderer.invoke('settings:loadFromSync'),
+  getApiMode: () => ipcRenderer.invoke('settings:getApiMode'),
+  setApiMode: (opts) => ipcRenderer.invoke('settings:setApiMode', opts),
+  fileExists: (path) => ipcRenderer.invoke('fs:exists', path),
 
   // Dialogs
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),

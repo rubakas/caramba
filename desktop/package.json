@@ -1,6 +1,6 @@
 {
   "name": "@caramba/desktop",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "Caramba — Apple TV+ style episode tracker",
   "author": "Vladyslav <vladyslav@hey.com>",
   "main": "electron/main.js",

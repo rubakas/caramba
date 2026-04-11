@@ -2,6 +2,8 @@ Rails.application.routes.draw do
   get "up" => "rails/health#show", as: :rails_health_check
 
   namespace :api do
+    get "health", to: "health#show"
+
     resources :series, param: :slug do
       member do
         get :full           # combined show page data

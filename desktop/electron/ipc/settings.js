@@ -1,8 +1,9 @@
-// IPC handlers for settings + DB sync
+// IPC handlers for settings + DB sync + API mode
 
 const { ipcMain } = require('electron')
 const { execSync } = require('child_process')
 const syncConfig = require('../services/sync-config')
+const apiConfig = require('../services/api-config')
 const dbSync = require('../services/db-sync')
 const fs = require('fs')
 const path = require('path')
@@ -33,6 +34,7 @@ function register() {
     return {
       sync_folder: syncConfig.getSyncFolder(),
       status: dbSync.getStatus(),
+      api_mode: apiConfig.getAll(),
     }
   })
 
@@ -91,6 +93,44 @@ function register() {
     return result.ok
       ? { success: true, message: 'Database loaded from sync folder.' }
       : { error: `Load failed: ${result.reason}` }
+  })
+
+  // --- API Mode ---
+
+  ipcMain.handle('settings:getApiMode', () => {
+    return apiConfig.getAll()
+  })
+
+  ipcMain.handle('settings:setApiMode', (_e, { enabled, serverUrl, localPlayback }) => {
+    if (serverUrl !== undefined) {
+      // Basic URL validation
+      if (serverUrl) {
+        try {
+          new URL(serverUrl)
+        } catch {
+          return { error: 'Invalid URL format.' }
+        }
+      }
+      apiConfig.setServerUrl(serverUrl || null)
+    }
+    if (enabled !== undefined) {
+      // Can't enable without a server URL
+      if (enabled && !apiConfig.getServerUrl()) {
+        return { error: 'Set a server URL before enabling API mode.' }
+      }
+      apiConfig.setEnabled(enabled)
+    }
+    if (localPlayback !== undefined) {
+      apiConfig.setLocalPlayback(localPlayback)
+    }
+    return { success: true, ...apiConfig.getAll() }
+  })
+
+  // --- Utility ---
+
+  ipcMain.handle('fs:exists', (_e, filePath) => {
+    if (!filePath || typeof filePath !== 'string') return false
+    return fs.existsSync(filePath)
   })
 }
 
