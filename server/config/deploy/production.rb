@@ -14,5 +14,5 @@ server "nas.local", user: "mac", roles: %w[app db web]
 # macOS-specific SSH settings
 set :ssh_options, {
   forward_agent: true,
-  auth_methods: %w[publickey]
+  auth_methods: %w[password]
 }
