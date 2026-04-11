@@ -60,11 +60,9 @@ set :launchd_plist, -> { File.expand_path("~/Library/LaunchAgents/#{fetch(:launc
 namespace :deploy do
   task :check_ruby do
     on primary(:app) do
-      with default_env do
-        ruby_version = capture(:ruby, "--version")
-        puts "Ruby version: #{ruby_version}"
-        raise "Ruby 4.x required!" unless ruby_version.include?("4.")
-      end
+      ruby_version = capture(:ruby, "--version")
+      puts "Ruby version: #{ruby_version}"
+      raise "Ruby 4.x required!" unless ruby_version.include?("4.")
     end
   end
 end
