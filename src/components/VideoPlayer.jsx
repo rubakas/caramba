@@ -216,23 +216,37 @@ export default function VideoPlayer() {
   }, [subtitleSize, subtitleStyle])
 
   // --- requestAnimationFrame time polling ---
+  // RAF is throttled (or stopped entirely) when the window is hidden,
+  // minimised, or the display is asleep — but the <video> keeps playing.
+  // We pair it with the native `timeupdate` event (fires ~4 Hz regardless
+  // of visibility) so the progress bar never goes stale.
+  const updateTime = useCallback(() => {
+    const video = videoRef.current
+    if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
+      const abs = seekBaseRef.current + video.currentTime
+      setCurrentTime(abs)
+    }
+  }, [])
+
   useEffect(() => {
     if (!playerState.open) return
 
     const tick = () => {
-      const video = videoRef.current
-      if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-        const abs = seekBaseRef.current + video.currentTime
-        setCurrentTime(abs)
-      }
+      updateTime()
       rafRef.current = requestAnimationFrame(tick)
     }
 
     rafRef.current = requestAnimationFrame(tick)
+
+    // Fallback: timeupdate fires even when the page is in the background
+    const video = videoRef.current
+    if (video) video.addEventListener('timeupdate', updateTime)
+
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      if (video) video.removeEventListener('timeupdate', updateTime)
     }
-  }, [playerState.open])
+  }, [playerState.open, updateTime])
 
   // Report progress to main process periodically
   useEffect(() => {
