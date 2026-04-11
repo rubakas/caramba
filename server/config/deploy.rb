@@ -21,7 +21,7 @@ set :default_env, {
 # Bundler runs inside the server/ subdirectory
 set :bundle_gemfile, -> { release_path.join("server", "Gemfile") }
 set :bundle_path, -> { shared_path.join("bundle") }
-set :bundle_flags, "--deployment --quiet"
+set :bundle_flags, "--quiet"
 
 # Rails paths are relative to server/
 set :rails_env, "production"
