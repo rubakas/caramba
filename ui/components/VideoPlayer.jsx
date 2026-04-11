@@ -949,16 +949,16 @@ export default function VideoPlayer() {
                       key={s.index}
                       className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
                       onClick={() => {
-                        if (s.index !== playerState.activeSubtitleIndex) {
-                          if (s.isText) {
-                            if (playerState.isBitmapSubtitle) {
-                              handleSwitchBitmapSubtitle(null).then(() => {
-                                handleSwitchSubtitle(s.index)
-                              })
-                            } else {
+                        if (s.isText) {
+                          if (playerState.isBitmapSubtitle) {
+                            handleSwitchBitmapSubtitle(null).then(() => {
                               handleSwitchSubtitle(s.index)
-                            }
+                            })
                           } else {
+                            handleSwitchSubtitle(s.index)
+                          }
+                        } else {
+                          if (s.index !== playerState.activeSubtitleIndex) {
                             handleSwitchBitmapSubtitle(s.index)
                           }
                         }

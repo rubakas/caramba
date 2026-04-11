@@ -167,9 +167,11 @@ class TranscoderService
       stdout
     end
 
-    def set_session_subtitle(session_id, vtt)
+    def set_session_subtitle(session_id, vtt, stream_index: nil)
       return unless @session && @session[:id] == session_id
       @session[:subtitle_vtt] = vtt
+      @session[:active_subtitle_index] = stream_index if stream_index
+      @session[:active_subtitle_index] = nil if vtt.nil? && stream_index.nil?
     end
 
     def get_session_subtitle(session_id)
@@ -197,7 +199,7 @@ class TranscoderService
     def shift_vtt(vtt, offset)
       return vtt if offset <= 0 || vtt.blank?
 
-      time_line_re = /^(\d{1,2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}\.\d{3})(.*)/
+      time_line_re = /^(\d{1,2}:(?:\d{2}:)?\d{2}\.\d{3})\s*-->\s*(\d{1,2}:(?:\d{2}:)?\d{2}\.\d{3})(.*)/
       lines = vtt.split("\n")
       result = []
       skip_cue = false
@@ -323,11 +325,11 @@ class TranscoderService
       # Seek before input for fast seeking
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
 
-      # Throttle input reading to ~10x realtime so ffmpeg builds a
-      # comfortable buffer ahead of playback without flooding the
-      # browser's MSE SourceBuffer.  -re (1x) is too strict and
-      # causes buffering stalls; uncapped is too fast and overflows.
-      args += %w[-readrate 10]
+      # Throttle input reading so ffmpeg doesn't flood the MSE SourceBuffer.
+      # With bitmap subtitle burn-in, software decoding + overlay is much
+      # slower so we skip the throttle entirely and let the encode speed be
+      # the natural bottleneck.  For normal (hw-accel) transcode, cap at 10x.
+      args += %w[-readrate 10] unless burn_sub
 
       args += [ "-i", file_path ]
 

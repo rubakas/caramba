@@ -91,11 +91,13 @@ class Api::PlaybackController < Api::BaseController
 
     session[:playback_session_id] = session_id
 
-    # Extract text subtitles in the background
+    # Extract text subtitles in the background (full file, absolute timestamps).
+    # Desktop works the same way — VTT cues use absolute times that match
+    # video.currentTime directly.
     if subtitle_stream_index && !is_bitmap
       Thread.new do
         vtt = TranscoderService.extract_subtitles(file_path, subtitle_stream_index)
-        TranscoderService.set_session_subtitle(session_id, vtt) if vtt
+        TranscoderService.set_session_subtitle(session_id, vtt, stream_index: subtitle_stream_index) if vtt
       end
     end
 
@@ -225,6 +227,7 @@ class Api::PlaybackController < Api::BaseController
   # Serves extracted WebVTT with timestamps shifted to match the current
   # seek position.  After a seek, video.currentTime restarts from 0, but
   # the extracted VTT has absolute timestamps from the source file.
+  # This mirrors the desktop subtitle:// protocol which also shifts by seekBase.
   def subtitles
     session_id = params[:session]
     vtt = TranscoderService.get_session_subtitle(session_id)
@@ -233,7 +236,6 @@ class Api::PlaybackController < Api::BaseController
       return render plain: "WEBVTT\n\n", content_type: "text/vtt"
     end
 
-    # Shift timestamps to align with current seek base
     seek_base = TranscoderService.current_seek_time(session_id)
     shifted = TranscoderService.shift_vtt(vtt, seek_base)
 
@@ -255,6 +257,10 @@ class Api::PlaybackController < Api::BaseController
     info = TranscoderService.session_info(session_id)
     return render(json: { error: "No active session" }, status: :not_found) unless info
 
+    # Save subtitle state before start_session resets it
+    active_sub_index = info[:active_subtitle_index]
+    had_subtitle = TranscoderService.get_session_subtitle(session_id).present?
+
     # Calculate absolute time (seekBase + relative currentTime)
     abs_time = (info[:seek_time] || 0) + current_time
 
@@ -262,6 +268,14 @@ class Api::PlaybackController < Api::BaseController
       audio_stream_index: audio_index,
       burn_subtitle_index: info[:burn_subtitle_index],
       duration: info[:duration])
+
+    # Re-extract subtitles synchronously — start_session resets the
+    # session hash.  Extraction is fast (text demux, no encode) so it
+    # won't delay the response noticeably.
+    if had_subtitle && active_sub_index
+      vtt = TranscoderService.extract_subtitles(info[:file_path], active_sub_index)
+      TranscoderService.set_session_subtitle(session_id, vtt, stream_index: active_sub_index) if vtt
+    end
 
     stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
 
@@ -292,7 +306,7 @@ class Api::PlaybackController < Api::BaseController
 
     vtt = TranscoderService.extract_subtitles(info[:file_path], stream_index.to_i)
     if vtt.present?
-      TranscoderService.set_session_subtitle(session_id, vtt)
+      TranscoderService.set_session_subtitle(session_id, vtt, stream_index: stream_index.to_i)
       render json: { subtitleUrl: "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}" }
     else
       render json: { subtitleUrl: nil }

@@ -184,12 +184,23 @@ export function PlayerProvider({ children }) {
     try {
       const result = await api.seekPlayback(absoluteTime)
       if (result && result.streamUrl) {
-        setPlayerState(prev => ({
-          ...prev,
-          streamUrl: result.streamUrl,
-          seekBase: result.seekBase ?? absoluteTime,
-          sessionId: Date.now(),
-        }))
+        setPlayerState(prev => {
+          // After seek the server shifts the stored VTT by the new seek_time.
+          // Bust the subtitleUrl cache so the <track> element re-mounts and
+          // the browser re-fetches the correctly-shifted VTT.
+          let subtitleUrl = prev.subtitleUrl
+          if (subtitleUrl) {
+            const base = subtitleUrl.replace(/&t=\d+/, '')
+            subtitleUrl = `${base}&t=${Date.now()}`
+          }
+          return {
+            ...prev,
+            streamUrl: result.streamUrl,
+            seekBase: result.seekBase ?? absoluteTime,
+            sessionId: Date.now(),
+            subtitleUrl,
+          }
+        })
         return result
       }
     } catch (err) {
@@ -204,12 +215,20 @@ export function PlayerProvider({ children }) {
       const result = await api.switchAudio(audioStreamIndex, currentVideoTime)
       if (result && result.streamUrl) {
         setPlayerState(prev => {
+          // Bust subtitleUrl cache — audio switch restarts ffmpeg at a new
+          // seek position so the VTT shift changes.
+          let subtitleUrl = prev.subtitleUrl
+          if (subtitleUrl) {
+            const base = subtitleUrl.replace(/&t=\d+/, '')
+            subtitleUrl = `${base}&t=${Date.now()}`
+          }
           const next = {
             ...prev,
             streamUrl: result.streamUrl,
             seekBase: result.seekBase ?? (prev.seekBase + currentVideoTime),
             activeAudioIndex: audioStreamIndex,
             sessionId: Date.now(),
+            subtitleUrl,
           }
           savePreferences(next)
           return next
