@@ -1,0 +1,17 @@
+#!/bin/bash
+# Launcher script for launchd — starts Rails in production mode.
+# Called by com.caramba.server.plist.
+
+set -e
+
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$DIR"
+
+# Ensure mise shims are on PATH
+export PATH="$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Run pending migrations (idempotent — safe to run every start)
+bundle exec rails db:prepare
+
+# Start Puma (foreground — launchd manages the process lifecycle)
+exec bundle exec rails server -e production -p "${PORT:-3000}"

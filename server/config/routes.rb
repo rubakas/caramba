@@ -66,4 +66,11 @@ Rails.application.routes.draw do
     get "media/episodes/:id", to: "media#episode", as: :media_episode
     get "media/movies/:id", to: "media#movie", as: :media_movie
   end
+
+  # SPA catch-all: serve React index.html for all non-API routes.
+  # Must be LAST so /api/* and /up routes take priority.
+  get "*path", to: "spa#index", constraints: ->(req) {
+    !req.path.start_with?("/api/", "/up") && !req.path.start_with?("/assets/")
+  }
+  root "spa#index"
 end
