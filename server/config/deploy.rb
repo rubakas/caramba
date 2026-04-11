@@ -3,6 +3,8 @@
 # Deploys the full monorepo, then runs bundle install in server/ and
 # builds the React web app into server/public/ for production serving.
 
+require "stringio"
+
 lock "~> 3.20"
 
 set :application, "caramba"
@@ -105,3 +107,30 @@ end
 
 # Disable Rails asset manifest backup task (using Propshaft, not Sprockets)
 Rake::Task["deploy:assets:backup_manifest"].clear_actions
+
+# =============================================================================
+# Setup launchd service for automatic startup
+# =============================================================================
+
+namespace :deploy do
+  task :setup_launchd do
+    on roles(:app) do
+      # Create LaunchAgents directory if it doesn't exist
+      execute :mkdir, "-p ~/Library/LaunchAgents"
+
+      # Generate plist from template
+      plist_content = File.read("config/deploy/com.caramba.server.plist.erb")
+      plist_content = plist_content
+        .gsub("DEPLOY_PATH", fetch(:deploy_to))
+        .gsub("HOME_PATH", Dir.home)
+
+      # Upload plist to remote
+      plist_path = fetch(:launchd_plist)
+      upload! StringIO.new(plist_content), plist_path
+
+      puts "Launchd plist installed at #{plist_path}"
+    end
+  end
+end
+
+after "deploy:finished", "deploy:setup_launchd"
