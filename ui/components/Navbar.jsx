@@ -1,6 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { refractive } from '@hashintel/refractive'
 import { useGlassConfig } from '../config/useGlassConfig'
+import { useCapabilities } from '../context/ApiContext'
 
 const PlayIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -10,14 +11,15 @@ export default function Navbar({ active, actions, rightContent }) {
   const navigate = useNavigate()
   const location = useLocation()
   const navbarGlass = useGlassConfig('navbar')
+  const { hasSettings } = useCapabilities()
 
   const links = [
     { label: 'Library', path: '/' },
     { label: 'Movies', path: '/movies' },
     { label: 'Discover', path: '/discover' },
     { label: 'History', path: '/history' },
-    { label: 'Settings', path: '/settings' },
-    ...(import.meta.env.DEV ? [{ label: 'Playground', path: '/playground' }] : []),
+    ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
+    ...(import.meta.env.DEV && hasSettings ? [{ label: 'Playground', path: '/playground' }] : []),
   ]
 
   return (

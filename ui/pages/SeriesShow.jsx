@@ -8,6 +8,7 @@ import SeasonTabs from '../components/SeasonTabs'
 import EpisodeRow from '../components/EpisodeRow'
 import { usePlayer } from '../context/PlayerContext'
 import { useToast } from '../context/ToastContext'
+import { useApi, useCapabilities } from '../context/ApiContext'
 import { genresList, premiereYear, statusClass, formatTime, progressPercent, truncate } from '../utils'
 
 const PlaySvg = ({ size = 20 }) => (
@@ -17,6 +18,8 @@ const PlaySvg = ({ size = 20 }) => (
 export default function SeriesShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
+  const api = useApi()
+  const { canPlay, canManage, canDownload, hasNowPlaying } = useCapabilities()
   const { openPlayer, launching } = usePlayer()
   const { showToast } = useToast()
   const [series, setSeries] = useState(null)
@@ -31,14 +34,14 @@ export default function SeriesShow() {
 
   const loadData = useCallback(async () => {
     try {
-      const data = await window.api.getSeriesShow(slug)
+      const data = await api.getSeriesShow(slug)
       if (!data) { navigate('/'); return }
       setSeries(data.series)
       setEpisodes(data.episodes)
       setSeasons(data.seasons)
       setResumeEp(data.resumeEp)
       setNextEp(data.nextEp)
-      setVlcAvailable(data.vlcAvailable)
+      setVlcAvailable(data.vlcAvailable || false)
 
       // Determine active season: last watched episode's season, or first season
       setActiveSeason(prev => {
@@ -54,16 +57,16 @@ export default function SeriesShow() {
     } finally {
       setLoading(false)
     }
-  }, [slug, navigate])
+  }, [slug, navigate, api])
 
   useEffect(() => {
     loadData()
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
-    const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+    const unsubVlc = api.onVlcPlaybackEnded(() => loadData())
 
     // Listen for download progress events
-    const unsubDl = window.api.onMediaDownloadProgress((data) => {
+    const unsubDl = api.onMediaDownloadProgress((data) => {
       if (data.episodeId) {
         if (data.status === 'downloading') {
           setDownloadProgress(prev => ({ ...prev, [data.episodeId]: data.progress }))
@@ -84,10 +87,10 @@ export default function SeriesShow() {
       unsubVlc()
       unsubDl()
     }
-  }, [loadData])
+  }, [loadData, api])
 
   const handlePlay = async (episodeId) => {
-    const result = await window.api.playEpisode(episodeId)
+    const result = await api.playEpisode(episodeId)
     if (!result || result.error) {
       showToast(result?.error || 'Failed to start playback', { type: 'error' })
       return
@@ -105,27 +108,27 @@ export default function SeriesShow() {
   }
 
   const handleToggle = async (episodeId) => {
-    await window.api.toggleEpisode(episodeId)
+    await api.toggleEpisode(episodeId)
     loadData()
   }
 
   const handleOpenInVlc = async (episodeId) => {
     const ep = episodes.find(e => e.id === episodeId)
     if (!ep?.file_path) return
-    const result = await window.api.openInVlc({ filePath: ep.file_path, episodeId })
+    const result = await api.openInVlc({ filePath: ep.file_path, episodeId })
     if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleOpenInDefault = async (episodeId) => {
     const ep = episodes.find(e => e.id === episodeId)
     if (!ep?.file_path) return
-    const result = await window.api.openInDefault(ep.file_path, episodeId)
+    const result = await api.openInDefault(ep.file_path, episodeId)
     if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleDownloadEpisode = async (episodeId) => {
     showToast('Starting download...', { type: 'info', duration: 2000 })
-    const result = await window.api.downloadEpisode(episodeId)
+    const result = await api.downloadEpisode(episodeId)
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.ok) {
@@ -135,7 +138,7 @@ export default function SeriesShow() {
   }
 
   const handleDeleteDownloadEpisode = async (episodeId) => {
-    await window.api.deleteDownloadEpisode(episodeId)
+    await api.deleteDownloadEpisode(episodeId)
     showToast('Download deleted', { type: 'info', duration: 2000 })
     loadData()
   }
@@ -143,7 +146,7 @@ export default function SeriesShow() {
   const handleDownloadSeason = async (seasonNumber) => {
     if (!series) return
     showToast(`Downloading Season ${seasonNumber}...`, { type: 'info', duration: 3000 })
-    const result = await window.api.downloadSeason(series.id, seasonNumber)
+    const result = await api.downloadSeason(series.id, seasonNumber)
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.results) {
@@ -160,31 +163,31 @@ export default function SeriesShow() {
 
   const handleDeleteSeasonDownloads = async (seasonNumber) => {
     if (!series) return
-    await window.api.deleteDownloadSeason(series.id, seasonNumber)
+    await api.deleteDownloadSeason(series.id, seasonNumber)
     showToast(`Season ${seasonNumber} downloads deleted`, { type: 'info', duration: 2000 })
     loadData()
   }
 
   const handleScan = async () => {
-    await window.api.scanSeries(slug)
+    await api.scanSeries(slug)
     loadData()
   }
 
   const handleRefresh = async () => {
-    await window.api.refreshSeriesMetadata(slug)
+    await api.refreshSeriesMetadata(slug)
     loadData()
   }
 
   const handleRemove = async () => {
     if (!confirm(`Remove '${series.name}' and all its watch history?`)) return
-    await window.api.destroySeries(slug)
+    await api.destroySeries(slug)
     navigate('/')
   }
 
   const handleRelocate = async () => {
-    const newPath = await window.api.selectFolder()
+    const newPath = await api.selectFolder()
     if (!newPath) return
-    const result = await window.api.relocateSeries(slug, newPath)
+    const result = await api.relocateSeries(slug, newPath)
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else {
@@ -230,16 +233,16 @@ export default function SeriesShow() {
     <>
       <Navbar
         active="Episodes"
-        actions={
+        actions={canManage ? (
           <>
             <refractive.button className="topnav-btn" onClick={handleScan} refraction={navBtnGlass}>Rescan</refractive.button>
             <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
             <refractive.button className="topnav-btn" onClick={handleRelocate} refraction={navBtnGlass}>Relocate</refractive.button>
             <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
-        }
+        ) : null}
       />
-      <NowPlaying />
+      {hasNowPlaying && <NowPlaying />}
 
       {/* Hero */}
       {hasMeta && (
@@ -290,8 +293,14 @@ export default function SeriesShow() {
         {seasons.length === 0 ? (
           <div className="empty-hero" style={{ padding: '60px 0' }}>
             <h2>No episodes found</h2>
-            <p>Scan the media folder to load episodes.</p>
-            <refractive.button className="btn-primary" onClick={handleScan} refraction={primaryBtnGlass}>Scan Media Folder</refractive.button>
+            {canManage ? (
+              <>
+                <p>Scan the media folder to load episodes.</p>
+                <refractive.button className="btn-primary" onClick={handleScan} refraction={primaryBtnGlass}>Scan Media Folder</refractive.button>
+              </>
+            ) : (
+              <p>No episodes have been scanned yet.</p>
+            )}
           </div>
         ) : (
           <>
@@ -313,9 +322,11 @@ export default function SeriesShow() {
                     </span>
                   </div>
                 </div>
-                <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass}>
-                  {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
-                </refractive.button>
+                {canPlay && (
+                  <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass}>
+                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
+                  </refractive.button>
+                )}
               </refractive.div>
             )}
 
@@ -332,9 +343,11 @@ export default function SeriesShow() {
                     <p className="cta-desc">{truncate(nextEp.description, 150)}</p>
                   )}
                 </div>
-                <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass}>
-                  {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
-                </refractive.button>
+                {canPlay && (
+                  <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass}>
+                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
+                  </refractive.button>
+                )}
               </refractive.div>
             ) : !lastWatched ? (
               episodes.length > 0 && (
@@ -346,9 +359,11 @@ export default function SeriesShow() {
                       <span className="cta-ep-title">{episodes[0].title}</span>
                     </div>
                   </div>
-                  <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass}>
-                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
-                  </refractive.button>
+                  {canPlay && (
+                    <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass}>
+                      {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
+                    </refractive.button>
+                  )}
                 </refractive.div>
               )
             ) : allWatched ? (
@@ -399,29 +414,31 @@ export default function SeriesShow() {
                     <h2>{num === 0 ? 'Specials' : `Season ${num}`}</h2>
                     <span className="season-detail">
                       {seasonEps.length} episodes &middot; {watchedInSeason} watched
-                      {hasAnyDownloads && (
+                      {canDownload && hasAnyDownloads && (
                         <> &middot; {downloadedInSeason} downloaded</>
                       )}
                     </span>
-                    <div className="season-header-actions">
-                      {hasAnyDownloads ? (
-                        <button
-                          className="btn-season-dl btn-season-dl--delete"
-                          onClick={() => handleDeleteSeasonDownloads(num)}
-                          title="Delete season downloads"
-                        >
-                          {allDownloaded ? 'Delete All Downloads' : `Delete ${downloadedInSeason} Downloads`}
-                        </button>
-                      ) : (
-                        <button
-                          className="btn-season-dl"
-                          onClick={() => handleDownloadSeason(num)}
-                          title="Download entire season"
-                        >
-                          Download Season
-                        </button>
-                      )}
-                    </div>
+                    {canDownload && (
+                      <div className="season-header-actions">
+                        {hasAnyDownloads ? (
+                          <button
+                            className="btn-season-dl btn-season-dl--delete"
+                            onClick={() => handleDeleteSeasonDownloads(num)}
+                            title="Delete season downloads"
+                          >
+                            {allDownloaded ? 'Delete All Downloads' : `Delete ${downloadedInSeason} Downloads`}
+                          </button>
+                        ) : (
+                          <button
+                            className="btn-season-dl"
+                            onClick={() => handleDownloadSeason(num)}
+                            title="Download entire season"
+                          >
+                            Download Season
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <div className="season-bar">
                       <div className="season-bar-fill" style={{ width: `${pct}%` }} />
                     </div>

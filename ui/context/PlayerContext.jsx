@@ -1,10 +1,12 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react'
 import { useToast } from './ToastContext'
+import { useApi } from './ApiContext'
 
 const PlayerContext = createContext(null)
 
 export function PlayerProvider({ children }) {
   const { showToast } = useToast()
+  const api = useApi()
   const [launching, setLaunching] = useState(false)
   const [playerState, setPlayerState] = useState({
     open: false,
@@ -33,15 +35,15 @@ export function PlayerProvider({ children }) {
     try {
       // Tell main process what we're playing
       if (type === 'episode') {
-        await window.api.setPlaybackEpisode(episodeId.id, episodeId.whId)
+        await api.setPlaybackEpisode(episodeId.id, episodeId.whId)
       } else if (type === 'movie') {
-        await window.api.setPlaybackMovie(movieId)
+        await api.setPlaybackMovie(movieId)
       }
 
       // Load saved preferences for this series/movie (non-blocking — failure is OK)
       let prefs = null
       try {
-        const prefPromise = window.api.getPlaybackPreferences({
+        const prefPromise = api.getPlaybackPreferences({
           type,
           seriesId: type === 'episode' ? (seriesId || null) : null,
           movieId: type === 'movie' ? movieId : null,
@@ -53,7 +55,7 @@ export function PlayerProvider({ children }) {
 
       // Start the transcoder — pass preferences so the backend picks the right
       // audio/subtitle track from the start (no post-start switching needed)
-      const result = await window.api.startPlayback(filePath, startTime || 0, prefs)
+      const result = await api.startPlayback(filePath, startTime || 0, prefs)
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
@@ -88,13 +90,13 @@ export function PlayerProvider({ children }) {
     } finally {
       setLaunching(false)
     }
-  }, [showToast])
+  }, [showToast, api])
 
   const closePlayer = useCallback((finalTime, finalDuration) => {
     setPlayerState(prev => ({ ...prev, open: false, streamUrl: null }))
     window.dispatchEvent(new Event('playback-stopped'))
-    window.api.stopPlayback(finalTime, finalDuration).catch(() => {})
-  }, [])
+    api.stopPlayback(finalTime, finalDuration).catch(() => {})
+  }, [api])
 
   // Auto-play next episode in the series
   const playNextEpisode = useCallback(async () => {
@@ -114,7 +116,7 @@ export function PlayerProvider({ children }) {
 
     try {
       // Look up the next episode
-      const nextData = await window.api.getNextEpisode(currentEpisodeId)
+      const nextData = await api.getNextEpisode(currentEpisodeId)
       if (!nextData || !nextData.episode) {
         // No next episode — close the player
         closePlayer()
@@ -124,10 +126,10 @@ export function PlayerProvider({ children }) {
       const nextEp = nextData.episode
 
       // Stop current playback (ffmpeg cleanup) — fire and forget
-      await window.api.stopPlayback().catch(() => {})
+      await api.stopPlayback().catch(() => {})
 
       // Play the next episode (same flow as SeriesShow.handlePlay)
-      const result = await window.api.playEpisode(nextEp.id)
+      const result = await api.playEpisode(nextEp.id)
       if (!result || result.error) {
         closePlayer()
         return
@@ -148,7 +150,7 @@ export function PlayerProvider({ children }) {
       showToast('Failed to play next episode: ' + (err.message || 'Unknown error'), { type: 'error' })
       closePlayer()
     }
-  }, [closePlayer, openPlayer, showToast])
+  }, [closePlayer, openPlayer, showToast, api])
 
   // Helper to persist current audio/subtitle preference
   const savePreferences = useCallback((state, overrides = {}) => {
@@ -158,7 +160,7 @@ export function PlayerProvider({ children }) {
     const audioStream = state.audioStreams.find(s => s.index === audioIndex)
     const subtitleStream = subtitleIndex != null ? state.subtitleStreams.find(s => s.index === subtitleIndex) : null
 
-    window.api.savePlaybackPreferences({
+    api.savePlaybackPreferences({
       type: state.type,
       seriesId: state.seriesId,
       movieId: state.movieId,
@@ -168,12 +170,12 @@ export function PlayerProvider({ children }) {
       subtitleSize: overrides.subtitleSize || state.subtitleSize || 'medium',
       subtitleStyle: overrides.subtitleStyle || state.subtitleStyle || 'classic',
     }).catch(() => {})
-  }, [])
+  }, [api])
 
   // Switch audio track — restarts ffmpeg at current position with new audio
   const switchAudio = useCallback(async (audioStreamIndex, currentVideoTime) => {
     try {
-      const result = await window.api.switchAudio(audioStreamIndex, currentVideoTime)
+      const result = await api.switchAudio(audioStreamIndex, currentVideoTime)
       if (result && result.streamUrl) {
         setPlayerState(prev => {
           const next = { ...prev, activeAudioIndex: audioStreamIndex, sessionId: Date.now() }
@@ -191,7 +193,7 @@ export function PlayerProvider({ children }) {
   // Switch subtitle track — re-extracts subtitle or disables
   const switchSubtitle = useCallback(async (subtitleStreamIndex) => {
     try {
-      const result = await window.api.switchSubtitle(subtitleStreamIndex)
+      const result = await api.switchSubtitle(subtitleStreamIndex)
       if (result) {
         if (result.error) {
           console.warn('[Subtitle] switchSubtitle error:', result.error)
@@ -212,7 +214,7 @@ export function PlayerProvider({ children }) {
   // Switch bitmap subtitle track — restarts ffmpeg with overlay burn-in (or disables)
   const switchBitmapSubtitle = useCallback(async (subtitleStreamIndex, currentVideoTime) => {
     try {
-      const result = await window.api.switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
+      const result = await api.switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
       if (result && result.streamUrl) {
         setPlayerState(prev => {
           const isBitmap = subtitleStreamIndex != null
@@ -249,8 +251,8 @@ export function PlayerProvider({ children }) {
   // Subtitles are extracted in the background after playback starts so the
   // video begins immediately without waiting for subtitle extraction to finish.
   useEffect(() => {
-    if (!window.api?.onSubtitlesReady) return
-    const cleanup = window.api.onSubtitlesReady(({ subtitleUrl, subtitleStreamIndex }) => {
+    if (!api.onSubtitlesReady) return
+    const cleanup = api.onSubtitlesReady(({ subtitleUrl, subtitleStreamIndex }) => {
       setPlayerState(prev => {
         // Only apply if player is open and still expects this subtitle track
         if (!prev.open || prev.activeSubtitleIndex !== subtitleStreamIndex) return prev
@@ -258,7 +260,7 @@ export function PlayerProvider({ children }) {
       })
     })
     return cleanup
-  }, [])
+  }, [api])
 
   const contextValue = useMemo(() => ({
     playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance

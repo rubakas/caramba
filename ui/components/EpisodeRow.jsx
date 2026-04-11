@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { formatTime, progressPercent, truncate } from '../utils'
+import { useCapabilities } from '../context/ApiContext'
 
 const PlaySvg = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -30,6 +31,7 @@ const DownloadedSvg = ({ size = 14 }) => (
 )
 
 export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpenInVlc, onOpenInDefault, onDownload, onDeleteDownload, vlcAvailable, downloadProgress }) {
+  const { canPlay, canOpenExternal, canDownload } = useCapabilities()
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
@@ -82,7 +84,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
         <div className="ep-top-row">
           <span className="ep-name">
             {ep.title || ep.code}
-            {isDownloaded && (
+            {canDownload && isDownloaded && (
               <span className="ep-dl-badge ep-dl-badge--complete" title="Downloaded">
                 <DownloadedSvg size={13} />
               </span>
@@ -110,7 +112,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
             </span>
           </div>
         )}
-        {isDownloading && (
+        {canDownload && isDownloading && (
           <div className="ep-dl-progress">
             <div className="ep-dl-progress-track">
               <div className="ep-dl-progress-fill" style={{ width: `${Math.round(dlProgress * 100)}%` }} />
@@ -120,9 +122,11 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
         )}
       </div>
       <div className="ep-actions">
-        <button className="btn-ep-play" onClick={() => onPlay(ep.id)}>
-          <PlaySvg />
-        </button>
+        {canPlay && (
+          <button className="btn-ep-play" onClick={() => onPlay(ep.id)}>
+            <PlaySvg />
+          </button>
+        )}
         <div className="ep-more-wrap">
           <button
             ref={btnRef}
@@ -140,7 +144,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                 <span className="ep-popover-icon">{watched ? '\u21A9' : '\u2713'}</span>
                 <span>{watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
               </button>
-              {vlcAvailable && (
+              {canOpenExternal && vlcAvailable && (
                 <button
                   className="ep-popover-item"
                   onClick={() => { onOpenInVlc(ep.id); setMenuOpen(false) }}
@@ -149,31 +153,37 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
                   <span>Open in VLC</span>
                 </button>
               )}
-              <button
-                className="ep-popover-item"
-                onClick={() => { onOpenInDefault(ep.id); setMenuOpen(false) }}
-              >
-                <span className="ep-popover-icon">{'\u2197'}</span>
-                <span>Open in Default Player</span>
-              </button>
-              <div className="ep-popover-divider" />
-              {isDownloaded ? (
-                <button
-                  className="ep-popover-item ep-popover-item--danger"
-                  onClick={() => { onDeleteDownload(ep.id); setMenuOpen(false) }}
-                >
-                  <span className="ep-popover-icon">{'\u2715'}</span>
-                  <span>Delete Download</span>
-                </button>
-              ) : !isDownloading ? (
+              {canOpenExternal && (
                 <button
                   className="ep-popover-item"
-                  onClick={() => { onDownload(ep.id); setMenuOpen(false) }}
+                  onClick={() => { onOpenInDefault(ep.id); setMenuOpen(false) }}
                 >
-                  <span className="ep-popover-icon">{'\u2913'}</span>
-                  <span>Download</span>
+                  <span className="ep-popover-icon">{'\u2197'}</span>
+                  <span>Open in Default Player</span>
                 </button>
-              ) : null}
+              )}
+              {canDownload && (
+                <>
+                  <div className="ep-popover-divider" />
+                  {isDownloaded ? (
+                    <button
+                      className="ep-popover-item ep-popover-item--danger"
+                      onClick={() => { onDeleteDownload(ep.id); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{'\u2715'}</span>
+                      <span>Delete Download</span>
+                    </button>
+                  ) : !isDownloading ? (
+                    <button
+                      className="ep-popover-item"
+                      onClick={() => { onDownload(ep.id); setMenuOpen(false) }}
+                    >
+                      <span className="ep-popover-icon">{'\u2913'}</span>
+                      <span>Download</span>
+                    </button>
+                  ) : null}
+                </>
+              )}
             </div>
           )}
         </div>

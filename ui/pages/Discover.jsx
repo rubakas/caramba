@@ -4,6 +4,7 @@ import { refractive } from '@hashintel/refractive'
 import Navbar from '../components/Navbar'
 import { genresList, premiereYear, statusClass } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
+import { useApi } from '../context/ApiContext'
 
 // -- SVG Icons ----------------------------------------------------
 
@@ -106,6 +107,7 @@ function MovieCard({ movie, onClick, onToggleWatchlist }) {
 // -- Detail Modal -------------------------------------------------
 
 function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
+  const api = useApi()
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState(null)
   const [activeSeason, setActiveSeason] = useState(null)
@@ -126,10 +128,10 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
     const fetch = async () => {
       try {
         if (isMovie) {
-          const data = await window.api.getMovieDetails(item.imdb_id)
+          const data = await api.getMovieDetails(item.imdb_id)
           if (!cancelled) setDetail(data)
         } else {
-          const data = await window.api.getShowDetails(item.tvmaze_id)
+          const data = await api.getShowDetails(item.tvmaze_id)
           if (!cancelled && data) {
             setDetail(data)
             // Set first season as active
@@ -146,7 +148,7 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
     fetch()
 
     return () => { cancelled = true }
-  }, [item, isMovie])
+  }, [item, isMovie, api])
 
   // Close on Escape
   useEffect(() => {
@@ -363,6 +365,7 @@ function DetailModal({ item, onClose, onToggleWatchlist, navigate }) {
 
 export default function Discover() {
   const navigate = useNavigate()
+  const api = useApi()
   const [query, setQuery] = useState('')
   const [searchType, setSearchType] = useState('all') // 'all' | 'shows' | 'movies'
   const [shows, setShows] = useState([])
@@ -378,12 +381,12 @@ export default function Discover() {
 
   const loadWatchlist = useCallback(async () => {
     try {
-      const items = await window.api.listWatchlist()
+      const items = await api.listWatchlist()
       setWatchlist(items)
     } catch (err) {
       console.error('Failed to load watchlist:', err)
     }
-  }, [])
+  }, [api])
 
   useEffect(() => { loadWatchlist() }, [loadWatchlist])
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -403,7 +406,7 @@ export default function Discover() {
     debounceRef.current = setTimeout(async () => {
       setSearching(true)
       try {
-        const data = await window.api.searchShows(query, searchType)
+        const data = await api.searchShows(query, searchType)
         setShows(data.shows || [])
         setMovies(data.movies || [])
         setHasSearched(true)
@@ -426,12 +429,12 @@ export default function Discover() {
     const isMovie = item._type === 'movie'
     if (item.in_watchlist) {
       if (isMovie) {
-        await window.api.removeFromWatchlist({ _type: 'movie', imdb_id: item.imdb_id })
+        await api.removeFromWatchlist({ _type: 'movie', imdb_id: item.imdb_id })
       } else {
-        await window.api.removeFromWatchlist(item.tvmaze_id)
+        await api.removeFromWatchlist(item.tvmaze_id)
       }
     } else {
-      await window.api.addToWatchlist(item)
+      await api.addToWatchlist(item)
     }
     await loadWatchlist()
     // Update search results in place

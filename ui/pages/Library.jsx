@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import PosterCard from '../components/PosterCard'
 import { useGlassConfig } from '../config/useGlassConfig'
+import { useApi, useCapabilities } from '../context/ApiContext'
 
 const FilmIcon = () => (
   <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -18,6 +19,8 @@ const FilmIcon = () => (
 
 export default function Library() {
   const navigate = useNavigate()
+  const api = useApi()
+  const { canAdd, hasNowPlaying } = useCapabilities()
   const [seriesList, setSeriesList] = useState([])
   const [resumables, setResumables] = useState({})
   const [loading, setLoading] = useState(true)
@@ -26,12 +29,12 @@ export default function Library() {
 
   const loadData = useCallback(async () => {
     try {
-      const all = await window.api.listSeries()
+      const all = await api.listSeries()
       setSeriesList(all)
       // Check resumable for each series
       const res = {}
       for (const s of all) {
-        const ep = await window.api.getResumable(s.slug)
+        const ep = await api.getResumable(s.slug)
         if (ep) res[s.slug] = true
       }
       setResumables(res)
@@ -40,40 +43,46 @@ export default function Library() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [api])
 
   useEffect(() => {
     loadData()
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
-    const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+    const unsubVlc = api.onVlcPlaybackEnded(() => loadData())
     return () => {
       window.removeEventListener('playback-stopped', handleStop)
       unsubVlc()
     }
-  }, [loadData])
+  }, [loadData, api])
+
+  const addButton = canAdd ? (
+    <refractive.a className="topnav-action" onClick={() => navigate('/series/new')} refraction={navActionGlass}>+ Add Series</refractive.a>
+  ) : null
 
   if (loading) return (
     <>
-      <Navbar active="Library" rightContent={
-        <refractive.a className="topnav-action" onClick={() => navigate('/series/new')} refraction={navActionGlass}>+ Add Series</refractive.a>
-      } />
+      <Navbar active="Library" rightContent={addButton} />
       <div style={{ padding: '120px 48px', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading...</div>
     </>
   )
 
   return (
     <>
-      <Navbar active="Library" rightContent={
-        <refractive.a className="topnav-action" onClick={() => navigate('/series/new')} refraction={navActionGlass}>+ Add Series</refractive.a>
-      } />
-      <NowPlaying />
+      <Navbar active="Library" rightContent={addButton} />
+      {hasNowPlaying && <NowPlaying />}
       {seriesList.length === 0 ? (
         <main className="empty-hero">
           <div className="empty-icon"><FilmIcon /></div>
           <h2>Your Library is Empty</h2>
-          <p>Add a series by pointing to a media folder on your Mac.</p>
-          <refractive.a className="btn-primary" onClick={() => navigate('/series/new')} refraction={primaryBtnGlass}>Add Your First Series</refractive.a>
+          {canAdd ? (
+            <>
+              <p>Add a series by pointing to a media folder on your Mac.</p>
+              <refractive.a className="btn-primary" onClick={() => navigate('/series/new')} refraction={primaryBtnGlass}>Add Your First Series</refractive.a>
+            </>
+          ) : (
+            <p>No series have been added yet.</p>
+          )}
         </main>
       ) : (
         <main className="library">
@@ -87,15 +96,17 @@ export default function Library() {
                 resumable={!!resumables[s.slug]}
               />
             ))}
-            <div className="series-card card-add" onClick={() => navigate('/series/new')}>
-              <div className="card-poster">
-                <div className="card-poster-fallback card-add-icon">+</div>
+            {canAdd && (
+              <div className="series-card card-add" onClick={() => navigate('/series/new')}>
+                <div className="card-poster">
+                  <div className="card-poster-fallback card-add-icon">+</div>
+                </div>
+                <div className="card-body">
+                  <h3 className="card-title">Add Series</h3>
+                  <p className="card-meta">From a local folder</p>
+                </div>
               </div>
-              <div className="card-body">
-                <h3 className="card-title">Add Series</h3>
-                <p className="card-meta">From a local folder</p>
-              </div>
-            </div>
+            )}
           </div>
         </main>
       )}

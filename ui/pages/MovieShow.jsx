@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar'
 import NowPlaying from '../components/NowPlaying'
 import { usePlayer } from '../context/PlayerContext'
 import { useToast } from '../context/ToastContext'
+import { useApi, useCapabilities } from '../context/ApiContext'
 import { useGlassConfig } from '../config/useGlassConfig'
 import { genresList, formatTime, progressPercent, runtimeDisplay, isInProgress } from '../utils'
 
@@ -23,6 +24,8 @@ const MoreSvg = () => (
 export default function MovieShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
+  const api = useApi()
+  const { canPlay, canManage, canDownload, canOpenExternal, hasNowPlaying } = useCapabilities()
   const { openPlayer, launching } = usePlayer()
   const { showToast } = useToast()
   const [movie, setMovie] = useState(null)
@@ -42,8 +45,8 @@ export default function MovieShow() {
   const loadData = useCallback(async () => {
     try {
       const [m, hasVlc] = await Promise.all([
-        window.api.getMovie(slug),
-        window.api.checkVlc(),
+        api.getMovie(slug),
+        api.checkVlc(),
       ])
       if (!m) { navigate('/movies'); return }
       setMovie(m)
@@ -53,16 +56,16 @@ export default function MovieShow() {
     } finally {
       setLoading(false)
     }
-  }, [slug, navigate])
+  }, [slug, navigate, api])
 
   useEffect(() => {
     loadData()
     const handleStop = () => loadData()
     window.addEventListener('playback-stopped', handleStop)
-    const unsubVlc = window.api.onVlcPlaybackEnded(() => loadData())
+    const unsubVlc = api.onVlcPlaybackEnded(() => loadData())
 
     // Listen for download progress events
-    const unsubDl = window.api.onMediaDownloadProgress((data) => {
+    const unsubDl = api.onMediaDownloadProgress((data) => {
       if (data.movieId) {
         if (data.status === 'downloading') {
           setDlProgress(data.progress)
@@ -78,10 +81,10 @@ export default function MovieShow() {
       unsubVlc()
       unsubDl()
     }
-  }, [loadData])
+  }, [loadData, api])
 
   const handlePlay = async () => {
-    const result = await window.api.playMovie(slug)
+    const result = await api.playMovie(slug)
     if (!result || result.error) {
       showToast(result?.error || 'Failed to start playback', { type: 'error' })
       return
@@ -97,26 +100,26 @@ export default function MovieShow() {
   }
 
   const handleToggle = async () => {
-    await window.api.toggleMovie(slug)
+    await api.toggleMovie(slug)
     loadData()
   }
 
   const handleOpenInVlc = async () => {
     if (!movie?.file_path) return
-    const result = await window.api.openInVlc({ filePath: movie.file_path, movieId: movie.id })
+    const result = await api.openInVlc({ filePath: movie.file_path, movieId: movie.id })
     if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleOpenInDefault = async () => {
     if (!movie?.file_path) return
-    const result = await window.api.openInDefault(movie.file_path, null, movie.id)
+    const result = await api.openInDefault(movie.file_path, null, movie.id)
     if (result?.error) showToast(result.error, { type: 'error' })
   }
 
   const handleDownload = async () => {
     if (!movie) return
     showToast('Starting download...', { type: 'info', duration: 2000 })
-    const result = await window.api.downloadMovie(movie.id)
+    const result = await api.downloadMovie(movie.id)
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.ok) {
@@ -127,7 +130,7 @@ export default function MovieShow() {
 
   const handleDeleteDownload = async () => {
     if (!movie) return
-    await window.api.deleteDownloadMovie(movie.id)
+    await api.deleteDownloadMovie(movie.id)
     showToast('Download deleted', { type: 'info', duration: 2000 })
     loadData()
   }
@@ -146,20 +149,20 @@ export default function MovieShow() {
   }, [menuOpen])
 
   const handleRefresh = async () => {
-    await window.api.refreshMovieMetadata(slug)
+    await api.refreshMovieMetadata(slug)
     loadData()
   }
 
   const handleRemove = async () => {
     if (!confirm(`Remove '${movie.title}' from library?`)) return
-    await window.api.destroyMovie(slug)
+    await api.destroyMovie(slug)
     navigate('/movies')
   }
 
   const handleRelocate = async () => {
-    const files = await window.api.selectFiles()
+    const files = await api.selectFiles()
     if (!files || files.length === 0) return
-    const result = await window.api.relocateMovie(slug, files[0])
+    const result = await api.relocateMovie(slug, files[0])
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else {
@@ -185,9 +188,9 @@ export default function MovieShow() {
 
   // Download state
   const dl = movie.download
-  const isDownloaded = dl && dl.status === 'complete'
+  const isDownloaded = canDownload && dl && dl.status === 'complete'
   // Consider downloading if either the DB record says so OR we have live progress from IPC
-  const isDownloading = (dl && dl.status === 'downloading') || dlProgress != null
+  const isDownloading = canDownload && ((dl && dl.status === 'downloading') || dlProgress != null)
   const liveDlPct = isDownloading ? (dlProgress != null ? dlProgress : (dl ? dl.progress : 0)) : 0
 
   const renderMenu = () => (
@@ -199,7 +202,7 @@ export default function MovieShow() {
         <span className="ep-popover-icon">{movie.watched ? '\u21A9' : '\u2713'}</span>
         <span>{movie.watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
       </button>
-      {vlcAvailable && (
+      {canOpenExternal && vlcAvailable && (
         <button
           className="ep-popover-item"
           onClick={() => { handleOpenInVlc(); setMenuOpen(false) }}
@@ -208,31 +211,37 @@ export default function MovieShow() {
           <span>Open in VLC</span>
         </button>
       )}
-      <button
-        className="ep-popover-item"
-        onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
-      >
-        <span className="ep-popover-icon">{'\u2197'}</span>
-        <span>Open in Default Player</span>
-      </button>
-      <div className="ep-popover-divider" />
-      {isDownloaded ? (
-        <button
-          className="ep-popover-item ep-popover-item--danger"
-          onClick={() => { handleDeleteDownload(); setMenuOpen(false) }}
-        >
-          <span className="ep-popover-icon">{'\u2715'}</span>
-          <span>Delete Download</span>
-        </button>
-      ) : !isDownloading ? (
+      {canOpenExternal && (
         <button
           className="ep-popover-item"
-          onClick={() => { handleDownload(); setMenuOpen(false) }}
+          onClick={() => { handleOpenInDefault(); setMenuOpen(false) }}
         >
-          <span className="ep-popover-icon">{'\u2913'}</span>
-          <span>Download</span>
+          <span className="ep-popover-icon">{'\u2197'}</span>
+          <span>Open in Default Player</span>
         </button>
-      ) : null}
+      )}
+      {canDownload && (
+        <>
+          <div className="ep-popover-divider" />
+          {isDownloaded ? (
+            <button
+              className="ep-popover-item ep-popover-item--danger"
+              onClick={() => { handleDeleteDownload(); setMenuOpen(false) }}
+            >
+              <span className="ep-popover-icon">{'\u2715'}</span>
+              <span>Delete Download</span>
+            </button>
+          ) : !isDownloading ? (
+            <button
+              className="ep-popover-item"
+              onClick={() => { handleDownload(); setMenuOpen(false) }}
+            >
+              <span className="ep-popover-icon">{'\u2913'}</span>
+              <span>Download</span>
+            </button>
+          ) : null}
+        </>
+      )}
     </>
   )
 
@@ -240,15 +249,15 @@ export default function MovieShow() {
     <>
       <Navbar
         active="Movies"
-        actions={
+        actions={canManage ? (
           <>
             <refractive.button className="topnav-btn" onClick={handleRefresh} refraction={navBtnGlass}>Refresh</refractive.button>
             <refractive.button className="topnav-btn" onClick={handleRelocate} refraction={navBtnGlass}>Relocate</refractive.button>
             <refractive.button className="topnav-btn topnav-btn--danger" onClick={handleRemove} refraction={navBtnGlass}>Remove</refractive.button>
           </>
-        }
+        ) : null}
       />
-      <NowPlaying />
+      {hasNowPlaying && <NowPlaying />}
 
       {/* Hero */}
       <header
@@ -305,9 +314,11 @@ export default function MovieShow() {
                 </span>
               </div>
             </div>
-            <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
-              {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
-            </refractive.button>
+            {canPlay && (
+              <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
+                {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
+              </refractive.button>
+            )}
           </refractive.div>
         ) : (
           <refractive.div className="cta-card" refraction={ctaCardGlass}>
@@ -317,9 +328,11 @@ export default function MovieShow() {
                 <span className="cta-ep-title">{movie.title}</span>
               </div>
             </div>
-            <refractive.button className="btn-play-cta" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
-              {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
-            </refractive.button>
+            {canPlay && (
+              <refractive.button className="btn-play-cta" disabled={launching} onClick={handlePlay} refraction={playCtaGlass}>
+                {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
+              </refractive.button>
+            )}
           </refractive.div>
         )}
 

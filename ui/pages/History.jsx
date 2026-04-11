@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { formatTime, progressPercent } from '../utils'
+import { useApi } from '../context/ApiContext'
 
 function groupByDate(histories) {
   const today = []
@@ -64,6 +65,7 @@ function HistoryEntry({ h }) {
 
 export default function History() {
   const navigate = useNavigate()
+  const api = useApi()
   const [histories, setHistories] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
@@ -71,8 +73,8 @@ export default function History() {
   const loadData = useCallback(async () => {
     try {
       const [h, s] = await Promise.all([
-        window.api.listHistory(100),
-        window.api.getHistoryStats(),
+        api.listHistory(100),
+        api.getHistoryStats(),
       ])
       setHistories(h)
       setStats(s)
@@ -81,7 +83,7 @@ export default function History() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [api])
 
   useEffect(() => {
     loadData()
