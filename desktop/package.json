@@ -24,7 +24,7 @@
           ]
         }
       ],
-      "icon": "public/icon.icns",
+      "icon": "../ui/public/icon.icns",
       "extraResources": [
         {
           "from": "vendor/ffmpeg-${arch}",
