@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { refractive } from '@hashintel/refractive'
+import { refractive } from '../config/refractive'
 import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function UpdatePrompt() {

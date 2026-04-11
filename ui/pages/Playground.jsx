@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { refractive, lip, convex, concave, convexCircle } from '@hashintel/refractive'
+import { refractive, lip, convex, concave, convexCircle } from '../config/refractive'
 import { getAllGlassDefaults, getGlassBaseDefaults } from '../config/useGlassConfig'
 
 const SURFACE_FNS = { lip, convex, concave, convexCircle }

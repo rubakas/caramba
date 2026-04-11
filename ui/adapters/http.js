@@ -148,7 +148,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
 
     // Watchlist
     listWatchlist: () => get('/api/watchlist'),
-    addToWatchlist: (item) => post('/api/watchlist', { watchlist: item }),
+    addToWatchlist: (item) => post('/api/watchlist', item),
     removeFromWatchlist: (identifier) => {
       // identifier can be a tvmaze_id (number) or { _type: 'movie', imdb_id }
       if (typeof identifier === 'object' && identifier._type === 'movie') {

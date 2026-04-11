@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { refractive } from '@hashintel/refractive'
+import { refractive } from '../config/refractive'
 import { useGlassConfig } from '../config/useGlassConfig'
 import { useCapabilities } from '../context/ApiContext'
 

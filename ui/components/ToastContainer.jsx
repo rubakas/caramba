@@ -1,4 +1,4 @@
-import { refractive } from '@hashintel/refractive'
+import { refractive } from '../config/refractive'
 import { useToast } from '../context/ToastContext'
 import { useGlassConfig } from '../config/useGlassConfig'
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { refractive } from '@hashintel/refractive'
+import { refractive } from '../config/refractive'
 import Navbar from '../components/Navbar'
 import { genresList, premiereYear, statusClass } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'

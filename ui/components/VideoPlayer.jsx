@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
-import { refractive } from '@hashintel/refractive'
+import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi } from '../context/ApiContext'
 import { formatTime } from '../utils'

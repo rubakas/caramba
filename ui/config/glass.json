@@ -8,7 +8,7 @@
     "bezelHeightFn": "convexCircle"
   },
   "navbar": {
-    "radius": 11,
+    "radius": 0,
     "blur": 8
   },
   "now-playing": {

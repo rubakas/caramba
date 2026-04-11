@@ -1565,7 +1565,7 @@ body {
   border: 2px solid var(--border);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin .6s linear infinite;
+  animation: discover-spin .6s linear infinite;
 }
 
 /* -- Search Type Filters ------------------------------------------ */
@@ -1595,7 +1595,7 @@ body {
   border-color: var(--accent);
   color: #fff;
 }
-@keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+@keyframes discover-spin { to { transform: translateY(-50%) rotate(360deg); } }
 
 .discover-section {
   margin-bottom: 40px;
