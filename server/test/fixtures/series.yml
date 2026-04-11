@@ -1,0 +1,30 @@
+# Series fixtures
+breaking_bad:
+  name: Breaking Bad
+  slug: breaking-bad
+  media_path: /media/Breaking Bad (2008)
+  tvmaze_id: 169
+  imdb_id: tt0903747
+  poster_url: https://example.com/bb.jpg
+  description: A high school chemistry teacher turned meth producer
+  genres: "Drama, Crime, Thriller"
+  rating: 9.5
+  premiered: "2008-01-20"
+  status: Ended
+
+the_office:
+  name: The Office
+  slug: the-office
+  media_path: /media/The.Office.S01-S09
+  tvmaze_id: 526
+  poster_url: https://example.com/office.jpg
+  description: A mockumentary sitcom
+  genres: Comedy
+  rating: 8.6
+  premiered: "2005-03-24"
+  status: Ended
+
+no_metadata:
+  name: New Show
+  slug: new-show
+  media_path: /media/New.Show.S01

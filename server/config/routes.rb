@@ -1,14 +1,55 @@
 Rails.application.routes.draw do
-  # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
-
-  # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
-  # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", as: :rails_health_check
 
-  # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
-  # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
-  # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker
+  namespace :api do
+    resources :series, param: :slug do
+      member do
+        get :full           # combined show page data
+        get :episodes
+        get :seasons
+        get :resumable
+        get :next_up
+        post :scan
+        post :refresh_metadata
+      end
+    end
 
-  # Defines the root path route ("/")
-  # root "posts#index"
+    resources :episodes, only: [] do
+      member do
+        post :toggle
+        get :next
+      end
+    end
+
+    resources :movies, param: :slug do
+      member do
+        post :toggle
+        post :refresh_metadata
+      end
+    end
+
+    resource :playback, only: [], controller: :playback do
+      post :report_progress
+      get :preferences
+      post :preferences, action: :save_preferences, as: :save_preferences
+    end
+
+    resources :history, only: [ :index ], controller: :history do
+      collection do
+        get :stats
+      end
+    end
+
+    resources :watchlist, only: [ :index, :create, :destroy ]
+
+    resource :discover, only: [], controller: :discover do
+      get :search
+      get :show_details
+      get :movie_details
+    end
+
+    # Media file streaming
+    get "media/episodes/:id", to: "media#episode", as: :media_episode
+    get "media/movies/:id", to: "media#movie", as: :media_movie
+  end
 end

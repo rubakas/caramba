@@ -21,6 +21,7 @@ class Series < ApplicationRecord
 
   def generate_slug
     return if slug.present?
+    return unless name.present?
 
     base = self.class.slugify(name)
     candidate = base

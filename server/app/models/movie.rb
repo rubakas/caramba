@@ -32,6 +32,7 @@ class Movie < ApplicationRecord
 
   def generate_slug
     return if slug.present?
+    return unless title.present?
 
     base = self.class.slugify(title + (year.present? ? "-#{year}" : ""))
     candidate = base

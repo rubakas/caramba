@@ -1,0 +1,14 @@
+# Download fixtures
+bb_ep_download:
+  episode: bb_s01e01
+  file_path: /downloads/Breaking.Bad.S01E01.mkv
+  status: complete
+  file_size: 1500000000
+  progress: 1.0
+
+matrix_download:
+  movie: the_matrix
+  file_path: /downloads/The.Matrix.1999.mkv
+  status: downloading
+  file_size: 4000000000
+  progress: 0.65

@@ -1,0 +1,49 @@
+# Episode fixtures
+bb_s01e01:
+  series: breaking_bad
+  code: S01E01
+  title: Pilot
+  season_number: 1
+  episode_number: 1
+  file_path: /media/Breaking Bad (2008)/Season 1/Breaking.Bad.S01E01.Pilot.1080p.mkv
+  watched: 1
+  progress_seconds: 3480
+  duration_seconds: 3480
+  last_watched_at: <%= 2.days.ago.to_fs(:db) %>
+  tvmaze_id: 1
+  air_date: "2008-01-20"
+  runtime: 58
+
+bb_s01e02:
+  series: breaking_bad
+  code: S01E02
+  title: "Cat's in the Bag..."
+  season_number: 1
+  episode_number: 2
+  file_path: /media/Breaking Bad (2008)/Season 1/Breaking.Bad.S01E02.1080p.mkv
+  watched: 0
+  progress_seconds: 1200
+  duration_seconds: 2880
+  last_watched_at: <%= 1.day.ago.to_fs(:db) %>
+
+bb_s02e01:
+  series: breaking_bad
+  code: S02E01
+  title: Seven Thirty-Seven
+  season_number: 2
+  episode_number: 1
+  file_path: /media/Breaking Bad (2008)/Season 2/Breaking.Bad.S02E01.1080p.mkv
+  watched: 0
+  progress_seconds: 0
+  duration_seconds: 0
+
+office_s01e01:
+  series: the_office
+  code: S01E01
+  title: Pilot
+  season_number: 1
+  episode_number: 1
+  file_path: /media/The.Office.S01-S09/Season 1/The.Office.S01E01.mkv
+  watched: 0
+  progress_seconds: 0
+  duration_seconds: 0

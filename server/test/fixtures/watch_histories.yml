@@ -1,0 +1,14 @@
+# WatchHistory fixtures
+history_one:
+  episode: bb_s01e01
+  progress_seconds: 3480
+  duration_seconds: 3480
+  started_at: <%= 2.days.ago.to_fs(:db) %>
+  ended_at: <%= 2.days.ago.to_fs(:db) %>
+
+history_two:
+  episode: bb_s01e02
+  progress_seconds: 1200
+  duration_seconds: 2880
+  started_at: <%= 1.day.ago.to_fs(:db) %>
+  ended_at: <%= 1.day.ago.to_fs(:db) %>
