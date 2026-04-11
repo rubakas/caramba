@@ -121,13 +121,14 @@ namespace :deploy do
       plist_content = capture(:cat, plist_template_path)
 
       # Substitute placeholders
+      home_dir = capture(:echo, "$HOME").chomp
       plist_content = plist_content
         .gsub("DEPLOY_PATH", fetch(:deploy_to))
-        .gsub("HOME_PATH", capture(:echo, "$HOME").chomp)
+        .gsub("HOME_PATH", home_dir)
 
-      # Write plist to remote LaunchAgents
-      plist_path = capture(:echo, "~/Library/LaunchAgents/com.caramba.server.plist").chomp
-      execute :tee, plist_path, input: plist_content
+      # Write plist file using cat with heredoc
+      plist_path = "#{home_dir}/Library/LaunchAgents/com.caramba.server.plist"
+      execute :bash, "-c", "cat > #{plist_path} << 'EOF'\n#{plist_content}\nEOF"
 
       puts "Launchd plist installed at #{plist_path}"
     end
