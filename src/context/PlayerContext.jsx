@@ -23,6 +23,7 @@ export function PlayerProvider({ children }) {
     subtitleStreams: [],
     activeAudioIndex: null,
     activeSubtitleIndex: null, // null = off
+    isBitmapSubtitle: false, // true when active subtitle is burned into video
     subtitleSize: 'medium',
     subtitleStyle: 'classic',
   })
@@ -77,6 +78,7 @@ export function PlayerProvider({ children }) {
         subtitleStreams: result.subtitleStreams || [],
         activeAudioIndex: result.activeAudioIndex ?? null,
         activeSubtitleIndex: result.activeSubtitleIndex ?? null,
+        isBitmapSubtitle: result.isBitmapSubtitle || false,
         subtitleSize: prefs?.subtitleSize || 'medium',
         subtitleStyle: prefs?.subtitleStyle || 'classic',
       })
@@ -195,7 +197,7 @@ export function PlayerProvider({ children }) {
           console.warn('[Subtitle] switchSubtitle error:', result.error)
         }
         setPlayerState(prev => {
-          const next = { ...prev, activeSubtitleIndex: subtitleStreamIndex, subtitleUrl: result.subtitleUrl }
+          const next = { ...prev, activeSubtitleIndex: subtitleStreamIndex, subtitleUrl: result.subtitleUrl, isBitmapSubtitle: false }
           savePreferences(next, { activeSubtitleIndex: subtitleStreamIndex })
           return next
         })
@@ -203,6 +205,31 @@ export function PlayerProvider({ children }) {
       }
     } catch (err) {
       console.error('switchSubtitle error:', err)
+    }
+    return null
+  }, [savePreferences])
+
+  // Switch bitmap subtitle track — restarts ffmpeg with overlay burn-in (or disables)
+  const switchBitmapSubtitle = useCallback(async (subtitleStreamIndex, currentVideoTime) => {
+    try {
+      const result = await window.api.switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
+      if (result && result.streamUrl) {
+        setPlayerState(prev => {
+          const isBitmap = subtitleStreamIndex != null
+          const next = {
+            ...prev,
+            activeSubtitleIndex: subtitleStreamIndex,
+            isBitmapSubtitle: isBitmap,
+            subtitleUrl: null, // bitmap subs are burned in — no VTT track
+            sessionId: Date.now(),
+          }
+          savePreferences(next, { activeSubtitleIndex: subtitleStreamIndex })
+          return next
+        })
+        return result
+      }
+    } catch (err) {
+      console.error('switchBitmapSubtitle error:', err)
     }
     return null
   }, [savePreferences])
@@ -234,8 +261,8 @@ export function PlayerProvider({ children }) {
   }, [])
 
   const contextValue = useMemo(() => ({
-    playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance
-  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance])
+    playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance
+  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
 
   return (
     <PlayerContext.Provider value={contextValue}>

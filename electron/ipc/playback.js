@@ -32,6 +32,7 @@ let currentWatchHistoryId = null
 let currentDuration = 0
 let currentSeekBase = 0 // the -ss offset used when starting ffmpeg
 let currentAudioStreamIndex = null // preferred audio stream index
+let currentBurnSubtitleIndex = null // bitmap subtitle being burned into video (null = none)
 
 function register() {
   // Start playback: probe file, start transcoder, extract subs
@@ -60,28 +61,53 @@ function register() {
         }
       }
 
-      // Pick subtitle track: saved preference (by language / off) > first text sub
+      // Pick subtitle track: saved preference (by language / off) > first text sub > first bitmap sub
       let subtitleStreamIndex = null
+      let isBitmapSubtitle = false
       if (prefs && prefs.subtitleOff) {
         subtitleStreamIndex = null
       } else if (prefs && prefs.subtitleLanguage) {
-        const saved = info.subtitleStreams.find(s => s.isText && s.language === prefs.subtitleLanguage)
-        if (saved) subtitleStreamIndex = saved.index
+        // Try text subs first for saved language
+        const savedText = info.subtitleStreams.find(s => s.isText && s.language === prefs.subtitleLanguage)
+        if (savedText) {
+          subtitleStreamIndex = savedText.index
+        } else {
+          // Fall back to bitmap sub with matching language
+          const savedBitmap = info.subtitleStreams.find(s => !s.isText && s.language === prefs.subtitleLanguage)
+          if (savedBitmap) {
+            subtitleStreamIndex = savedBitmap.index
+            isBitmapSubtitle = true
+          }
+        }
       } else {
         const textSub = info.subtitleStreams.find(s => s.isText)
-        if (textSub) subtitleStreamIndex = textSub.index
+        if (textSub) {
+          subtitleStreamIndex = textSub.index
+        } else {
+          // No text subs — fall back to first bitmap sub
+          const bitmapSub = info.subtitleStreams.find(s => !s.isText)
+          if (bitmapSub) {
+            subtitleStreamIndex = bitmapSub.index
+            isBitmapSubtitle = true
+          }
+        }
       }
 
-      // Start transcoding FIRST — don't wait for subtitle extraction
-      transcoder.start(filePath, startTime, { audioStreamIndex })
+      // Start transcoding — burn bitmap subtitles into video if selected
+      transcoder.start(filePath, startTime, {
+        audioStreamIndex,
+        burnSubtitleIndex: isBitmapSubtitle ? subtitleStreamIndex : undefined,
+      })
       currentSeekBase = startTime
       currentDuration = info.duration
       currentAudioStreamIndex = audioStreamIndex
+      currentBurnSubtitleIndex = isBitmapSubtitle ? subtitleStreamIndex : null
 
-      // Extract subtitles in the background (non-blocking).
+      // Extract text subtitles in the background (non-blocking).
       // The video starts playing immediately; subtitles arrive asynchronously
       // via a push event once extraction finishes.
-      if (subtitleStreamIndex != null) {
+      // (bitmap subtitles are already burned in — no extraction needed)
+      if (subtitleStreamIndex != null && !isBitmapSubtitle) {
         transcoder.extractSubtitles(filePath, subtitleStreamIndex)
           .then(vtt => {
             if (!vtt) return
@@ -110,6 +136,7 @@ function register() {
         subtitleStreams: info.subtitleStreams,
         activeAudioIndex: audioStreamIndex,
         activeSubtitleIndex: subtitleStreamIndex,
+        isBitmapSubtitle,
       }
     } catch (err) {
       console.error('playback:start error:', err)
@@ -122,7 +149,10 @@ function register() {
     const filePath = transcoder.getActiveFilePath()
     if (!filePath) return { error: 'No active playback' }
 
-    transcoder.start(filePath, seekTime, { audioStreamIndex: currentAudioStreamIndex })
+    transcoder.start(filePath, seekTime, {
+      audioStreamIndex: currentAudioStreamIndex,
+      burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
+    })
     currentSeekBase = seekTime
 
     return {
@@ -140,7 +170,10 @@ function register() {
     const seekTime = currentSeekBase + (currentVideoTime || 0)
     currentAudioStreamIndex = audioStreamIndex
 
-    transcoder.start(filePath, seekTime, { audioStreamIndex })
+    transcoder.start(filePath, seekTime, {
+      audioStreamIndex,
+      burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
+    })
     currentSeekBase = seekTime
 
     return {
@@ -186,6 +219,33 @@ function register() {
     return { subtitleUrl: null }
   })
 
+  // Switch bitmap subtitle: restart ffmpeg with or without overlay burn-in.
+  // This works like audio switching — it restarts the transcode at the current position.
+  ipcMain.handle('playback:switchBitmapSubtitle', async (_e, subtitleStreamIndex, currentVideoTime) => {
+    const filePath = transcoder.getActiveFilePath()
+    if (!filePath) return { error: 'No active playback' }
+
+    // Clear text subtitle cache (bitmap subs replace text subs)
+    try {
+      const main = require('../main')
+      main.setSubtitleCache(null)
+    } catch {}
+
+    const seekTime = currentSeekBase + (currentVideoTime || 0)
+    currentBurnSubtitleIndex = subtitleStreamIndex // null = off
+
+    transcoder.start(filePath, seekTime, {
+      audioStreamIndex: currentAudioStreamIndex,
+      burnSubtitleIndex: subtitleStreamIndex ?? undefined,
+    })
+    currentSeekBase = seekTime
+
+    return {
+      streamUrl: 'stream://video',
+      seekTime,
+    }
+  })
+
   // Stop playback and save final progress
   ipcMain.handle('playback:stop', (_e, finalTime, finalDuration) => {
     transcoder.stop()
@@ -212,6 +272,7 @@ function register() {
     currentDuration = 0
     currentSeekBase = 0
     currentAudioStreamIndex = null
+    currentBurnSubtitleIndex = null
 
     return result
   })

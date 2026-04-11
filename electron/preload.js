@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   setPlaybackMovie: (movieId) => ipcRenderer.invoke('playback:setMovie', movieId),
   switchAudio: (audioStreamIndex, currentVideoTime) => ipcRenderer.invoke('playback:switchAudio', audioStreamIndex, currentVideoTime),
   switchSubtitle: (subtitleStreamIndex) => ipcRenderer.invoke('playback:switchSubtitle', subtitleStreamIndex),
+  switchBitmapSubtitle: (subtitleStreamIndex, currentVideoTime) => ipcRenderer.invoke('playback:switchBitmapSubtitle', subtitleStreamIndex, currentVideoTime),
   savePlaybackPreferences: (prefs) => ipcRenderer.invoke('playback:savePreferences', prefs),
   getPlaybackPreferences: (query) => ipcRenderer.invoke('playback:getPreferences', query),
   checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),

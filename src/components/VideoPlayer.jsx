@@ -70,7 +70,7 @@ const SUB_STYLES = [
 ]
 
 export default function VideoPlayer() {
-  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle, setSubtitleAppearance } = usePlayer()
+  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const videoRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
@@ -419,6 +419,26 @@ export default function VideoPlayer() {
     // The forceShowSubtitles effect handles setting mode='showing' on the new track.
   }, [switchSubtitle, disableAllTextTracks])
 
+  const handleSwitchBitmapSubtitle = useCallback(async (subtitleStreamIndex) => {
+    const video = videoRef.current
+    if (!video) return
+
+    // Disable text tracks — bitmap subs are burned into the video stream
+    disableAllTextTracks()
+    setBuffering(true)
+    const result = await switchBitmapSubtitle(subtitleStreamIndex, video.currentTime)
+    if (result && result.streamUrl) {
+      seekBaseRef.current = result.seekTime ?? seekBaseRef.current
+      setCurrentTime(seekBaseRef.current)
+      setSubtitleVersion(v => v + 1)
+      video.src = result.streamUrl + '?t=' + Date.now()
+      video.load()
+      video.play().catch(() => {})
+    } else {
+      setBuffering(false)
+    }
+  }, [switchBitmapSubtitle, disableAllTextTracks])
+
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
       document.exitFullscreen()
@@ -685,7 +705,7 @@ export default function VideoPlayer() {
                 </div>
               )}
 
-              {/* Subtitles section */}
+              {/* Subtitles section — show when there are any subtitles (text or bitmap) */}
               {playerState.subtitleStreams.length > 0 && (
                 <div className="track-popover-section">
                   <div className="track-popover-heading">Subtitles</div>
@@ -693,7 +713,11 @@ export default function VideoPlayer() {
                     className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
                     onClick={() => {
                       if (playerState.activeSubtitleIndex != null) {
-                        handleSwitchSubtitle(null)
+                        if (playerState.isBitmapSubtitle) {
+                          handleSwitchBitmapSubtitle(null)
+                        } else {
+                          handleSwitchSubtitle(null)
+                        }
                       }
                       setTrackMenuOpen(false)
                     }}
@@ -703,13 +727,26 @@ export default function VideoPlayer() {
                     </span>
                     <span className="track-popover-label">Off</span>
                   </button>
-                  {playerState.subtitleStreams.filter(s => s.isText).map((s) => (
+                  {playerState.subtitleStreams.map((s) => (
                     <button
                       key={s.index}
                       className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
                       onClick={() => {
                         if (s.index !== playerState.activeSubtitleIndex) {
-                          handleSwitchSubtitle(s.index)
+                          if (s.isText) {
+                            // Switching to a text sub — if currently burning a bitmap, turn off burn first
+                            if (playerState.isBitmapSubtitle) {
+                              // Turn off burn-in, then switch to text extraction
+                              handleSwitchBitmapSubtitle(null).then(() => {
+                                handleSwitchSubtitle(s.index)
+                              })
+                            } else {
+                              handleSwitchSubtitle(s.index)
+                            }
+                          } else {
+                            // Bitmap sub — restart ffmpeg with overlay
+                            handleSwitchBitmapSubtitle(s.index)
+                          }
                         }
                         setTrackMenuOpen(false)
                       }}
@@ -717,13 +754,16 @@ export default function VideoPlayer() {
                       <span className="track-popover-check">
                         {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
                       </span>
-                      <span className="track-popover-label">{subtitleLabel(s)}</span>
+                      <span className="track-popover-label">
+                        {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
+                      </span>
                     </button>
                   ))}
                 </div>
               )}
 
-              {/* Subtitle Size */}
+              {/* Subtitle Size — only for text-based subtitles (::cue styling) */}
+              {!playerState.isBitmapSubtitle && (
               <div className="track-popover-section">
                 <div className="track-popover-heading">Size</div>
                 <div className="track-popover-sizes">
@@ -738,8 +778,10 @@ export default function VideoPlayer() {
                   ))}
                 </div>
               </div>
+              )}
 
-              {/* Subtitle Appearance */}
+              {/* Subtitle Appearance — only for text-based subtitles (::cue styling) */}
+              {!playerState.isBitmapSubtitle && (
               <div className="track-popover-section">
                 <div className="track-popover-heading">Appearance</div>
                 {SUB_STYLES.map((s) => (
@@ -755,6 +797,7 @@ export default function VideoPlayer() {
                   </button>
                 ))}
               </div>
+              )}
             </refractive.div>
           )}
         </div>

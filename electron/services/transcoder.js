@@ -127,7 +127,9 @@ async function probe(filePath) {
             codec: s.codec_name,
             language: s.tags?.language || 'und',
             title: s.tags?.title,
-            isText: ['ass', 'ssa', 'srt', 'subrip', 'webvtt'].includes(s.codec_name),
+            isText: ['ass', 'ssa', 'srt', 'subrip', 'webvtt', 'mov_text', 'hdmv_text_subtitle',
+              'text', 'ttml', 'microdvd', 'mpl2', 'pjs', 'realtext', 'sami', 'stl',
+              'subviewer', 'subviewer1', 'vplayer'].includes(s.codec_name),
           })),
         })
       } catch (e) {
@@ -145,14 +147,21 @@ async function probe(filePath) {
  * @param {number} seekTime
  * @param {object} [opts]
  * @param {number} [opts.audioStreamIndex] - absolute stream index for audio (from probe)
+ * @param {number} [opts.burnSubtitleIndex] - absolute stream index for bitmap subtitle to burn in
  */
 function start(filePath, seekTime = 0, opts = {}) {
   stop()
 
   const args = []
+  const burnSub = opts.burnSubtitleIndex != null
 
-  // Hardware-accelerated decoding (VideoToolbox)
-  args.push('-hwaccel', 'videotoolbox')
+  // Hardware-accelerated decoding (VideoToolbox).
+  // When burning in bitmap subtitles we need the overlay filter which
+  // operates on software frames, so skip hwaccel to avoid an extra
+  // download/upload round-trip that can cause format mismatches.
+  if (!burnSub) {
+    args.push('-hwaccel', 'videotoolbox')
+  }
 
   // Seek before input for fast seeking
   if (seekTime > 0) {
@@ -161,14 +170,29 @@ function start(filePath, seekTime = 0, opts = {}) {
 
   args.push('-i', filePath)
 
-  // Map first real video (skip cover art/mjpeg)
-  args.push('-map', '0:v:0')
-
-  // Map audio: use specified stream index, or fall back to first audio
-  if (opts.audioStreamIndex != null) {
-    args.push('-map', `0:${opts.audioStreamIndex}`)
+  if (burnSub) {
+    // Burn bitmap subtitle into the video via overlay filter.
+    // The filter graph takes the first video stream and the selected
+    // subtitle stream, composites them, and outputs a single video.
+    args.push(
+      '-filter_complex', `[0:v:0][0:${opts.burnSubtitleIndex}]overlay`,
+    )
+    // Map audio separately (filter_complex handles video output)
+    if (opts.audioStreamIndex != null) {
+      args.push('-map', `0:${opts.audioStreamIndex}`)
+    } else {
+      args.push('-map', '0:a:0')
+    }
   } else {
-    args.push('-map', '0:a:0')
+    // Map first real video (skip cover art/mjpeg)
+    args.push('-map', '0:v:0')
+
+    // Map audio: use specified stream index, or fall back to first audio
+    if (opts.audioStreamIndex != null) {
+      args.push('-map', `0:${opts.audioStreamIndex}`)
+    } else {
+      args.push('-map', '0:a:0')
+    }
   }
 
   // Video encoding: H.264 via VideoToolbox
