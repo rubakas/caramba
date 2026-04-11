@@ -90,6 +90,9 @@ namespace :deploy do
     task :precompile do
       on roles(:app) do
         within release_path do
+          # Ensure shared node_modules directory exists before symlinking
+          execute :mkdir, "-p #{shared_path}/node_modules"
+
           # Install pnpm dependencies
           execute :pnpm, "install --frozen-lockfile"
 
