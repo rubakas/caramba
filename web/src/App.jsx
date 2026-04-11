@@ -5,6 +5,7 @@ import { createHttpAdapter, httpCapabilities } from '@caramba/ui/adapters/http'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
 import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
+import VideoPlayer from '@caramba/ui/components/VideoPlayer'
 import Library from '@caramba/ui/pages/Library'
 import SeriesShow from '@caramba/ui/pages/SeriesShow'
 import Movies from '@caramba/ui/pages/Movies'
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/history" element={<History />} />
             </Routes>
           </BrowserRouter>
+          <VideoPlayer />
           <ToastContainer />
         </PlayerProvider>
       </ToastProvider>

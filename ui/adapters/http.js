@@ -5,6 +5,9 @@
 export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   const base = baseUrl.replace(/\/+$/, '')
 
+  // Active playback session ID (set by startPlayback, cleared by stopPlayback)
+  let activeSessionId = null
+
   async function request(path, opts = {}) {
     const url = `${base}${path}`
     const config = { ...opts }
@@ -46,7 +49,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     // Episodes
     toggleEpisode: (id) => post(`/api/episodes/${id}/toggle`),
     getNextEpisode: (id) => get(`/api/episodes/${id}/next`),
-    playEpisode: noopAsync,
+    playEpisode: (id) => post(`/api/episodes/${id}/play`),
 
     // Movies
     listMovies: () => get('/api/movies'),
@@ -56,21 +59,63 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     refreshMovieMetadata: noopAsync,
     destroyMovie: noopAsync,
     relocateMovie: noopAsync,
-    playMovie: noopAsync,
+    playMovie: (slug) => post(`/api/movies/${slug}/play`),
 
-    // Playback — all no-ops for web
-    startPlayback: noopAsync,
-    stopPlayback: noopAsync,
-    setPlaybackEpisode: noopAsync,
-    setPlaybackMovie: noopAsync,
-    seekPlayback: noopAsync,
-    reportProgress: noopAsync,
+    // Playback
+    startPlayback: async (filePath, startTime, prefs) => {
+      const result = await post('/api/playback/start', { filePath, startTime, prefs })
+      if (result && result.sessionId) {
+        activeSessionId = result.sessionId
+      }
+      return result
+    },
+    stopPlayback: async (finalTime, finalDuration) => {
+      const sid = activeSessionId
+      activeSessionId = null
+      if (!sid) return null
+      return post('/api/playback/stop', { session: sid })
+    },
+    setPlaybackEpisode: noopAsync, // folded into server-side session state
+    setPlaybackMovie: noopAsync,   // folded into server-side session state
+    seekPlayback: async (seekTime) => {
+      if (!activeSessionId) return null
+      return post('/api/playback/seek', { session: activeSessionId, seekTime })
+    },
+    reportProgress: async (videoTime, videoDuration) => {
+      return post('/api/playback/report_progress', { time: videoTime, duration: videoDuration })
+    },
     getPlaybackStatus: noopAsync,
-    getPlaybackPreferences: noopAsync,
-    savePlaybackPreferences: noopAsync,
-    switchAudio: noopAsync,
-    switchSubtitle: noopAsync,
-    switchBitmapSubtitle: noopAsync,
+    getPlaybackPreferences: (opts) => {
+      const qs = new URLSearchParams()
+      if (opts?.type) qs.set('type', opts.type)
+      if (opts?.seriesId) qs.set('series_id', opts.seriesId)
+      if (opts?.movieId) qs.set('movie_id', opts.movieId)
+      return get(`/api/playback/preferences?${qs}`)
+    },
+    savePlaybackPreferences: (prefs) => post('/api/playback/preferences', prefs),
+    switchAudio: async (audioStreamIndex, currentVideoTime) => {
+      if (!activeSessionId) return null
+      return post('/api/playback/switch_audio', {
+        session: activeSessionId,
+        audioStreamIndex,
+        currentVideoTime
+      })
+    },
+    switchSubtitle: async (subtitleStreamIndex) => {
+      if (!activeSessionId) return null
+      return post('/api/playback/switch_subtitle', {
+        session: activeSessionId,
+        subtitleStreamIndex
+      })
+    },
+    switchBitmapSubtitle: async (subtitleStreamIndex, currentVideoTime) => {
+      if (!activeSessionId) return null
+      return post('/api/playback/switch_bitmap_subtitle', {
+        session: activeSessionId,
+        subtitleStreamIndex,
+        currentVideoTime
+      })
+    },
 
     // VLC — no-ops
     checkVlc: async () => false,
@@ -131,7 +176,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
 
 /** Default capabilities for web / HTTP mode */
 export const httpCapabilities = {
-  canPlay: false,
+  canPlay: true,
   canDownload: false,
   canAdd: false,
   canManage: false,

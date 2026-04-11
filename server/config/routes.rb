@@ -18,6 +18,7 @@ Rails.application.routes.draw do
       member do
         post :toggle
         get :next
+        post :play
       end
     end
 
@@ -25,6 +26,7 @@ Rails.application.routes.draw do
       member do
         post :toggle
         post :refresh_metadata
+        post :play
       end
     end
 
@@ -32,7 +34,17 @@ Rails.application.routes.draw do
       post :report_progress
       get :preferences
       post :preferences, action: :save_preferences, as: :save_preferences
+      post :start
+      post :seek
+      post :stop, action: :stop_playback
+      get :subtitles
+      post :switch_audio
+      post :switch_subtitle
+      post :switch_bitmap_subtitle
     end
+
+    # Video stream: pipes ffmpeg fMP4 output directly to HTTP response
+    get "playback/stream/:session_id", to: "playback#stream", as: :playback_stream
 
     resources :history, only: [ :index ], controller: :history do
       collection do

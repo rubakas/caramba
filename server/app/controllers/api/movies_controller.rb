@@ -28,6 +28,22 @@ class Api::MoviesController < Api::BaseController
     render json: results, status: :created
   end
 
+  # POST /api/movies/:slug/play
+  # Marks movie watched, returns playback info.
+  # Mirrors desktop movies:play IPC handler.
+  def play
+    movie = Movie.find_by!(slug: params[:slug])
+    return render(json: { error: "File not found: #{movie.file_path}" }, status: :unprocessable_entity) unless movie.file_path.present? && File.exist?(movie.file_path)
+
+    movie.mark_watched!
+
+    render json: {
+      movie_id: movie.id,
+      file_path: movie.file_path,
+      start_time: movie.resume_time
+    }
+  end
+
   # POST /api/movies/:slug/toggle
   def toggle
     movie = Movie.find_by!(slug: params[:slug])

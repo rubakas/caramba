@@ -168,6 +168,12 @@ function start(filePath, seekTime = 0, opts = {}) {
     args.push('-ss', String(seekTime))
   }
 
+  // Throttle input reading to ~1.5x realtime so ffmpeg builds a
+  // comfortable buffer ahead of playback without flooding the
+  // browser's MSE SourceBuffer.  -re (1x) is too strict and
+  // causes buffering stalls; uncapped is too fast and overflows.
+  args.push('-readrate', '1.5')
+
   args.push('-i', filePath)
 
   if (burnSub) {
@@ -196,6 +202,10 @@ function start(filePath, seekTime = 0, opts = {}) {
   }
 
   // Video encoding: H.264 via VideoToolbox
+  // -g 48 = keyframe every 2s at 24fps. Without this, VideoToolbox
+  // inserts keyframes too frequently (~0.5s) which fragments the MP4
+  // excessively and causes higher memory usage in the browser's MSE
+  // SourceBuffer.  Matches the server-side transcoder setting.
   args.push(
     '-c:v', 'h264_videotoolbox',
     '-b:v', '4M',
@@ -203,6 +213,7 @@ function start(filePath, seekTime = 0, opts = {}) {
     '-bufsize', '12M',
     '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
+    '-g', '48',
   )
 
   // Audio: AAC stereo

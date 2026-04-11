@@ -19,8 +19,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.integer "movie_id"
     t.float "progress", default: 0.0, null: false
     t.string "status", default: "pending", null: false
-    t.index ["episode_id"], name: "index_downloads_on_episode_id", unique: true, where: "episode_id IS NOT NULL"
-    t.index ["movie_id"], name: "index_downloads_on_movie_id", unique: true, where: "movie_id IS NOT NULL"
+    t.index [ "episode_id" ], name: "index_downloads_on_episode_id", unique: true, where: "episode_id IS NOT NULL"
+    t.index [ "movie_id" ], name: "index_downloads_on_movie_id", unique: true, where: "movie_id IS NOT NULL"
     t.check_constraint "(episode_id IS NOT NULL AND movie_id IS NULL) OR (episode_id IS NULL AND movie_id IS NOT NULL)", name: "downloads_episode_or_movie"
   end
 
@@ -41,8 +41,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
     t.integer "watched", default: 0, null: false
-    t.index ["series_id", "code"], name: "index_episodes_on_series_id_and_code", unique: true
-    t.index ["series_id"], name: "index_episodes_on_series_id"
+    t.index [ "series_id", "code" ], name: "index_episodes_on_series_id_and_code", unique: true
+    t.index [ "series_id" ], name: "index_episodes_on_series_id"
   end
 
   create_table "movies", force: :cascade do |t|
@@ -63,8 +63,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.datetime "updated_at", null: false
     t.integer "watched", default: 0
     t.string "year"
-    t.index ["file_path"], name: "index_movies_on_file_path", unique: true
-    t.index ["slug"], name: "index_movies_on_slug", unique: true
+    t.index [ "file_path" ], name: "index_movies_on_file_path", unique: true
+    t.index [ "slug" ], name: "index_movies_on_slug", unique: true
   end
 
   create_table "playback_preferences", force: :cascade do |t|
@@ -77,8 +77,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.string "subtitle_size", default: "medium", null: false
     t.string "subtitle_style", default: "classic", null: false
     t.datetime "updated_at", null: false
-    t.index ["movie_id"], name: "index_playback_preferences_on_movie_id", unique: true
-    t.index ["series_id"], name: "index_playback_preferences_on_series_id", unique: true
+    t.index [ "movie_id" ], name: "index_playback_preferences_on_movie_id", unique: true
+    t.index [ "series_id" ], name: "index_playback_preferences_on_series_id", unique: true
   end
 
   create_table "series", force: :cascade do |t|
@@ -95,7 +95,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.string "status"
     t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
-    t.index ["slug"], name: "index_series_on_slug", unique: true
+    t.index [ "slug" ], name: "index_series_on_slug", unique: true
   end
 
   create_table "watch_histories", force: :cascade do |t|
@@ -106,7 +106,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.integer "progress_seconds"
     t.datetime "started_at"
     t.datetime "updated_at", null: false
-    t.index ["episode_id"], name: "index_watch_histories_on_episode_id"
+    t.index [ "episode_id" ], name: "index_watch_histories_on_episode_id"
   end
 
   create_table "watchlist", force: :cascade do |t|
@@ -126,8 +126,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_11_131632) do
     t.string "type", default: "show", null: false
     t.datetime "updated_at", null: false
     t.string "year"
-    t.index ["imdb_id"], name: "index_watchlist_on_imdb_id", unique: true, where: "imdb_id IS NOT NULL"
-    t.index ["tvmaze_id"], name: "index_watchlist_on_tvmaze_id", unique: true, where: "tvmaze_id IS NOT NULL"
+    t.index [ "imdb_id" ], name: "index_watchlist_on_imdb_id", unique: true, where: "imdb_id IS NOT NULL"
+    t.index [ "tvmaze_id" ], name: "index_watchlist_on_tvmaze_id", unique: true, where: "tvmaze_id IS NOT NULL"
   end
 
   add_foreign_key "downloads", "episodes", on_delete: :cascade

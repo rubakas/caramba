@@ -1,4 +1,6 @@
 class Movie < ApplicationRecord
+  include Watchable
+
   has_many :playback_preferences, dependent: :destroy
   has_many :downloads, dependent: :destroy
 
@@ -7,26 +9,6 @@ class Movie < ApplicationRecord
   validates :file_path, uniqueness: true, allow_nil: true
 
   before_validation :generate_slug, on: :create
-
-  def watched?
-    watched == 1
-  end
-
-  def mark_watched!
-    update!(watched: 1, last_watched_at: Time.current)
-  end
-
-  def mark_unwatched!
-    update!(watched: 0, progress_seconds: 0, last_watched_at: nil)
-  end
-
-  def update_progress!(progress, duration)
-    update!(
-      progress_seconds: progress,
-      duration_seconds: duration,
-      last_watched_at: Time.current
-    )
-  end
 
   private
 

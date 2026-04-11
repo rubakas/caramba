@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { refractive } from '@hashintel/refractive'
 import { usePlayer } from '../context/PlayerContext'
+import { useApi } from '../context/ApiContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
 
@@ -70,7 +71,8 @@ const SUB_STYLES = [
 ]
 
 export default function VideoPlayer() {
-  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const api = useApi()
   const videoRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
@@ -78,22 +80,21 @@ export default function VideoPlayer() {
   const trackMenuRef = useRef(null)
   const clickTimerRef = useRef(null)
 
-  // Seek generation counter to discard stale seek results from concurrent calls
-  const seekGenRef = useRef(0)
-
-  // seekBase tracks the absolute offset that ffmpeg's -ss was given.
-  // video.currentTime is relative to this offset — so absolute time = seekBase + video.currentTime
+  // seekBase: the absolute time (in the source file) that corresponds to
+  // video.currentTime === 0 in the current stream.  After a seek/restart,
+  // ffmpeg starts from seekBase, so the video element's timeline resets to 0.
+  // Absolute time = seekBase + video.currentTime.
   const seekBaseRef = useRef(0)
+  const stallTimerRef = useRef(null)
 
   const [paused, setPaused] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0) // absolute time
+  const [currentTime, setCurrentTime] = useState(0) // absolute time for display
   const [buffering, setBuffering] = useState(true)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [volume, setVolume] = useState(1)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [trackMenuOpen, setTrackMenuOpen] = useState(false)
   // Bumped on every seek/audio switch so the <track> element remounts
-  // and fetches freshly time-shifted VTT from the protocol handler
   const [subtitleVersion, setSubtitleVersion] = useState(0)
 
   const totalDuration = playerState.duration || 0
@@ -109,14 +110,14 @@ export default function VideoPlayer() {
   // Reset local state when player opens with new session
   useEffect(() => {
     if (playerState.open) {
-      seekBaseRef.current = playerState.startTime || 0
-      setCurrentTime(playerState.startTime || 0)
+      seekBaseRef.current = playerState.seekBase ?? playerState.startTime ?? 0
+      setCurrentTime(seekBaseRef.current)
       setPaused(false)
       setBuffering(true)
       setControlsVisible(true)
       setTrackMenuOpen(false)
     }
-  }, [playerState.sessionId, playerState.open, playerState.startTime])
+  }, [playerState.sessionId, playerState.open])
 
   // Lock body scroll when player is open
   useEffect(() => {
@@ -125,7 +126,7 @@ export default function VideoPlayer() {
     return () => { document.body.style.overflow = '' }
   }, [playerState.open])
 
-  // Clean up all timers when player closes to prevent leaks
+  // Clean up all timers when player closes
   useEffect(() => {
     if (!playerState.open) {
       clearTimeout(hideTimerRef.current)
@@ -135,8 +136,197 @@ export default function VideoPlayer() {
     }
   }, [playerState.open])
 
+  // ── Source attachment ─────────────────────────────────────────────
+  // For HTTP streams (web path), use MediaSource Extensions (MSE) to
+  // feed fMP4 chunks to the browser.  This avoids Chrome's issues with
+  // playing fragmented MP4 directly via <video src="http://...">.
+  //
+  // For stream:// (desktop/Electron), use direct src assignment.
+  const mseRef = useRef(null)   // { mediaSource, sourceBuffer, abortController }
+
+  const cleanupMse = useCallback(() => {
+    const mse = mseRef.current
+    if (!mse) return
+    mseRef.current = null
+
+    // 1. Abort the in-flight fetch first — this stops pumping data
+    try { mse.abortController.abort() } catch {}
+
+    // 2. Abort SourceBuffer (stops any pending appendBuffer/remove)
+    try {
+      if (mse.sourceBuffer && mse.mediaSource.readyState === 'open') {
+        mse.sourceBuffer.abort()
+      }
+    } catch {}
+
+    // 3. Revoke the blob URL (frees memory)
+    if (mse.objectUrl) {
+      URL.revokeObjectURL(mse.objectUrl)
+    }
+
+    // NOTE: Do NOT call mediaSource.endOfStream() here.
+    // Calling endOfStream() before the demuxer has HAVE_METADATA causes
+    // a Chrome DEMUXER_ERROR_COULD_NOT_OPEN.  Revoking the object URL
+    // and aborting the fetch is sufficient for cleanup.
+  }, [])
+
+  useEffect(() => {
+    if (!playerState.open || !playerState.streamUrl) return
+    const video = videoRef.current
+    if (!video) return
+
+    const url = playerState.streamUrl
+    const isHttpStream = url.startsWith('http://') || url.startsWith('https://')
+
+    // Clean up any previous MSE session
+    cleanupMse()
+
+    if (isHttpStream && typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028,mp4a.40.2"')) {
+      // ── MSE path (web) ──────────────────────────────────────────
+      const mediaSource = new MediaSource()
+      const objectUrl = URL.createObjectURL(mediaSource)
+      video.src = objectUrl
+
+      const abortController = new AbortController()
+      const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl }
+      mseRef.current = mseState
+
+      mediaSource.addEventListener('sourceopen', () => {
+        // Guard: if we were cleaned up before sourceopen fired, bail out
+        if (mseRef.current !== mseState) return
+
+        let sourceBuffer
+        try {
+          sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.640028,mp4a.40.2"')
+        } catch (e) {
+          console.error('[MSE] addSourceBuffer failed:', e)
+          // Fallback to direct src
+          URL.revokeObjectURL(objectUrl)
+          video.src = url
+          video.load()
+          video.play().catch(() => {})
+          return
+        }
+
+        mseState.sourceBuffer = sourceBuffer
+
+        const queue = []
+        let streamDone = false
+        let chunksAppended = 0
+
+        // Trim played-back data so the buffer doesn't grow forever.
+        // Keeps from (currentTime - 10s) forward.
+        const trimBuffer = () => {
+          try {
+            if (sourceBuffer.buffered.length === 0 || sourceBuffer.updating) return false
+            const bufStart = sourceBuffer.buffered.start(0)
+            const vid = videoRef.current
+            const playPos = vid && isFinite(vid.currentTime) ? vid.currentTime : 0
+            const trimEnd = Math.max(bufStart, playPos - 10)
+            if (trimEnd - bufStart > 1) {
+              sourceBuffer.remove(bufStart, trimEnd)
+              return true
+            }
+          } catch {}
+          return false
+        }
+
+        // Safe endOfStream: only call if we actually appended data and
+        // the demuxer has had a chance to initialize (buffered ranges exist).
+        const safeEndOfStream = () => {
+          if (mediaSource.readyState !== 'open') return
+          if (sourceBuffer.updating) return
+          if (chunksAppended === 0) return  // no data ever appended
+          try {
+            if (sourceBuffer.buffered.length > 0) {
+              mediaSource.endOfStream()
+            }
+          } catch {}
+        }
+
+        const flushQueue = () => {
+          if (queue.length > 0 && !sourceBuffer.updating) {
+            try {
+              sourceBuffer.appendBuffer(queue.shift())
+              chunksAppended++
+            } catch (e) {
+              if (e.name === 'QuotaExceededError') {
+                console.warn('[MSE] QuotaExceededError, dropping queued chunks')
+                queue.length = 0
+              } else {
+                console.error('[MSE] appendBuffer error:', e)
+              }
+            }
+          } else if (streamDone && queue.length === 0 && !sourceBuffer.updating) {
+            safeEndOfStream()
+          }
+        }
+
+        sourceBuffer.addEventListener('updateend', () => {
+          if (trimBuffer()) return
+          flushQueue()
+        })
+
+        const appendChunk = (chunk) => {
+          if (sourceBuffer.updating || queue.length > 0) {
+            queue.push(chunk)
+          } else {
+            try {
+              sourceBuffer.appendBuffer(chunk)
+              chunksAppended++
+            } catch (e) {
+              if (e.name === 'QuotaExceededError') {
+                console.warn('[MSE] QuotaExceededError, dropping chunk')
+              } else {
+                console.error('[MSE] appendBuffer error:', e)
+              }
+            }
+          }
+        }
+
+        // Fetch the stream and pipe chunks into SourceBuffer.
+        fetch(url, { signal: abortController.signal })
+          .then(response => {
+            if (!response.ok) {
+              console.error('[MSE] Stream fetch failed:', response.status, response.statusText)
+              return
+            }
+            const reader = response.body.getReader()
+            const pump = () => {
+              reader.read().then(({ done, value }) => {
+                if (done) {
+                  streamDone = true
+                  safeEndOfStream()
+                  return
+                }
+                appendChunk(value)
+                pump()
+              }).catch(() => {
+                // fetch aborted or network error — normal during seek/close
+              })
+            }
+            pump()
+          })
+          .catch(() => {
+            // fetch aborted — normal during seek/close
+          })
+
+        // Don't call video.play() here — wait for data to arrive.
+        // The <video autoPlay> attribute + canplay event will handle it.
+      }, { once: true })
+    } else {
+      // ── Direct src path (desktop / fallback) ────────────────────
+      video.src = url
+      video.load()
+      video.play().catch(() => {})
+    }
+
+    return () => {
+      cleanupMse()
+    }
+  }, [playerState.open, playerState.streamUrl, playerState.sessionId, cleanupMse])
+
   // Helper: disable all text tracks on the video element.
-  // This forces Chromium to clear any currently-rendered subtitle cue.
   const disableAllTextTracks = useCallback(() => {
     const video = videoRef.current
     if (!video) return
@@ -145,18 +335,14 @@ export default function VideoPlayer() {
     }
   }, [])
 
-  // When subtitleUrl becomes null (subs turned off), explicitly disable all
-  // text tracks so Chromium clears the last-painted cue from the overlay.
+  // When subtitleUrl becomes null (subs turned off), disable all text tracks
   useEffect(() => {
     if (playerState.open && !playerState.subtitleUrl) {
       disableAllTextTracks()
     }
   }, [playerState.open, playerState.subtitleUrl, disableAllTextTracks])
 
-  // Force subtitle track to 'showing' — Chromium often ignores the `default`
-  // attribute or resets the mode to 'hidden' when the video source changes.
-  // Uses a ref to track whether subtitles should be active, so the interval
-  // callback never forces a stale track to 'showing' after subs are turned off.
+  // Force subtitle track to 'showing' — Chromium often ignores the `default` attribute
   const subtitleActiveRef = useRef(false)
   useEffect(() => {
     subtitleActiveRef.current = !!(playerState.open && playerState.subtitleUrl)
@@ -166,7 +352,6 @@ export default function VideoPlayer() {
     if (!playerState.open || !playerState.subtitleUrl) return
 
     const forceShowSubtitles = () => {
-      // Bail out if subtitles were turned off between interval ticks
       if (!subtitleActiveRef.current) return
       const video = videoRef.current
       if (!video) return
@@ -177,19 +362,13 @@ export default function VideoPlayer() {
       }
     }
 
-    // Force on various events where Chromium may reset the track mode
     const video = videoRef.current
     if (!video) return
 
-    // Immediate attempt
     forceShowSubtitles()
-
-    // After video loads metadata (track mode often resets here)
     video.addEventListener('loadedmetadata', forceShowSubtitles)
     video.addEventListener('loadeddata', forceShowSubtitles)
     video.addEventListener('canplay', forceShowSubtitles)
-
-    // Periodic check — Chromium can reset track mode asynchronously
     const interval = setInterval(forceShowSubtitles, 1000)
 
     return () => {
@@ -197,13 +376,11 @@ export default function VideoPlayer() {
       video.removeEventListener('loadeddata', forceShowSubtitles)
       video.removeEventListener('canplay', forceShowSubtitles)
       clearInterval(interval)
-      // On cleanup (subtitle switch, subs off, player close), disable all tracks
-      // so Chromium clears any currently-rendered cue from the overlay
       disableAllTextTracks()
     }
   }, [playerState.open, playerState.subtitleUrl, subtitleVersion, disableAllTextTracks])
 
-  // Inject dynamic <style> for ::cue (CSS custom properties don't work inside ::cue)
+  // Inject dynamic <style> for ::cue
   useEffect(() => {
     const sizeObj = SUB_SIZES.find(s => s.id === subtitleSize) || SUB_SIZES[1]
     const styleObj = SUB_STYLES.find(s => s.id === subtitleStyle) || SUB_STYLES[0]
@@ -216,15 +393,12 @@ export default function VideoPlayer() {
   }, [subtitleSize, subtitleStyle])
 
   // --- requestAnimationFrame time polling ---
-  // RAF is throttled (or stopped entirely) when the window is hidden,
-  // minimised, or the display is asleep — but the <video> keeps playing.
-  // We pair it with the native `timeupdate` event (fires ~4 Hz regardless
-  // of visibility) so the progress bar never goes stale.
+  // Absolute time = seekBase + video.currentTime
   const updateTime = useCallback(() => {
+    if (seekBarDragging.current) return
     const video = videoRef.current
     if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-      const abs = seekBaseRef.current + video.currentTime
-      setCurrentTime(abs)
+      setCurrentTime(seekBaseRef.current + video.currentTime)
     }
   }, [])
 
@@ -238,7 +412,6 @@ export default function VideoPlayer() {
 
     rafRef.current = requestAnimationFrame(tick)
 
-    // Fallback: timeupdate fires even when the page is in the background
     const video = videoRef.current
     if (video) video.addEventListener('timeupdate', updateTime)
 
@@ -248,19 +421,69 @@ export default function VideoPlayer() {
     }
   }, [playerState.open, updateTime])
 
-  // Report progress to main process periodically
+  // Report progress periodically (absolute time)
   useEffect(() => {
     if (!playerState.open) return
 
     const timer = setInterval(() => {
       const video = videoRef.current
       if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-        window.api.reportProgress(video.currentTime, totalDuration)
+        api.reportProgress(seekBaseRef.current + video.currentTime, totalDuration)
       }
     }, 3000)
 
     return () => clearInterval(timer)
   }, [playerState.open, totalDuration])
+
+  // Stall detection: if buffering persists for 10s without recovery,
+  // automatically re-seek to the current position to restart the
+  // ffmpeg → MSE pipeline.  This handles cases where ffmpeg dies
+  // silently or the SourceBuffer enters an unrecoverable state.
+  // We use doSeekRef to avoid a dependency cycle (doSeek → setBuffering
+  // → buffering → this effect → doSeek).
+  const doSeekRef = useRef(null)
+
+  const triggerRecovery = useCallback(() => {
+    const video = videoRef.current
+    if (!video) return
+    const absTime = seekBaseRef.current + (isFinite(video.currentTime) ? video.currentTime : 0)
+    console.warn(`Auto-recovering playback at ${absTime.toFixed(1)}s`)
+    seekingRef.current = false
+    if (doSeekRef.current) doSeekRef.current(absTime)
+  }, [])
+
+  // On video error: log it. The stall detection timer will handle recovery
+  // if the video remains in buffering state.  Don't eagerly recover here —
+  // calling cleanupMse + re-seek in a tight loop causes the
+  // "endOfStream before HAVE_METADATA" cascade.
+  useEffect(() => {
+    if (!playerState.open) return
+    const video = videoRef.current
+    if (!video) return
+
+    const onError = () => {
+      console.warn('[MSE] Video element error:', video.error?.message)
+    }
+
+    video.addEventListener('error', onError)
+    return () => video.removeEventListener('error', onError)
+  }, [playerState.open, playerState.sessionId])
+
+  useEffect(() => {
+    if (!playerState.open) return
+
+    if (buffering && !paused) {
+      stallTimerRef.current = setTimeout(triggerRecovery, 10000)
+    } else {
+      clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = null
+    }
+
+    return () => {
+      clearTimeout(stallTimerRef.current)
+      stallTimerRef.current = null
+    }
+  }, [buffering, paused, playerState.open, triggerRecovery])
 
   // Show/hide controls on mouse activity
   const showControls = useCallback(() => {
@@ -271,7 +494,6 @@ export default function VideoPlayer() {
     }, 3000)
   }, [paused, trackMenuOpen])
 
-  // Always show controls when paused or menu is open
   useEffect(() => {
     if (paused || trackMenuOpen) {
       setControlsVisible(true)
@@ -289,7 +511,6 @@ export default function VideoPlayer() {
         setTrackMenuOpen(false)
       }
     }
-    // Use setTimeout so the current click that opened the menu doesn't immediately close it
     const timer = setTimeout(() => {
       document.addEventListener('mousedown', handleClickOutside)
     }, 0)
@@ -310,7 +531,7 @@ export default function VideoPlayer() {
 
   const handleClose = useCallback(() => {
     const video = videoRef.current
-    const absTime = video ? seekBaseRef.current + (video.currentTime || 0) : seekBaseRef.current
+    const absTime = video && isFinite(video.currentTime) ? seekBaseRef.current + video.currentTime : 0
     const dur = totalDuration
     if (document.fullscreenElement) {
       document.exitFullscreen()
@@ -320,120 +541,110 @@ export default function VideoPlayer() {
 
   const handleEnded = useCallback(() => {
     if (playerState.type === 'episode') {
-      // Auto-play next episode in the series
       playNextEpisode()
     } else {
-      // Movies or unknown type — just close
       handleClose()
     }
   }, [playerState.type, playNextEpisode, handleClose])
 
-  const handleSeekRelative = useCallback(async (delta) => {
+  // Seek: ask server to restart ffmpeg at target time, get new stream URL
+  const seekingRef = useRef(false)
+
+  const doSeek = useCallback(async (absoluteTime) => {
+    if (seekingRef.current) return
+    seekingRef.current = true
+
+    try {
+      setBuffering(true)
+      disableAllTextTracks()
+
+      const result = await seekPlayback(absoluteTime)
+      if (result) {
+        // seekPlayback updates playerState.streamUrl + seekBase + sessionId,
+        // which triggers the MSE useEffect to set up a new stream.
+        seekBaseRef.current = result.seekBase ?? absoluteTime
+        setCurrentTime(absoluteTime)
+        setSubtitleVersion(v => v + 1)
+      }
+    } catch (err) {
+      console.error('Seek failed:', err)
+    } finally {
+      seekingRef.current = false
+    }
+  }, [disableAllTextTracks, seekPlayback])
+  doSeekRef.current = doSeek
+
+  const handleSeekRelative = useCallback((delta) => {
     const video = videoRef.current
     if (!video) return
     if (totalDuration <= 0) return
 
-    const absoluteCurrent = seekBaseRef.current + (video.currentTime || 0)
-    const newTime = Math.max(0, Math.min(absoluteCurrent + delta, totalDuration))
+    const currentAbs = seekBaseRef.current + (isFinite(video.currentTime) ? video.currentTime : 0)
+    const newTime = Math.max(0, Math.min(currentAbs + delta, totalDuration))
 
-    // Increment generation — any in-flight seek with an older gen is stale
-    const gen = ++seekGenRef.current
+    doSeek(newTime)
+  }, [totalDuration, doSeek])
 
-    // Clear stale subtitle cues immediately before the async seek
-    disableAllTextTracks()
-    setBuffering(true)
-    try {
-      const result = await window.api.seekPlayback(newTime)
-      // Discard if a newer seek was initiated while we were waiting
-      if (gen !== seekGenRef.current) return
-      if (result && result.streamUrl) {
-        seekBaseRef.current = result.seekTime ?? newTime
-        setCurrentTime(seekBaseRef.current)
-        setSubtitleVersion(v => v + 1)
-        video.src = result.streamUrl + '?t=' + Date.now()
-        video.load()
-        video.play().catch(() => {})
-      }
-    } catch (err) {
-      if (gen !== seekGenRef.current) return
-      console.error('Seek failed:', err)
-      setBuffering(false)
-    }
-  }, [totalDuration, disableAllTextTracks])
+  // Seek bar: drag updates visual position, commit triggers actual seek
+  const seekBarDragging = useRef(false)
+  const seekBarTarget = useRef(null)
 
-  const handleSeekBarChange = useCallback(async (e) => {
-    const newTime = parseFloat(e.target.value)
-    // Increment generation — any in-flight seek with an older gen is stale
-    const gen = ++seekGenRef.current
-    // Clear stale subtitle cues immediately before the async seek
-    disableAllTextTracks()
-    setBuffering(true)
-    try {
-      const result = await window.api.seekPlayback(newTime)
-      // Discard if a newer seek was initiated while we were waiting
-      if (gen !== seekGenRef.current) return
-      if (result && result.streamUrl) {
-        seekBaseRef.current = result.seekTime ?? newTime
-        setCurrentTime(seekBaseRef.current)
-        setSubtitleVersion(v => v + 1)
-        const video = videoRef.current
-        if (video) {
-          video.src = result.streamUrl + '?t=' + Date.now()
-          video.load()
-          video.play().catch(() => {})
-        }
-      }
-    } catch (err) {
-      if (gen !== seekGenRef.current) return
-      console.error('Seek bar failed:', err)
-      setBuffering(false)
-    }
-  }, [disableAllTextTracks])
+  const handleSeekBarInput = useCallback((e) => {
+    seekBarDragging.current = true
+    seekBarTarget.current = parseFloat(e.target.value)
+    setCurrentTime(seekBarTarget.current)
+  }, [])
+
+  const handleSeekBarCommit = useCallback(() => {
+    if (!seekBarDragging.current || seekBarTarget.current == null) return
+    seekBarDragging.current = false
+    const newTime = seekBarTarget.current
+    seekBarTarget.current = null
+
+    doSeek(newTime)
+  }, [doSeek])
 
   const handleSwitchAudio = useCallback(async (audioStreamIndex) => {
     const video = videoRef.current
     if (!video) return
 
+    const currentVideoTime = isFinite(video.currentTime) ? video.currentTime : 0
+
     setBuffering(true)
-    const result = await switchAudio(audioStreamIndex, video.currentTime)
+    const result = await switchAudio(audioStreamIndex, currentVideoTime)
     if (result && result.streamUrl) {
-      seekBaseRef.current = result.seekTime ?? seekBaseRef.current
-      setCurrentTime(seekBaseRef.current)
+      // switchAudio updates playerState.streamUrl + seekBase + sessionId,
+      // which triggers the MSE useEffect to set up a new stream.
+      const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
+      seekBaseRef.current = resumeBase
+      setCurrentTime(resumeBase)
       setSubtitleVersion(v => v + 1)
-      video.src = result.streamUrl + '?t=' + Date.now()
-      video.load()
-      video.play().catch(() => {})
     } else {
       setBuffering(false)
     }
   }, [switchAudio])
 
   const handleSwitchSubtitle = useCallback(async (subtitleStreamIndex) => {
-    // Disable all text tracks BEFORE the switch so Chromium clears the
-    // currently-rendered cue.  The forceShowSubtitles effect will re-enable
-    // the new track once React mounts the fresh <track> element.
     disableAllTextTracks()
-    const result = await switchSubtitle(subtitleStreamIndex)
-    // switchSubtitle updates playerState.subtitleUrl and activeSubtitleIndex.
-    // React will re-render the <track> element (or remove it if subtitleUrl is null).
-    // The forceShowSubtitles effect handles setting mode='showing' on the new track.
+    await switchSubtitle(subtitleStreamIndex)
   }, [switchSubtitle, disableAllTextTracks])
 
   const handleSwitchBitmapSubtitle = useCallback(async (subtitleStreamIndex) => {
     const video = videoRef.current
     if (!video) return
 
-    // Disable text tracks — bitmap subs are burned into the video stream
+    const currentVideoTime = isFinite(video.currentTime) ? video.currentTime : 0
+
     disableAllTextTracks()
     setBuffering(true)
-    const result = await switchBitmapSubtitle(subtitleStreamIndex, video.currentTime)
+    const result = await switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
     if (result && result.streamUrl) {
-      seekBaseRef.current = result.seekTime ?? seekBaseRef.current
-      setCurrentTime(seekBaseRef.current)
+      // switchBitmapSubtitle updates playerState.streamUrl + seekBase + sessionId,
+      // which triggers the MSE useEffect to set up a new stream.
+      const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
+      seekBaseRef.current = resumeBase
+      setCurrentTime(resumeBase)
       setSubtitleVersion(v => v + 1)
-      video.src = result.streamUrl + '?t=' + Date.now()
-      video.load()
-      video.play().catch(() => {})
     } else {
       setBuffering(false)
     }
@@ -452,7 +663,6 @@ export default function VideoPlayer() {
     setVolume(val)
     if (videoRef.current) {
       videoRef.current.volume = val
-      // Unmute when the user actively drags the slider to a non-zero value
       if (val > 0 && videoRef.current.muted) {
         videoRef.current.muted = false
       }
@@ -530,14 +740,12 @@ export default function VideoPlayer() {
       <video
         ref={videoRef}
         className="video-player-video"
-        src={playerState.streamUrl + '?t=' + playerState.sessionId}
         crossOrigin="anonymous"
         autoPlay
         onClick={(e) => {
           e.stopPropagation()
           showControls()
           if (trackMenuOpen) { setTrackMenuOpen(false); return }
-          // Delay single-click (play/pause) to distinguish from double-click (fullscreen)
           if (clickTimerRef.current) {
             clearTimeout(clickTimerRef.current)
             clickTimerRef.current = null
@@ -553,7 +761,12 @@ export default function VideoPlayer() {
         onPlay={() => setPaused(false)}
         onPause={() => setPaused(true)}
         onWaiting={() => setBuffering(true)}
-        onCanPlay={() => setBuffering(false)}
+        onCanPlay={() => {
+          setBuffering(false)
+          // Ensure playback starts — autoPlay may not fire with MSE
+          const v = videoRef.current
+          if (v && v.paused) v.play().catch(() => {})
+        }}
         onPlaying={() => setBuffering(false)}
         onEnded={handleEnded}
       >
@@ -705,7 +918,7 @@ export default function VideoPlayer() {
                 </div>
               )}
 
-              {/* Subtitles section — show when there are any subtitles (text or bitmap) */}
+              {/* Subtitles section */}
               {playerState.subtitleStreams.length > 0 && (
                 <div className="track-popover-section">
                   <div className="track-popover-heading">Subtitles</div>
@@ -734,9 +947,7 @@ export default function VideoPlayer() {
                       onClick={() => {
                         if (s.index !== playerState.activeSubtitleIndex) {
                           if (s.isText) {
-                            // Switching to a text sub — if currently burning a bitmap, turn off burn first
                             if (playerState.isBitmapSubtitle) {
-                              // Turn off burn-in, then switch to text extraction
                               handleSwitchBitmapSubtitle(null).then(() => {
                                 handleSwitchSubtitle(s.index)
                               })
@@ -744,7 +955,6 @@ export default function VideoPlayer() {
                               handleSwitchSubtitle(s.index)
                             }
                           } else {
-                            // Bitmap sub — restart ffmpeg with overlay
                             handleSwitchBitmapSubtitle(s.index)
                           }
                         }
@@ -762,7 +972,7 @@ export default function VideoPlayer() {
                 </div>
               )}
 
-              {/* Subtitle Size — only for text-based subtitles (::cue styling) */}
+              {/* Subtitle Size */}
               {!playerState.isBitmapSubtitle && (
               <div className="track-popover-section">
                 <div className="track-popover-heading">Size</div>
@@ -780,7 +990,7 @@ export default function VideoPlayer() {
               </div>
               )}
 
-              {/* Subtitle Appearance — only for text-based subtitles (::cue styling) */}
+              {/* Subtitle Appearance */}
               {!playerState.isBitmapSubtitle && (
               <div className="track-popover-section">
                 <div className="track-popover-heading">Appearance</div>
@@ -816,7 +1026,10 @@ export default function VideoPlayer() {
               max={totalDuration || 1}
               step={1}
               value={currentTime}
-              onChange={handleSeekBarChange}
+              onInput={handleSeekBarInput}
+              onChange={handleSeekBarInput}
+              onMouseUp={handleSeekBarCommit}
+              onTouchEnd={handleSeekBarCommit}
             />
           </div>
           <span className="video-player-time-remaining">-{formatTime(Math.max(0, Math.round(totalDuration - currentTime)))}</span>

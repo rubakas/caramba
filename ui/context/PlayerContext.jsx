@@ -14,6 +14,7 @@ export function PlayerProvider({ children }) {
     subtitleUrl: null,
     duration: 0,
     startTime: 0,
+    seekBase: 0,
     title: '',
     subtitle: '',
     type: null, // 'episode' | 'movie'
@@ -69,6 +70,7 @@ export function PlayerProvider({ children }) {
         subtitleUrl: result.subtitleUrl,
         duration: result.duration,
         startTime: startTime || 0,
+        seekBase: result.seekBase ?? startTime ?? 0,
         title: title || '',
         subtitle: subtitle || '',
         type,
@@ -172,13 +174,39 @@ export function PlayerProvider({ children }) {
     }).catch(() => {})
   }, [api])
 
+  // Seek — restarts ffmpeg at new position, updates streamUrl in state
+  // so the MSE useEffect picks it up automatically.
+  const seekPlayback = useCallback(async (absoluteTime) => {
+    try {
+      const result = await api.seekPlayback(absoluteTime)
+      if (result && result.streamUrl) {
+        setPlayerState(prev => ({
+          ...prev,
+          streamUrl: result.streamUrl,
+          seekBase: result.seekBase ?? absoluteTime,
+          sessionId: Date.now(),
+        }))
+        return result
+      }
+    } catch (err) {
+      console.error('seekPlayback error:', err)
+    }
+    return null
+  }, [api])
+
   // Switch audio track — restarts ffmpeg at current position with new audio
   const switchAudio = useCallback(async (audioStreamIndex, currentVideoTime) => {
     try {
       const result = await api.switchAudio(audioStreamIndex, currentVideoTime)
       if (result && result.streamUrl) {
         setPlayerState(prev => {
-          const next = { ...prev, activeAudioIndex: audioStreamIndex, sessionId: Date.now() }
+          const next = {
+            ...prev,
+            streamUrl: result.streamUrl,
+            seekBase: result.seekBase ?? (prev.seekBase + currentVideoTime),
+            activeAudioIndex: audioStreamIndex,
+            sessionId: Date.now(),
+          }
           savePreferences(next)
           return next
         })
@@ -188,7 +216,7 @@ export function PlayerProvider({ children }) {
       console.error('switchAudio error:', err)
     }
     return null
-  }, [savePreferences])
+  }, [savePreferences, api])
 
   // Switch subtitle track — re-extracts subtitle or disables
   const switchSubtitle = useCallback(async (subtitleStreamIndex) => {
@@ -220,6 +248,8 @@ export function PlayerProvider({ children }) {
           const isBitmap = subtitleStreamIndex != null
           const next = {
             ...prev,
+            streamUrl: result.streamUrl,
+            seekBase: result.seekBase ?? (prev.seekBase + currentVideoTime),
             activeSubtitleIndex: subtitleStreamIndex,
             isBitmapSubtitle: isBitmap,
             subtitleUrl: null, // bitmap subs are burned in — no VTT track
@@ -234,7 +264,7 @@ export function PlayerProvider({ children }) {
       console.error('switchBitmapSubtitle error:', err)
     }
     return null
-  }, [savePreferences])
+  }, [savePreferences, api])
 
   // Update subtitle size/style and persist
   const setSubtitleAppearance = useCallback(({ subtitleSize, subtitleStyle }) => {
@@ -263,8 +293,8 @@ export function PlayerProvider({ children }) {
   }, [api])
 
   const contextValue = useMemo(() => ({
-    playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance
-  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
+    playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance
+  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
 
   return (
     <PlayerContext.Provider value={contextValue}>

@@ -1,4 +1,6 @@
 class Episode < ApplicationRecord
+  include Watchable
+
   belongs_to :series
   has_many :watch_histories, dependent: :destroy
   has_many :downloads, dependent: :destroy
@@ -6,28 +8,15 @@ class Episode < ApplicationRecord
   validates :code, presence: true, uniqueness: { scope: :series_id }
 
   scope :for_season, ->(season) { where(season_number: season).order(:episode_number) }
-  scope :watched, -> { where(watched: 1) }
-  scope :unwatched, -> { where(watched: 0) }
   scope :ordered, -> { order(:season_number, :episode_number) }
 
-  def watched?
-    watched == 1
-  end
-
-  def mark_watched!
-    update!(watched: 1, last_watched_at: Time.current)
-  end
-
-  def mark_unwatched!
-    update!(watched: 0, progress_seconds: 0, last_watched_at: nil)
-  end
-
-  def update_progress!(progress, duration)
-    update!(
-      progress_seconds: progress,
-      duration_seconds: duration,
-      last_watched_at: Time.current
-    )
+  # Mark all episodes before this one (by season/episode number) as watched
+  def self.mark_prior_watched!(series_id, season_number, episode_number)
+    where(series_id: series_id)
+      .where("season_number < ? OR (season_number = ? AND episode_number < ?)",
+             season_number, season_number, episode_number)
+      .where(watched: 0)
+      .update_all(watched: 1, last_watched_at: Time.current)
   end
 
   # Next episode in series order (regardless of watched status)
