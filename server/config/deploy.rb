@@ -36,7 +36,6 @@ append :linked_dirs,
   "server/tmp/cache",
   "server/tmp/sockets",
   "server/vendor/bundle",
-  "node_modules",          # pnpm store (shared across deploys)
   "web/node_modules"
 
 append :linked_files,
@@ -90,9 +89,6 @@ namespace :deploy do
     task :precompile do
       on roles(:app) do
         within release_path do
-          # Ensure shared node_modules directory exists before symlinking
-          execute :mkdir, "-p #{shared_path}/node_modules"
-
           # Install pnpm dependencies
           execute :pnpm, "install --frozen-lockfile"
 
