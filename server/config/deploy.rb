@@ -16,7 +16,7 @@ set :deploy_to, "/opt/caramba"
 # mise manages Ruby — tell Capistrano to use mise shims for all commands
 # The shims directory must come FIRST in PATH to take precedence over system Ruby
 set :default_env, {
-  path: "~/.local/share/mise/shims:$PATH"
+  path: "/Users/mac/.local/share/mise/shims:$PATH"
 }
 
 # Bundler runs inside the server/ subdirectory
