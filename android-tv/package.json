@@ -1,6 +1,5 @@
 {
   "name": "@caramba/android",
-  "version": "1.2.3",
   "description": "Caramba — Android TV app for Google Chromecast",
   "scripts": {
     "dev": "cd .. && cd web && npm run dev",

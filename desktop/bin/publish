@@ -28,7 +28,7 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "Warning: Working tree has uncommitted changes. Publishing from a dirty state."
 fi
 
-CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+CURRENT_VERSION=$(node -e "console.log(require('../package.json').version)")
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
 HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -43,7 +43,7 @@ if [ ${#ARTIFACTS[@]} -eq 0 ]; then
   exit 0
 fi
 
-TAG="v$CURRENT_VERSION"
+TAG="$CURRENT_VERSION"
 echo "Publishing $TAG to GitHub Releases..."
 echo "  Assets: ${ARTIFACTS[*]}"
 

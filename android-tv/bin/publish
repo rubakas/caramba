@@ -28,23 +28,26 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "Warning: Working tree has uncommitted changes. Publishing from a dirty state."
 fi
 
-CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+CURRENT_VERSION=$(node -e "console.log(require('../package.json').version)")
+VERSION_NUM="${CURRENT_VERSION#v}"
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
 HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-# Collect artifacts
+# Collect artifacts (look for renamed APK)
 ARTIFACTS=()
-for f in android/app/build/outputs/apk/debug/*.apk android/app/build/outputs/apk/release/*.apk; do
-  [ -f "$f" ] && ARTIFACTS+=("$f")
-done
+APK_NAME="Caramba-${VERSION_NUM}-android-tv.apk"
+APK_PATH="android/app/build/outputs/apk/debug/$APK_NAME"
+if [ -f "$APK_PATH" ]; then
+  ARTIFACTS+=("$APK_PATH")
+fi
 
 if [ ${#ARTIFACTS[@]} -eq 0 ]; then
   echo "Error: No APK artifacts found — run bin/build first."
   exit 1
 fi
 
-TAG="v$CURRENT_VERSION"
-echo "Publishing $TAG to GitHub Releases..."
+TAG="$CURRENT_VERSION"
+echo "Publishing $TAG to GitHub Releases (Android TV)..."
 echo "  Assets: ${ARTIFACTS[*]}"
 
 # Check if release already exists for this tag
@@ -53,13 +56,13 @@ if gh release view "$TAG" &>/dev/null; then
   gh release upload "$TAG" "${ARTIFACTS[@]}" --clobber
 else
   gh release create "$TAG" "${ARTIFACTS[@]}" \
-    --title "Android TV $CURRENT_VERSION" \
+    --title "Android TV $TAG" \
     --notes "Caramba Android TV app for Google Chromecast with Google TV.
 
 ## Installation
 1. Enable Developer Mode on your Chromecast
 2. Connect via ADB: \`adb connect <chromecast-ip>\`
-3. Install: \`adb install app-debug.apk\`
+3. Install: \`adb install $APK_NAME\`
 
 ## Changes
 $HEAD_MSG"

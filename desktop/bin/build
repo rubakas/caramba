@@ -3,8 +3,7 @@
 # Build the packaged app with auto version increment.
 #
 # Version format: MAJOR.MINOR.PATCH where PATCH auto-increments.
-# The last-built commit hash is stored in .build-commit. If HEAD
-# matches that hash, the version stays the same (idempotent rebuild).
+# Version is stored in the root package.json.
 #
 # Usage: bin/build                        # Mac, no publish
 #        bin/build --publish              # Mac + publish to GitHub
@@ -12,8 +11,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT_DIR="$(cd .. && pwd)"
 
-PACKAGE_JSON="package.json"
+ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 
 # ── 0. Parse flags ──────────────────────────────────────────────────
 PUBLISH=false
@@ -33,7 +33,7 @@ fi
 
 # Install dependencies
 echo "Installing dependencies..."
-cd ..
+cd "$ROOT_DIR"
 pnpm install
 cd desktop
 
@@ -43,54 +43,58 @@ if [ ! -e node_modules/electron-rebuild ]; then
   ln -sf ../../node_modules/.pnpm/@electron+rebuild@4.0.3/node_modules/@electron/rebuild node_modules/electron-rebuild
 fi
 
-# ── 2. Version increment ────────────────────────────────────────────
-# Skip bumping if the last commit is already a version bump from this script.
-# This prevents an infinite loop: bump → commit → build → see new commit → bump again.
+# ── 2. Version handling ─────────────────────────────────────────────
+# Skip bumping if the last commit already matches the current version.
+CURRENT_VERSION=$(node -e "console.log(require('$ROOT_PACKAGE_JSON').version)")
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
-CURRENT_VERSION=$(node -e "console.log(require('./$PACKAGE_JSON').version)")
 
-if [[ "$HEAD_MSG" == v[0-9]* ]]; then
-  echo "Version $CURRENT_VERSION (last commit is a version bump — skipping)"
+if [[ "$HEAD_MSG" == "$CURRENT_VERSION" ]]; then
+  echo "Version $CURRENT_VERSION (already committed — skipping bump)"
 else
-  # Bump patch version
-  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+  # Bump patch version (strip 'v' prefix, bump, add back)
+  VERSION_NUM="${CURRENT_VERSION#v}"
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NUM"
   PATCH=$((PATCH + 1))
-  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+  NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
 
-  # Update package.json and commit the bump
+  # Update root package.json and commit the bump
   node -e "
     const fs = require('fs');
-    const pkg = JSON.parse(fs.readFileSync('$PACKAGE_JSON', 'utf-8'));
+    const pkg = JSON.parse(fs.readFileSync('$ROOT_PACKAGE_JSON', 'utf-8'));
     pkg.version = '$NEW_VERSION';
-    fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
+    fs.writeFileSync('$ROOT_PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
   "
-  git add "$PACKAGE_JSON"
-  git commit -m "v$NEW_VERSION" --no-verify
+  git add "$ROOT_PACKAGE_JSON"
+  git commit -m "$NEW_VERSION" --no-verify
 
   echo "Version $CURRENT_VERSION → $NEW_VERSION"
   CURRENT_VERSION="$NEW_VERSION"
 fi
 
-# ── 3. Build React frontend ────────────────────────────────────────
+# ── 3. Version for electron-builder ────────────────────────────────
+# electron-builder needs version WITHOUT 'v' prefix
+VERSION_NUM="${CURRENT_VERSION#v}"
+
+# ── 4. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
 pnpm exec vite build
 
-# ── 4. Setup ffmpeg binaries ───────────────────────────────────────
+# ── 5. Setup ffmpeg binaries ───────────────────────────────────────
 echo "Ensuring macOS ffmpeg binaries..."
 bin/setup-ffmpeg
 
-# ── 5. Build macOS package ─────────────────────────────────────────
+# ── 6. Build macOS package ─────────────────────────────────────────
 echo ""
-echo "Building macOS app v$CURRENT_VERSION..."
-pnpm exec electron-builder --mac --publish never
+echo "Building macOS app $CURRENT_VERSION..."
+pnpm exec electron-builder --mac --publish never -c.extraMetadata.version="$VERSION_NUM"
 
-# ── 6. Summary ─────────────────────────────────────────────────────
+# ── 7. Summary ─────────────────────────────────────────────────────
 echo ""
-echo "Build complete: v$CURRENT_VERSION"
+echo "Build complete: $CURRENT_VERSION"
 ls -lh dist/*.dmg 2>/dev/null || true
 
-# ── 7. Publish to GitHub Releases ──────────────────────────────────
+# ── 8. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   bin/publish
 
