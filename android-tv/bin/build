@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# Build the packaged app with auto version increment.
+# Build the Android TV app with auto version increment.
 #
 # Version format: MAJOR.MINOR.PATCH where PATCH auto-increments.
-# The last-built commit hash is stored in .build-commit. If HEAD
-# matches that hash, the version stays the same (idempotent rebuild).
+# If the last commit is already a version bump, the version stays the same.
 #
-# Usage: bin/build                        # Mac, no publish
-#        bin/build --publish              # Mac + publish to GitHub
+# Usage: bin/build                        # Build only
+#        bin/build --publish              # Build + publish to GitHub
 #
 set -euo pipefail
 
@@ -26,7 +25,6 @@ for arg in "$@"; do
 done
 
 # ── 1. Pre-flight checks ───────────────────────────────────────────
-# Ensure working directory is clean (uncommitted changes can cause confusion)
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "Warning: You have uncommitted changes. Build will use the current working tree state."
 fi
@@ -35,21 +33,13 @@ fi
 echo "Installing dependencies..."
 cd ..
 pnpm install
-cd desktop
-
-# Workaround: electron-builder looks for 'electron-rebuild' but pnpm uses '@electron/rebuild'
-if [ ! -e node_modules/electron-rebuild ]; then
-  mkdir -p node_modules
-  ln -sf ../../node_modules/.pnpm/@electron+rebuild@4.0.3/node_modules/@electron/rebuild node_modules/electron-rebuild
-fi
+cd android-tv
 
 # ── 2. Version increment ────────────────────────────────────────────
-# Skip bumping if the last commit is already a version bump from this script.
-# This prevents an infinite loop: bump → commit → build → see new commit → bump again.
 HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
 CURRENT_VERSION=$(node -e "console.log(require('./$PACKAGE_JSON').version)")
 
-if [[ "$HEAD_MSG" == v[0-9]* ]]; then
+if [[ "$HEAD_MSG" == android-tv-v[0-9]* ]]; then
   echo "Version $CURRENT_VERSION (last commit is a version bump — skipping)"
 else
   # Bump patch version
@@ -65,7 +55,7 @@ else
     fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
   "
   git add "$PACKAGE_JSON"
-  git commit -m "v$NEW_VERSION" --no-verify
+  git commit -m "android-tv-v$NEW_VERSION" --no-verify
 
   echo "Version $CURRENT_VERSION → $NEW_VERSION"
   CURRENT_VERSION="$NEW_VERSION"
@@ -74,27 +64,34 @@ fi
 # ── 3. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
-pnpm exec vite build
+cd ../web
+pnpm build
+cd ../android-tv
 
-# ── 4. Setup ffmpeg binaries ───────────────────────────────────────
-echo "Ensuring macOS ffmpeg binaries..."
-bin/setup-ffmpeg
-
-# ── 5. Build macOS package ─────────────────────────────────────────
+# ── 4. Sync Capacitor ──────────────────────────────────────────────
 echo ""
-echo "Building macOS app v$CURRENT_VERSION..."
-pnpm exec electron-builder --mac --publish never
+echo "Syncing Capacitor..."
+npx cap sync android
+
+# ── 5. Build Android APK ───────────────────────────────────────────
+echo ""
+echo "Building Android TV app v$CURRENT_VERSION..."
+cd android
+./gradlew clean assembleDebug
+
+APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+cd ..
 
 # ── 6. Summary ─────────────────────────────────────────────────────
 echo ""
 echo "Build complete: v$CURRENT_VERSION"
-ls -lh dist/*.dmg 2>/dev/null || true
+ls -lh "android/$APK_PATH" 2>/dev/null || true
 
 # ── 7. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   bin/publish
 
   echo ""
-  echo "Cleaning dist/..."
-  rm -rf dist
+  echo "Cleaning build outputs..."
+  rm -rf android/app/build/outputs
 fi

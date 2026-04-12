@@ -1,0 +1,28 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Chromecast device ID
+DEVICE_ID="adb-22231HFDD5D22D-RoPAg4._adb-tls-connect._tcp"
+ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+
+# Find APK (prefer release, fall back to debug)
+APK_PATH="$PROJECT_DIR/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+if [ ! -f "$APK_PATH" ]; then
+  APK_PATH="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+fi
+
+if [ ! -f "$APK_PATH" ]; then
+  echo "No APK found. Run 'bin/build' first."
+  exit 1
+fi
+
+echo "Deploying to Chromecast..."
+echo "APK: $APK_PATH"
+
+# Install APK
+"$ADB" -s "$DEVICE_ID" install -r "$APK_PATH"
+
+echo "✓ Deployed successfully"
