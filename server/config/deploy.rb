@@ -126,9 +126,10 @@ namespace :deploy do
         .gsub("DEPLOY_PATH", fetch(:deploy_to))
         .gsub("HOME_PATH", home_dir)
 
-      # Write plist file using cat with heredoc
+      # Write plist file using upload! with StringIO
+      require "stringio"
       plist_path = "#{home_dir}/Library/LaunchAgents/com.caramba.server.plist"
-      execute :bash, "-c", "cat > #{plist_path} << 'EOF'\n#{plist_content}\nEOF"
+      upload! StringIO.new(plist_content), plist_path
 
       puts "Launchd plist installed at #{plist_path}"
     end
