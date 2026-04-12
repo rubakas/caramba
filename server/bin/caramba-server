@@ -4,8 +4,8 @@
 
 set -e
 
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$DIR"
+# Always use the /current symlink so restarts pick up new releases
+cd /opt/caramba/current/server
 
 # Ensure mise shims are on PATH
 export PATH="$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH"

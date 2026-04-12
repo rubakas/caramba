@@ -42,17 +42,14 @@ namespace :launchd do
     end
   end
 
-  desc "Restart the Caramba server via launchd (unload + load)"
+  desc "Restart the Caramba server via launchd (stop + start)"
   task :restart do
     on roles(:app) do
-      plist = fetch(:launchd_plist)
-      # Must unload/load (not stop/start) to force launchd to re-resolve
-      # the symlink in WorkingDirectory and ProgramArguments.
-      # stop/start keeps the old resolved paths.
-      execute :launchctl, "unload", plist, raise_on_non_zero_exit: false
-      sleep 1
-      execute :launchctl, "load", plist
-      info "Caramba server restarted via launchd (unload/load)"
+      label = fetch(:launchd_label)
+      execute :launchctl, "stop", label, raise_on_non_zero_exit: false
+      sleep 2
+      execute :launchctl, "start", label
+      info "Caramba server restarted via launchd"
     end
   end
 
