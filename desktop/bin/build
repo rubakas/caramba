@@ -52,7 +52,7 @@ else
     pkg.version = '$NEW_VERSION';
     fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
   "
-  git add "desktop/$PACKAGE_JSON"
+  git add "$PACKAGE_JSON"
   git commit -m "v$NEW_VERSION" --no-verify
 
   echo "Version $CURRENT_VERSION → $NEW_VERSION"

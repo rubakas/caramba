@@ -4,7 +4,8 @@
 #
 # macOS: https://evermeet.cx/ffmpeg/ (arm64/x86_64 universal static builds)
 #
-# Usage: bin/setup-ffmpeg
+# Usage: bin/setup-ffmpeg           # skip if already present
+#        bin/setup-ffmpeg --force   # re-download latest
 #
 set -euo pipefail
 
@@ -12,7 +13,14 @@ cd "$(dirname "$0")/.."
 
 dir="vendor/ffmpeg"
 
-if [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+  esac
+done
+
+if [ "$FORCE" = false ] && [ -x "$dir/ffmpeg" ] && [ -x "$dir/ffprobe" ]; then
   echo "macOS ffmpeg already present:"
   "$dir/ffmpeg" -version | head -1
   exit 0
