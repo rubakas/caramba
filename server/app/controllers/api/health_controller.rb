@@ -13,7 +13,8 @@ class Api::HealthController < Api::BaseController
   private
 
   def read_revision
-    File.read(Rails.root.join("REVISION")).strip
+    # Capistrano puts REVISION in the monorepo root (parent of server/)
+    File.read(Rails.root.join("..", "REVISION")).strip
   rescue Errno::ENOENT
     "dev"
   end
