@@ -1,6 +1,6 @@
 {
   "name": "@caramba/desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Caramba — personal media center",
   "author": "Vladyslav <vladyslav@hey.com>",
   "main": "electron/main.js",
