@@ -15,7 +15,7 @@ import History from '@caramba/ui/pages/History'
 import Settings from '@caramba/ui/pages/Settings'
 import { Capacitor } from '@capacitor/core'
 
-const isAndroidTV = typeof window !== 'undefined' && Capacitor.isNativePlatform && Capacitor.isNativePlatform() && Capacitor.getPlatform?.() === 'android'
+const isAndroidTV = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
 
 // Android TV capabilities - show Settings with API URL config, no file management
 const androidTvCapabilities = {

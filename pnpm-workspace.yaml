@@ -2,6 +2,7 @@ packages:
   - ui
   - desktop
   - web
+  - android
 allowBuilds:
   '3': true
   ' ': true

@@ -2828,3 +2828,170 @@ body {
   border-radius: 2px;
   transition: width .3s ease;
 }
+
+/* ================================================================
+   Android TV Optimizations (1920x1080+ viewing distance ~10 feet)
+   ================================================================ */
+@media (min-width: 1920px) {
+  :root {
+    /* Increase base font size for TV viewing distance */
+    font-size: 18px;
+    --radius: 16px;
+    --radius-sm: 12px;
+    --radius-lg: 20px;
+    --nav-h: 64px;
+  }
+
+  body {
+    font-size: 18px;
+    line-height: 1.6;
+  }
+
+  /* Larger buttons for remote D-pad navigation */
+  button, [role="button"], input[type="button"], input[type="submit"] {
+    min-height: 56px;
+    padding: 14px 28px !important;
+    font-size: 18px;
+    border-radius: var(--radius);
+  }
+
+  /* Larger inputs for TV */
+  input[type="text"],
+  input[type="url"],
+  input[type="search"],
+  textarea,
+  select {
+    min-height: 56px;
+    padding: 12px 16px !important;
+    font-size: 18px;
+    border-radius: var(--radius);
+  }
+
+  /* Larger text in general */
+  h1 { font-size: 48px; }
+  h2 { font-size: 36px; }
+  h3 { font-size: 28px; }
+  h4 { font-size: 24px; }
+  
+  p, span, label { font-size: 18px; }
+  small { font-size: 16px; }
+
+  /* Better spacing on TV */
+  main { padding: 32px; gap: 32px; }
+  
+  /* Larger card padding */
+  [role="article"],
+  .card,
+  .modal-body,
+  .panel {
+    padding: 32px !important;
+  }
+
+  /* D-pad navigation focus indicators - very visible on TV */
+  button:focus,
+  [role="button"]:focus,
+  input:focus,
+  select:focus,
+  textarea:focus,
+  a:focus {
+    outline: 4px solid var(--accent);
+    outline-offset: 4px;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 6px var(--accent);
+  }
+
+  /* Make hover/focus states more obvious for remote */
+  button:hover,
+  [role="button"]:hover,
+  a:hover {
+    transform: scale(1.05);
+    transition: transform 0.2s ease;
+  }
+
+  /* Larger icons */
+  svg {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  /* Navigation spacing */
+  nav { padding: 16px 32px; }
+
+  /* Modal adjustments for TV */
+  .modal {
+    max-width: 90vw;
+    max-height: 90vh;
+  }
+
+  .modal-body {
+    font-size: 18px;
+  }
+
+  /* List items with better touch targets */
+  li, [role="listitem"] {
+    min-height: 64px;
+    padding: 12px 16px;
+  }
+
+  /* Video player UI - larger controls */
+  .video-controls button {
+    min-width: 48px;
+    min-height: 48px;
+    padding: 12px !important;
+  }
+
+  /* Dropdown/Select bigger for TV */
+  select, [role="combobox"] {
+    min-height: 56px;
+    font-size: 18px;
+  }
+
+  /* Tab navigation for D-pad */
+  [role="tablist"] {
+    gap: 16px;
+  }
+
+  [role="tab"] {
+    padding: 12px 24px !important;
+    min-height: 56px;
+    font-size: 18px;
+  }
+
+  /* Better scroll behavior on TV */
+  scroll-behavior: smooth;
+}
+
+/* Extra large displays (4K and beyond) */
+@media (min-width: 3840px) {
+  :root {
+    font-size: 24px;
+    --radius: 24px;
+    --nav-h: 80px;
+  }
+
+  body { font-size: 24px; }
+  h1 { font-size: 64px; }
+  h2 { font-size: 48px; }
+  h3 { font-size: 36px; }
+
+  button, [role="button"] {
+    min-height: 72px;
+    padding: 18px 36px !important;
+    font-size: 24px;
+  }
+
+  input, textarea, select {
+    min-height: 72px;
+    padding: 14px 20px !important;
+    font-size: 24px;
+  }
+}
+
+/* Ensure touchscreen isn't needed (D-pad navigation only) */
+@media (hover: none) and (pointer: coarse) {
+  /* Android TV may report touch capability but remote is primary */
+  button:active,
+  [role="button"]:active {
+    background-color: var(--surface-hover);
+    transition: background-color 0.1s ease;
+  }
+}
