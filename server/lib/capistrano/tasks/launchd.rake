@@ -7,16 +7,19 @@ namespace :launchd do
   desc "Install/update the launchd plist on the server"
   task :install do
     on roles(:app) do
-      plist_label = fetch(:launchd_label)
-      plist_dest  = fetch(:launchd_plist)
+      label = fetch(:launchd_label)
       deploy_path = fetch(:deploy_to)
-      home_path   = capture(:echo, "$HOME").strip
+      home_path = capture(:echo, "$HOME").strip
+      plist_dest = "#{home_path}/Library/LaunchAgents/#{label}.plist"
 
       # Read template and substitute placeholders
       template = File.read(File.expand_path("../../config/deploy/com.caramba.server.plist.erb", __dir__))
-      content  = template
+      content = template
         .gsub("DEPLOY_PATH", deploy_path)
         .gsub("HOME_PATH", home_path)
+
+      # Ensure directory exists
+      execute :mkdir, "-p", "#{home_path}/Library/LaunchAgents"
 
       # Upload the plist
       upload! StringIO.new(content), plist_dest
@@ -24,7 +27,7 @@ namespace :launchd do
       # Unload if already loaded, then load
       execute :launchctl, "unload", plist_dest, raise_on_non_zero_exit: false
       execute :launchctl, "load", plist_dest
-      info "launchd service #{plist_label} installed and loaded"
+      info "launchd service #{label} installed and loaded"
     end
   end
 
@@ -45,7 +48,9 @@ namespace :launchd do
   desc "Restart the Caramba server via launchd (unload + load)"
   task :restart do
     on roles(:app) do
-      plist = fetch(:launchd_plist)
+      label = fetch(:launchd_label)
+      home = capture(:echo, "$HOME").strip
+      plist = "#{home}/Library/LaunchAgents/#{label}.plist"
       execute :launchctl, "unload", plist, raise_on_non_zero_exit: false
       execute :launchctl, "load", plist
       info "Caramba server restarted"

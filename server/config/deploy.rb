@@ -47,9 +47,8 @@ set :keep_releases, 5
 # Puma PID file location
 set :puma_pid, -> { shared_path.join("server", "tmp", "pids", "puma.pid") }
 
-# launchd service label
+# launchd service label and plist path (evaluated on remote server)
 set :launchd_label, "com.caramba.server"
-set :launchd_plist, -> { File.expand_path("~/Library/LaunchAgents/#{fetch(:launchd_label)}.plist") }
 
 # =============================================================================
 # Override default Rails tasks to run inside server/ subdirectory
