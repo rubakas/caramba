@@ -67,11 +67,13 @@ class Api::PlaybackController < Api::BaseController
   # ── Streaming endpoints ─────────────────────────────────────────────
 
   # POST /api/playback/start
-  # Body: { filePath, startTime, prefs: { audioLanguage, subtitleLanguage, subtitleOff } }
-  # Returns: { streamUrl, sessionId, duration, startTime, seekBase, ... }
+  # Body: { filePath, startTime, format, prefs: { audioLanguage, subtitleLanguage, subtitleOff } }
+  # format: "fmp4" (default, for MSE-capable browsers) or "hls" (for Safari/iOS)
+  # Returns: { streamUrl, hlsUrl, sessionId, duration, startTime, seekBase, ... }
   def start
     file_path = params[:filePath]
     start_time = (params[:startTime] || 0).to_f
+    format = (params[:format] || "fmp4").to_sym
     prefs = params[:prefs]
 
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
@@ -87,25 +89,32 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, file_path, start_time,
       audio_stream_index: audio_stream_index,
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
-      duration: info[:duration])
+      duration: info[:duration],
+      format: format)
 
     session[:playback_session_id] = session_id
 
-    # Extract text subtitles in the background (full file, absolute timestamps).
+    # Extract text subtitles synchronously (full file, absolute timestamps).
+    # Must complete before response is sent so client can load track element.
     # Desktop works the same way — VTT cues use absolute times that match
     # video.currentTime directly.
     if subtitle_stream_index && !is_bitmap
-      Thread.new do
-        vtt = TranscoderService.extract_subtitles(file_path, subtitle_stream_index)
-        TranscoderService.set_session_subtitle(session_id, vtt, stream_index: subtitle_stream_index) if vtt
+      vtt = TranscoderService.extract_subtitles(file_path, subtitle_stream_index)
+      if vtt
+        TranscoderService.set_session_subtitle(session_id, vtt, stream_index: subtitle_stream_index)
+        Rails.logger.info "[Subtitle] Extracted #{vtt.lines.count} lines for stream #{subtitle_stream_index}"
+      else
+        Rails.logger.warn "[Subtitle] Failed to extract subtitles for stream #{subtitle_stream_index}"
       end
     end
 
-    stream_url = "#{api_base_url}/api/playback/stream/#{session_id}"
+    stream_url = format == :hls ? nil : "#{api_base_url}/api/playback/stream/#{session_id}"
+    hls_url = format == :hls ? "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8" : nil
     subtitle_url = subtitle_stream_index && !is_bitmap ? "#{api_base_url}/api/playback/subtitles?session=#{session_id}" : nil
 
     render json: {
       streamUrl: stream_url,
+      hlsUrl: hls_url,
       sessionId: session_id,
       duration: info[:duration],
       startTime: start_time,
@@ -179,13 +188,21 @@ class Api::PlaybackController < Api::BaseController
 
     TranscoderService.seek_session(session_id, seek_time)
 
-    stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
-
-    render json: {
-      streamUrl: stream_url,
-      seekTime: seek_time,
-      seekBase: seek_time
-    }
+    if info[:format] == :hls
+      hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
+      render json: {
+        hlsUrl: hls_url,
+        seekTime: seek_time,
+        seekBase: seek_time
+      }
+    else
+      stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
+      render json: {
+        streamUrl: stream_url,
+        seekTime: seek_time,
+        seekBase: seek_time
+      }
+    end
   rescue => e
     Rails.logger.error "[Playback] seek error: #{e.message}"
     render json: { error: e.message }, status: :internal_server_error
@@ -245,7 +262,7 @@ class Api::PlaybackController < Api::BaseController
 
   # POST /api/playback/switch_audio
   # Body: { session, audioStreamIndex, currentVideoTime }
-  # Returns: { streamUrl, seekTime, seekBase }
+  # Returns: { streamUrl, hlsUrl, seekTime, seekBase }
   #
   # Audio switches require a full session restart because the ffmpeg
   # encode parameters change.
@@ -260,6 +277,7 @@ class Api::PlaybackController < Api::BaseController
     # Save subtitle state before start_session resets it
     active_sub_index = info[:active_subtitle_index]
     had_subtitle = TranscoderService.get_session_subtitle(session_id).present?
+    format = info[:format] || :fmp4
 
     # Calculate absolute time (seekBase + relative currentTime)
     abs_time = (info[:seek_time] || 0) + current_time
@@ -267,7 +285,8 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, info[:file_path], abs_time,
       audio_stream_index: audio_index,
       burn_subtitle_index: info[:burn_subtitle_index],
-      duration: info[:duration])
+      duration: info[:duration],
+      format: format)
 
     # Re-extract subtitles synchronously — start_session resets the
     # session hash.  Extraction is fast (text demux, no encode) so it
@@ -277,13 +296,13 @@ class Api::PlaybackController < Api::BaseController
       TranscoderService.set_session_subtitle(session_id, vtt, stream_index: active_sub_index) if vtt
     end
 
-    stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
-
-    render json: {
-      streamUrl: stream_url,
-      seekTime: abs_time,
-      seekBase: abs_time
-    }
+    if format == :hls
+      hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
+      render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
+    else
+      stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
+      render json: { streamUrl: stream_url, seekTime: abs_time, seekBase: abs_time }
+    end
   rescue => e
     render json: { error: e.message }, status: :internal_server_error
   end
@@ -301,23 +320,29 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.set_session_subtitle(session_id, nil)
 
     if stream_index.blank? || stream_index.to_i < 0
+      Rails.logger.info "[Subtitle] Disabled subtitles"
       return render(json: { subtitleUrl: nil })
     end
 
+    Rails.logger.info "[Subtitle] Switching to subtitle stream #{stream_index} for file: #{info[:file_path]}"
     vtt = TranscoderService.extract_subtitles(info[:file_path], stream_index.to_i)
     if vtt.present?
       TranscoderService.set_session_subtitle(session_id, vtt, stream_index: stream_index.to_i)
-      render json: { subtitleUrl: "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}" }
+      subtitle_url = "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}"
+      Rails.logger.info "[Subtitle] Extracted and enabled stream #{stream_index}, VTT size: #{vtt.bytesize} bytes, #{vtt.lines.count} lines"
+      render json: { subtitleUrl: subtitle_url }
     else
+      Rails.logger.warn "[Subtitle] Failed to extract stream #{stream_index}"
       render json: { subtitleUrl: nil }
     end
   rescue => e
+    Rails.logger.error "[Subtitle] switch_subtitle error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
     render json: { error: e.message }, status: :internal_server_error
   end
 
   # POST /api/playback/switch_bitmap_subtitle
   # Body: { session, subtitleStreamIndex, currentVideoTime }
-  # Returns: { streamUrl, seekTime, seekBase }
+  # Returns: { streamUrl, hlsUrl, seekTime, seekBase }
   def switch_bitmap_subtitle
     session_id = params[:session]
     sub_index = params[:subtitleStreamIndex]
@@ -329,6 +354,7 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.set_session_subtitle(session_id, nil)
 
     burn_index = sub_index.present? && sub_index.to_i >= 0 ? sub_index.to_i : nil
+    format = info[:format] || :fmp4
 
     # Calculate absolute time
     abs_time = (info[:seek_time] || 0) + current_time
@@ -336,17 +362,94 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, info[:file_path], abs_time,
       audio_stream_index: info[:audio_stream_index],
       burn_subtitle_index: burn_index,
-      duration: info[:duration])
+      duration: info[:duration],
+      format: format)
 
-    stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
-
-    render json: {
-      streamUrl: stream_url,
-      seekTime: abs_time,
-      seekBase: abs_time
-    }
+    if format == :hls
+      hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
+      render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
+    else
+      stream_url = "#{api_base_url}/api/playback/stream/#{session_id}?t=#{Time.now.to_f}"
+      render json: { streamUrl: stream_url, seekTime: abs_time, seekBase: abs_time }
+    end
   rescue => e
     render json: { error: e.message }, status: :internal_server_error
+  end
+
+  # ── HLS endpoints (Safari/iOS) ─────────────────────────────────────
+
+  # GET /api/playback/hls/:session_id/playlist.m3u8
+  #
+  # Serves the HLS playlist file. Waits briefly for ffmpeg to generate
+  # the initial playlist if it doesn't exist yet.
+  def hls_playlist
+    session_id = params[:session_id]
+
+    unless TranscoderService.active?(session_id)
+      return head :not_found
+    end
+
+    playlist_path = TranscoderService.hls_playlist_path(session_id)
+    unless playlist_path
+      return render plain: "Session is not in HLS mode", status: :bad_request
+    end
+
+    # Wait up to 3 seconds for ffmpeg to create the playlist
+    10.times do
+      break if File.exist?(playlist_path)
+      sleep 0.3
+    end
+
+    unless File.exist?(playlist_path)
+      return render plain: "Playlist not ready", status: :service_unavailable
+    end
+
+    playlist = File.read(playlist_path)
+
+    # If ffmpeg has finished encoding but hasn't written #EXT-X-ENDLIST yet,
+    # append it ourselves so Safari knows the stream is complete and stops polling.
+    unless TranscoderService.ffmpeg_running? || playlist.include?("#EXT-X-ENDLIST")
+      playlist = playlist.strip + "\n#EXT-X-ENDLIST\n"
+    end
+
+    response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+    # Allow caching for 1 second to prevent excessive polling.
+    # HLS players typically poll every segment duration (4s) anyway.
+    response.headers["Cache-Control"] = "max-age=1"
+    render plain: playlist
+  end
+
+  # GET /api/playback/hls/:session_id/:segment
+  #
+  # Serves individual HLS segment files (.ts).
+  def hls_segment
+    session_id = params[:session_id]
+    segment_name = params[:segment]
+
+    unless TranscoderService.active?(session_id)
+      return head :not_found
+    end
+
+    segment_path = TranscoderService.hls_segment_path(session_id, segment_name)
+    unless segment_path
+      return head :bad_request
+    end
+
+    # Wait briefly for the segment to be written
+    5.times do
+      break if File.exist?(segment_path)
+      sleep 0.2
+    end
+
+    unless File.exist?(segment_path)
+      return head :not_found
+    end
+
+    # Segments are immutable once written, cache for 1 hour
+    response.headers["Cache-Control"] = "max-age=3600"
+    send_file segment_path,
+      type: "video/mp2t",
+      disposition: "inline"
   end
 
   private
@@ -406,6 +509,9 @@ class Api::PlaybackController < Api::BaseController
   end
 
   def api_base_url
-    @api_base_url ||= "#{request.protocol}#{request.host_with_port}"
+    # Use X-Forwarded-Host if behind a proxy (e.g., Vite dev server)
+    host = request.headers["X-Forwarded-Host"] || request.host_with_port
+    protocol = request.headers["X-Forwarded-Proto"] || request.protocol.sub("://", "")
+    @api_base_url ||= "#{protocol}://#{host}"
   end
 end

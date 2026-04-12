@@ -11,6 +11,7 @@ export function PlayerProvider({ children }) {
   const [playerState, setPlayerState] = useState({
     open: false,
     streamUrl: null,
+    hlsUrl: null,
     subtitleUrl: null,
     duration: 0,
     startTime: 0,
@@ -67,6 +68,7 @@ export function PlayerProvider({ children }) {
       setPlayerState({
         open: true,
         streamUrl: result.streamUrl,
+        hlsUrl: result.hlsUrl,
         subtitleUrl: result.subtitleUrl,
         duration: result.duration,
         startTime: startTime || 0,
@@ -98,7 +100,7 @@ export function PlayerProvider({ children }) {
     let context = {}
     setPlayerState(prev => {
       context = { type: prev.type, episodeId: prev.episodeId, movieId: prev.movieId }
-      return { ...prev, open: false, streamUrl: null }
+      return { ...prev, open: false, streamUrl: null, hlsUrl: null }
     })
     window.dispatchEvent(new Event('playback-stopped'))
     api.stopPlayback(finalTime, finalDuration, context).catch(() => {})
@@ -178,12 +180,12 @@ export function PlayerProvider({ children }) {
     }).catch(() => {})
   }, [api])
 
-  // Seek — restarts ffmpeg at new position, updates streamUrl in state
+  // Seek — restarts ffmpeg at new position, updates streamUrl/hlsUrl in state
   // so the MSE useEffect picks it up automatically.
   const seekPlayback = useCallback(async (absoluteTime) => {
     try {
       const result = await api.seekPlayback(absoluteTime)
-      if (result && result.streamUrl) {
+      if (result && (result.streamUrl || result.hlsUrl)) {
         setPlayerState(prev => {
           // After seek the server shifts the stored VTT by the new seek_time.
           // Bust the subtitleUrl cache so the <track> element re-mounts and
@@ -195,7 +197,8 @@ export function PlayerProvider({ children }) {
           }
           return {
             ...prev,
-            streamUrl: result.streamUrl,
+            streamUrl: result.streamUrl ?? prev.streamUrl,
+            hlsUrl: result.hlsUrl ?? prev.hlsUrl,
             seekBase: result.seekBase ?? absoluteTime,
             sessionId: Date.now(),
             subtitleUrl,
@@ -213,7 +216,7 @@ export function PlayerProvider({ children }) {
   const switchAudio = useCallback(async (audioStreamIndex, currentVideoTime) => {
     try {
       const result = await api.switchAudio(audioStreamIndex, currentVideoTime)
-      if (result && result.streamUrl) {
+      if (result && (result.streamUrl || result.hlsUrl)) {
         setPlayerState(prev => {
           // Bust subtitleUrl cache — audio switch restarts ffmpeg at a new
           // seek position so the VTT shift changes.
@@ -224,7 +227,8 @@ export function PlayerProvider({ children }) {
           }
           const next = {
             ...prev,
-            streamUrl: result.streamUrl,
+            streamUrl: result.streamUrl ?? prev.streamUrl,
+            hlsUrl: result.hlsUrl ?? prev.hlsUrl,
             seekBase: result.seekBase ?? (prev.seekBase + currentVideoTime),
             activeAudioIndex: audioStreamIndex,
             sessionId: Date.now(),
@@ -266,12 +270,13 @@ export function PlayerProvider({ children }) {
   const switchBitmapSubtitle = useCallback(async (subtitleStreamIndex, currentVideoTime) => {
     try {
       const result = await api.switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
-      if (result && result.streamUrl) {
+      if (result && (result.streamUrl || result.hlsUrl)) {
         setPlayerState(prev => {
           const isBitmap = subtitleStreamIndex != null
           const next = {
             ...prev,
-            streamUrl: result.streamUrl,
+            streamUrl: result.streamUrl ?? prev.streamUrl,
+            hlsUrl: result.hlsUrl ?? prev.hlsUrl,
             seekBase: result.seekBase ?? (prev.seekBase + currentVideoTime),
             activeSubtitleIndex: subtitleStreamIndex,
             isBitmapSubtitle: isBitmap,

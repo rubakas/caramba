@@ -11,7 +11,7 @@ export default function Navbar({ active, actions, rightContent }) {
   const navigate = useNavigate()
   const location = useLocation()
   const navbarGlass = useGlassConfig('navbar')
-  const { hasSettings } = useCapabilities()
+  const { hasSettings, hasPlayground } = useCapabilities()
 
   const links = [
     { label: 'Library', path: '/' },
@@ -19,7 +19,7 @@ export default function Navbar({ active, actions, rightContent }) {
     { label: 'Discover', path: '/discover' },
     { label: 'History', path: '/history' },
     ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
-    ...(import.meta.env.DEV && hasSettings ? [{ label: 'Playground', path: '/playground' }] : []),
+    ...(import.meta.env.DEV && hasPlayground ? [{ label: 'Playground', path: '/playground' }] : []),
   ]
 
   return (

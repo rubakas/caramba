@@ -105,4 +105,5 @@ export const localCapabilities = {
   canOpenExternal: true,
   hasNowPlaying: true,
   hasSettings: true,
+  hasPlayground: true,
 }

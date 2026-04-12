@@ -2244,6 +2244,9 @@ body {
   justify-content: center;
   cursor: none;
   -webkit-app-region: no-drag; /* Override navbar drag region so buttons work */
+  /* Prevent iOS from showing native player UI */
+  -webkit-user-select: none;
+  user-select: none;
 }
 .video-player-overlay.controls-visible {
   cursor: default;
@@ -2254,6 +2257,38 @@ body {
   height: 100%;
   object-fit: contain;
   background: #000;
+  /* Suppress iOS native player UI overlay */
+  -webkit-playsinline: none;
+}
+/* Hide all webkit media controls */
+.video-player-video::-webkit-media-controls {
+  display: none !important;
+}
+.video-player-video::-webkit-media-controls-panel {
+  display: none !important;
+}
+.video-player-video::-webkit-media-controls-play-button {
+  display: none !important;
+}
+.video-player-video::-webkit-media-controls-current-time-display {
+  display: none !important;
+}
+.video-player-video::-webkit-media-controls-time-remaining-display {
+  display: none !important;
+}
+/* Note: DO NOT hide webkit-media-text-track-container - it's needed for subtitle rendering! */
+/* Only hide the controls, not the text tracks */
+/* Target the big play button that appears in iOS Safari center screen */
+.video-player-video::cue {
+  background: transparent;
+}
+/* Ensure no fullscreen button appears */
+.video-player-video::-webkit-media-controls-fullscreen-button {
+  display: none !important;
+}
+/* Hide volume controls */
+.video-player-video::-webkit-media-controls-volume-slider {
+  display: none !important;
 }
 /* ::cue styling is injected dynamically by VideoPlayer.jsx based on size/appearance preferences */
 
@@ -2455,12 +2490,13 @@ body {
   opacity: 0;
   transition: opacity .3s ease;
   pointer-events: none;
-  z-index: 3;
+  z-index: 9000;
   display: grid;
   grid-template-columns: 1fr auto;
   grid-template-rows: auto auto;
   column-gap: 12px;
   row-gap: 10px;
+  overflow: visible;
 }
 .video-player-bottom.visible {
   opacity: 1;
@@ -2503,6 +2539,7 @@ body {
   position: relative;
   justify-self: end;
   align-self: center;
+  overflow: visible;
 }
 
 /* Lower row: elapsed + seek bar + remaining time — spans full width */
@@ -2607,16 +2644,20 @@ body {
 /* -- Track Selector (Audio / Subtitles) Popover ------------------ */
 .video-player-track-popover {
   position: absolute;
-  bottom: calc(100% + 12px);
-  right: 0;
+  bottom: calc(100% + 16px);
+  right: -12px;
   min-width: 220px;
   max-width: 320px;
-  background: rgba(28, 28, 30, 0.55);
+  max-height: 50vh;
+  overflow-y: auto;
+  background: rgba(28, 28, 30, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(255,255,255,.1);
   padding: 8px 0;
   box-shadow: var(--glass-edge-all), var(--glass-shadow-lg);
-  z-index: 20;
-  overflow: hidden;
+  z-index: 9001;
+  border-radius: 12px;
   animation: glass-pop-open .2s cubic-bezier(.16,1,.3,1);
 }
 

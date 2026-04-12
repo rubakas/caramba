@@ -48,6 +48,11 @@ Rails.application.routes.draw do
     # Video stream: pipes ffmpeg fMP4 output directly to HTTP response
     get "playback/stream/:session_id", to: "playback#stream", as: :playback_stream
 
+    # HLS stream: serves playlist and segments for Safari/iOS
+    get "playback/hls/:session_id/playlist.m3u8", to: "playback#hls_playlist", as: :playback_hls_playlist
+    get "playback/hls/:session_id/:segment", to: "playback#hls_segment", as: :playback_hls_segment,
+        constraints: { segment: /segment_\d+\.ts/ }
+
     resources :history, only: [ :index ], controller: :history do
       collection do
         get :stats

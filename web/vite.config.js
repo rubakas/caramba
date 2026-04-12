@@ -14,7 +14,10 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:3001',
-        changeOrigin: true,
+        changeOrigin: false,
+        headers: {
+          'X-Forwarded-Proto': 'http',
+        },
       },
       '/up': {
         target: 'http://localhost:3001',

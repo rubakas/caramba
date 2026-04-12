@@ -77,8 +77,9 @@ export default function VideoPlayer() {
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
   const rafRef = useRef(null)
-  const trackMenuRef = useRef(null)
-  const clickTimerRef = useRef(null)
+   const trackMenuRef = useRef(null)
+   const clickTimerRef = useRef(null)
+   const isTouchRef = useRef(false)
 
   // seekBase: the absolute time (in the source file) that corresponds to
   // video.currentTime === 0 in the current stream.  After a seek/restart,
@@ -137,6 +138,7 @@ export default function VideoPlayer() {
   }, [playerState.open])
 
   // ── Source attachment ─────────────────────────────────────────────
+  // For HLS (Safari/iOS or hls.js), use native or library playback.
   // For HTTP streams (web path), use MediaSource Extensions (MSE) to
   // feed fMP4 chunks to the browser.  This avoids Chrome's issues with
   // playing fragmented MP4 directly via <video src="http://...">.
@@ -171,154 +173,168 @@ export default function VideoPlayer() {
   }, [])
 
   useEffect(() => {
-    if (!playerState.open || !playerState.streamUrl) return
+    if (!playerState.open) return
     const video = videoRef.current
     if (!video) return
 
-    const url = playerState.streamUrl
-    const isHttpStream = url.startsWith('http://') || url.startsWith('https://')
+    // Determine which URL to use
+    const hlsUrl = playerState.hlsUrl
+    const streamUrl = playerState.streamUrl
 
     // Clean up any previous MSE session
     cleanupMse()
 
-    if (isHttpStream && typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028,mp4a.40.2"')) {
-      // ── MSE path (web) ──────────────────────────────────────────
-      const mediaSource = new MediaSource()
-      const objectUrl = URL.createObjectURL(mediaSource)
-      video.src = objectUrl
-
-      const abortController = new AbortController()
-      const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl }
-      mseRef.current = mseState
-
-      mediaSource.addEventListener('sourceopen', () => {
-        // Guard: if we were cleaned up before sourceopen fired, bail out
-        if (mseRef.current !== mseState) return
-
-        let sourceBuffer
-        try {
-          sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.640028,mp4a.40.2"')
-        } catch (e) {
-          console.error('[MSE] addSourceBuffer failed:', e)
-          // Fallback to direct src
-          URL.revokeObjectURL(objectUrl)
-          video.src = url
-          video.load()
-          video.play().catch(() => {})
-          return
-        }
-
-        mseState.sourceBuffer = sourceBuffer
-
-        const queue = []
-        let streamDone = false
-        let chunksAppended = 0
-
-        // Trim played-back data so the buffer doesn't grow forever.
-        // Keeps from (currentTime - 10s) forward.
-        const trimBuffer = () => {
-          try {
-            if (sourceBuffer.buffered.length === 0 || sourceBuffer.updating) return false
-            const bufStart = sourceBuffer.buffered.start(0)
-            const vid = videoRef.current
-            const playPos = vid && isFinite(vid.currentTime) ? vid.currentTime : 0
-            const trimEnd = Math.max(bufStart, playPos - 10)
-            if (trimEnd - bufStart > 1) {
-              sourceBuffer.remove(bufStart, trimEnd)
-              return true
-            }
-          } catch {}
-          return false
-        }
-
-        // Safe endOfStream: only call if we actually appended data and
-        // the demuxer has had a chance to initialize (buffered ranges exist).
-        const safeEndOfStream = () => {
-          if (mediaSource.readyState !== 'open') return
-          if (sourceBuffer.updating) return
-          if (chunksAppended === 0) return  // no data ever appended
-          try {
-            if (sourceBuffer.buffered.length > 0) {
-              mediaSource.endOfStream()
-            }
-          } catch {}
-        }
-
-        const flushQueue = () => {
-          if (queue.length > 0 && !sourceBuffer.updating) {
-            try {
-              sourceBuffer.appendBuffer(queue.shift())
-              chunksAppended++
-            } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                console.warn('[MSE] QuotaExceededError, dropping queued chunks')
-                queue.length = 0
-              } else {
-                console.error('[MSE] appendBuffer error:', e)
-              }
-            }
-          } else if (streamDone && queue.length === 0 && !sourceBuffer.updating) {
-            safeEndOfStream()
-          }
-        }
-
-        sourceBuffer.addEventListener('updateend', () => {
-          if (trimBuffer()) return
-          flushQueue()
-        })
-
-        const appendChunk = (chunk) => {
-          if (sourceBuffer.updating || queue.length > 0) {
-            queue.push(chunk)
-          } else {
-            try {
-              sourceBuffer.appendBuffer(chunk)
-              chunksAppended++
-            } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                console.warn('[MSE] QuotaExceededError, dropping chunk')
-              } else {
-                console.error('[MSE] appendBuffer error:', e)
-              }
-            }
-          }
-        }
-
-        // Fetch the stream and pipe chunks into SourceBuffer.
-        fetch(url, { signal: abortController.signal })
-          .then(response => {
-            if (!response.ok) {
-              console.error('[MSE] Stream fetch failed:', response.status, response.statusText)
-              return
-            }
-            const reader = response.body.getReader()
-            const pump = () => {
-              reader.read().then(({ done, value }) => {
-                if (done) {
-                  streamDone = true
-                  safeEndOfStream()
-                  return
-                }
-                appendChunk(value)
-                pump()
-              }).catch(() => {
-                // fetch aborted or network error — normal during seek/close
-              })
-            }
-            pump()
-          })
-          .catch(() => {
-            // fetch aborted — normal during seek/close
-          })
-
-        // Don't call video.play() here — wait for data to arrive.
-        // The <video autoPlay> attribute + canplay event will handle it.
-      }, { once: true })
-    } else {
-      // ── Direct src path (desktop / fallback) ────────────────────
-      video.src = url
+    if (hlsUrl) {
+      // ── HLS path (Safari/iOS native) ────────────────────────────
+      // Safari and iOS support HLS natively via <video src="...m3u8">
+      console.log('[HLS] Setting video src:', hlsUrl)
+      video.src = hlsUrl
       video.load()
-      video.play().catch(() => {})
+      video.play().catch((err) => {
+        console.error('[HLS] play() rejected:', err.name, err.message)
+      })
+    } else if (streamUrl) {
+      const isHttpStream = streamUrl.startsWith('http://') || streamUrl.startsWith('https://')
+
+      if (isHttpStream && typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028,mp4a.40.2"')) {
+        // ── MSE path (web) ──────────────────────────────────────────
+        const mediaSource = new MediaSource()
+        const objectUrl = URL.createObjectURL(mediaSource)
+        video.src = objectUrl
+
+        const abortController = new AbortController()
+        const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl }
+        mseRef.current = mseState
+
+        mediaSource.addEventListener('sourceopen', () => {
+          // Guard: if we were cleaned up before sourceopen fired, bail out
+          if (mseRef.current !== mseState) return
+
+          let sourceBuffer
+          try {
+            sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.640028,mp4a.40.2"')
+          } catch (e) {
+            console.error('[MSE] addSourceBuffer failed:', e)
+            // Fallback to direct src
+            URL.revokeObjectURL(objectUrl)
+            video.src = streamUrl
+            video.load()
+            video.play().catch(() => {})
+            return
+          }
+
+          mseState.sourceBuffer = sourceBuffer
+
+          const queue = []
+          let streamDone = false
+          let chunksAppended = 0
+
+          // Trim played-back data so the buffer doesn't grow forever.
+          // Keeps from (currentTime - 10s) forward.
+          const trimBuffer = () => {
+            try {
+              if (sourceBuffer.buffered.length === 0 || sourceBuffer.updating) return false
+              const bufStart = sourceBuffer.buffered.start(0)
+              const vid = videoRef.current
+              const playPos = vid && isFinite(vid.currentTime) ? vid.currentTime : 0
+              const trimEnd = Math.max(bufStart, playPos - 10)
+              if (trimEnd - bufStart > 1) {
+                sourceBuffer.remove(bufStart, trimEnd)
+                return true
+              }
+            } catch {}
+            return false
+          }
+
+          // Safe endOfStream: only call if we actually appended data and
+          // the demuxer has had a chance to initialize (buffered ranges exist).
+          const safeEndOfStream = () => {
+            if (mediaSource.readyState !== 'open') return
+            if (sourceBuffer.updating) return
+            if (chunksAppended === 0) return  // no data ever appended
+            try {
+              if (sourceBuffer.buffered.length > 0) {
+                mediaSource.endOfStream()
+              }
+            } catch {}
+          }
+
+          const flushQueue = () => {
+            if (queue.length > 0 && !sourceBuffer.updating) {
+              try {
+                sourceBuffer.appendBuffer(queue.shift())
+                chunksAppended++
+              } catch (e) {
+                if (e.name === 'QuotaExceededError') {
+                  console.warn('[MSE] QuotaExceededError, dropping queued chunks')
+                  queue.length = 0
+                } else {
+                  console.error('[MSE] appendBuffer error:', e)
+                }
+              }
+            } else if (streamDone && queue.length === 0 && !sourceBuffer.updating) {
+              safeEndOfStream()
+            }
+          }
+
+          sourceBuffer.addEventListener('updateend', () => {
+            if (trimBuffer()) return
+            flushQueue()
+          })
+
+          const appendChunk = (chunk) => {
+            if (sourceBuffer.updating || queue.length > 0) {
+              queue.push(chunk)
+            } else {
+              try {
+                sourceBuffer.appendBuffer(chunk)
+                chunksAppended++
+              } catch (e) {
+                if (e.name === 'QuotaExceededError') {
+                  console.warn('[MSE] QuotaExceededError, dropping chunk')
+                } else {
+                  console.error('[MSE] appendBuffer error:', e)
+                }
+              }
+            }
+          }
+
+          // Fetch the stream and pipe chunks into SourceBuffer.
+          fetch(streamUrl, { signal: abortController.signal })
+            .then(response => {
+              if (!response.ok) {
+                console.error('[MSE] Stream fetch failed:', response.status, response.statusText)
+                return
+              }
+              const reader = response.body.getReader()
+              const pump = () => {
+                reader.read().then(({ done, value }) => {
+                  if (done) {
+                    streamDone = true
+                    safeEndOfStream()
+                    return
+                  }
+                  appendChunk(value)
+                  pump()
+                }).catch(() => {
+                  // fetch aborted or network error — normal during seek/close
+                })
+              }
+              pump()
+            })
+            .catch(() => {
+              // fetch aborted — normal during seek/close
+            })
+
+          // Don't call video.play() here — wait for data to arrive.
+          // The <video autoPlay> attribute + canplay event will handle it.
+        }, { once: true })
+      } else {
+        // ── Direct src path (desktop / fallback) ────────────────────
+        video.src = streamUrl
+        video.load()
+        video.play().catch(() => {})
+      }
     }
 
     return () => {
@@ -334,7 +350,7 @@ export default function VideoPlayer() {
         v.load()  // forces the element to release the old connection
       }
     }
-  }, [playerState.open, playerState.streamUrl, playerState.sessionId, cleanupMse])
+  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, cleanupMse])
 
   // Helper: disable all text tracks on the video element.
   const disableAllTextTracks = useCallback(() => {
@@ -358,37 +374,39 @@ export default function VideoPlayer() {
     subtitleActiveRef.current = !!(playerState.open && playerState.subtitleUrl)
   }, [playerState.open, playerState.subtitleUrl])
 
-  useEffect(() => {
-    if (!playerState.open || !playerState.subtitleUrl) return
+   useEffect(() => {
+     if (!playerState.open || !playerState.subtitleUrl) return
 
-    const forceShowSubtitles = () => {
-      if (!subtitleActiveRef.current) return
-      const video = videoRef.current
-      if (!video) return
-      for (let i = 0; i < video.textTracks.length; i++) {
-        if (video.textTracks[i].kind === 'subtitles') {
-          video.textTracks[i].mode = 'showing'
-        }
-      }
-    }
+     const forceShowSubtitles = () => {
+       if (!subtitleActiveRef.current) return
+       const video = videoRef.current
+       if (!video) return
+       for (let i = 0; i < video.textTracks.length; i++) {
+         if (video.textTracks[i].kind === 'subtitles') {
+           console.log(`[Subtitle] Track ${i}: mode=${video.textTracks[i].mode}, cues=${video.textTracks[i].cues?.length || 0}`)
+           video.textTracks[i].mode = 'showing'
+         }
+       }
+     }
 
-    const video = videoRef.current
-    if (!video) return
+     const video = videoRef.current
+     if (!video) return
 
-    forceShowSubtitles()
-    video.addEventListener('loadedmetadata', forceShowSubtitles)
-    video.addEventListener('loadeddata', forceShowSubtitles)
-    video.addEventListener('canplay', forceShowSubtitles)
-    const interval = setInterval(forceShowSubtitles, 1000)
+     console.log(`[Subtitle] Loading URL: ${playerState.subtitleUrl}`)
+     forceShowSubtitles()
+     video.addEventListener('loadedmetadata', forceShowSubtitles)
+     video.addEventListener('loadeddata', forceShowSubtitles)
+     video.addEventListener('canplay', forceShowSubtitles)
+     const interval = setInterval(forceShowSubtitles, 1000)
 
-    return () => {
-      video.removeEventListener('loadedmetadata', forceShowSubtitles)
-      video.removeEventListener('loadeddata', forceShowSubtitles)
-      video.removeEventListener('canplay', forceShowSubtitles)
-      clearInterval(interval)
-      disableAllTextTracks()
-    }
-  }, [playerState.open, playerState.subtitleUrl, subtitleVersion, disableAllTextTracks])
+     return () => {
+       video.removeEventListener('loadedmetadata', forceShowSubtitles)
+       video.removeEventListener('loadeddata', forceShowSubtitles)
+       video.removeEventListener('canplay', forceShowSubtitles)
+       clearInterval(interval)
+       disableAllTextTracks()
+     }
+   }, [playerState.open, playerState.subtitleUrl, subtitleVersion, disableAllTextTracks])
 
   // Inject dynamic <style> for ::cue
   useEffect(() => {
@@ -534,11 +552,22 @@ export default function VideoPlayer() {
     }
   }, [trackMenuOpen])
 
-  // Fullscreen change listener
+  // Fullscreen change listener (handles both standard and iOS fullscreen)
   useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement)
+    const handler = () => {
+      const video = videoRef.current
+      const isStandardFullscreen = !!document.fullscreenElement
+      const isIOSFullscreen = video && video.webkitDisplayingFullscreen
+      setIsFullscreen(isStandardFullscreen || isIOSFullscreen)
+    }
     document.addEventListener('fullscreenchange', handler)
-    return () => document.removeEventListener('fullscreenchange', handler)
+    videoRef.current?.addEventListener('webkitbeginfullscreen', handler)
+    videoRef.current?.addEventListener('webkitendfullscreen', handler)
+    return () => {
+      document.removeEventListener('fullscreenchange', handler)
+      videoRef.current?.removeEventListener('webkitbeginfullscreen', handler)
+      videoRef.current?.removeEventListener('webkitendfullscreen', handler)
+    }
   }, [])
 
   // --- Callbacks ---
@@ -549,6 +578,10 @@ export default function VideoPlayer() {
     const dur = totalDuration
     if (document.fullscreenElement) {
       document.exitFullscreen()
+    }
+    // Exit iOS fullscreen if active
+    if (video?.webkitDisplayingFullscreen) {
+      video.webkitExitFullscreen?.()
     }
     closePlayer(absTime, dur)
   }, [closePlayer, totalDuration])
@@ -626,9 +659,9 @@ export default function VideoPlayer() {
 
     setBuffering(true)
     const result = await switchAudio(audioStreamIndex, currentVideoTime)
-    if (result && result.streamUrl) {
-      // switchAudio updates playerState.streamUrl + seekBase + sessionId,
-      // which triggers the MSE useEffect to set up a new stream.
+    if (result && (result.streamUrl || result.hlsUrl)) {
+      // switchAudio updates playerState.streamUrl/hlsUrl + seekBase + sessionId,
+      // which triggers the source useEffect to set up a new stream.
       const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
       seekBaseRef.current = resumeBase
       setCurrentTime(resumeBase)
@@ -652,9 +685,9 @@ export default function VideoPlayer() {
     disableAllTextTracks()
     setBuffering(true)
     const result = await switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
-    if (result && result.streamUrl) {
-      // switchBitmapSubtitle updates playerState.streamUrl + seekBase + sessionId,
-      // which triggers the MSE useEffect to set up a new stream.
+    if (result && (result.streamUrl || result.hlsUrl)) {
+      // switchBitmapSubtitle updates playerState.streamUrl/hlsUrl + seekBase + sessionId,
+      // which triggers the source useEffect to set up a new stream.
       const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
       seekBaseRef.current = resumeBase
       setCurrentTime(resumeBase)
@@ -665,10 +698,26 @@ export default function VideoPlayer() {
   }, [switchBitmapSubtitle, disableAllTextTracks])
 
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    } else if (containerRef.current) {
-      containerRef.current.requestFullscreen()
+    const video = videoRef.current
+    if (!video) return
+
+    // Try to detect if we're on iOS
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+
+    if (isIOS) {
+      // On iOS, use webkitEnterFullscreen / webkitExitFullscreen
+      if (video.webkitDisplayingFullscreen) {
+        video.webkitExitFullscreen?.()
+      } else {
+        video.webkitEnterFullscreen?.()
+      }
+    } else {
+      // On other platforms, use standard fullscreen API
+      if (document.fullscreenElement) {
+        document.exitFullscreen()
+      } else if (containerRef.current) {
+        containerRef.current.requestFullscreen?.()
+      }
     }
   }, [])
 
@@ -751,27 +800,44 @@ export default function VideoPlayer() {
       onWheel={(e) => e.stopPropagation()}
     >
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-      <video
-        ref={videoRef}
-        className="video-player-video"
-        crossOrigin="anonymous"
-        autoPlay
-        onClick={(e) => {
-          e.stopPropagation()
-          showControls()
-          if (trackMenuOpen) { setTrackMenuOpen(false); return }
-          if (clickTimerRef.current) {
-            clearTimeout(clickTimerRef.current)
-            clickTimerRef.current = null
-            toggleFullscreen()
-          } else {
-            clickTimerRef.current = setTimeout(() => {
-              clickTimerRef.current = null
-              const v = videoRef.current
-              if (v) v.paused ? v.play() : v.pause()
-            }, 250)
-          }
-        }}
+       <video
+         ref={videoRef}
+         className="video-player-video"
+         crossOrigin="anonymous"
+         autoPlay
+         playsInline
+         muted={true}
+         controls={false}
+         style={{ WebkitPlaysinline: 'true' }}
+         onTouchStart={(e) => {
+           // Mark this as a touch event so onClick ignores it
+           isTouchRef.current = true
+           e.stopPropagation()
+           showControls()
+         }}
+         onClick={(e) => {
+           e.stopPropagation()
+           // Ignore click if it came from a touch event
+           if (isTouchRef.current) {
+             isTouchRef.current = false
+             return
+           }
+           
+           showControls()
+           if (trackMenuOpen) { setTrackMenuOpen(false); return }
+           
+           if (clickTimerRef.current) {
+             clearTimeout(clickTimerRef.current)
+             clickTimerRef.current = null
+             toggleFullscreen()
+           } else {
+             clickTimerRef.current = setTimeout(() => {
+               clickTimerRef.current = null
+               const v = videoRef.current
+               if (v) v.paused ? v.play() : v.pause()
+             }, 250)
+           }
+         }}
         onPlay={() => setPaused(false)}
         onPause={() => setPaused(true)}
         onWaiting={() => setBuffering(true)}
@@ -780,12 +846,19 @@ export default function VideoPlayer() {
           // Ensure playback starts — autoPlay may not fire with MSE
           const v = videoRef.current
           if (v && v.paused) v.play().catch(() => {})
+          // Unmute after video can play (iOS requires muted for autoplay)
+          if (v && v.muted) v.muted = false
         }}
-        onPlaying={() => setBuffering(false)}
+        onPlaying={() => {
+          setBuffering(false)
+          // Unmute when playback starts
+          const v = videoRef.current
+          if (v && v.muted) v.muted = false
+        }}
         onEnded={handleEnded}
       >
         {playerState.subtitleUrl && (
-          <track key={playerState.subtitleUrl + '-' + subtitleVersion} kind="subtitles" src={playerState.subtitleUrl + '&v=' + subtitleVersion} label="Subtitles" default />
+          <track key={playerState.subtitleUrl + '-' + subtitleVersion} kind="subtitles" src={playerState.subtitleUrl + '&v=' + subtitleVersion} label="Subtitles" default crossOrigin="anonymous" />
         )}
       </video>
 
@@ -903,127 +976,127 @@ export default function VideoPlayer() {
                   <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/>
                 </svg>
               )}
-            </button>
-          </refractive.div>
+             </button>
+           </refractive.div>
 
-          {trackMenuOpen && (
-            <refractive.div className="video-player-track-popover" refraction={trackPopoverGlass}>
-              {/* Audio section */}
-              {playerState.audioStreams.length > 1 && (
-                <div className="track-popover-section">
-                  <div className="track-popover-heading">Audio</div>
-                  {playerState.audioStreams.map((s) => (
-                    <button
-                      key={s.index}
-                      className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
-                      onClick={() => {
-                        if (s.index !== playerState.activeAudioIndex) {
-                          handleSwitchAudio(s.index)
-                        }
-                        setTrackMenuOpen(false)
-                      }}
-                    >
-                      <span className="track-popover-check">
-                        {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
-                      </span>
-                      <span className="track-popover-label">{audioLabel(s)}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+           {trackMenuOpen && (
+             <refractive.div className="video-player-track-popover" refraction={trackPopoverGlass}>
+               {/* Audio section */}
+               {playerState.audioStreams.length > 1 && (
+                 <div className="track-popover-section">
+                   <div className="track-popover-heading">Audio</div>
+                   {playerState.audioStreams.map((s) => (
+                     <button
+                       key={s.index}
+                       className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
+                       onClick={() => {
+                         if (s.index !== playerState.activeAudioIndex) {
+                           handleSwitchAudio(s.index)
+                         }
+                         setTrackMenuOpen(false)
+                       }}
+                     >
+                       <span className="track-popover-check">
+                         {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
+                       </span>
+                       <span className="track-popover-label">{audioLabel(s)}</span>
+                     </button>
+                   ))}
+                 </div>
+               )}
 
-              {/* Subtitles section */}
-              {playerState.subtitleStreams.length > 0 && (
-                <div className="track-popover-section">
-                  <div className="track-popover-heading">Subtitles</div>
-                  <button
-                    className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
-                    onClick={() => {
-                      if (playerState.activeSubtitleIndex != null) {
-                        if (playerState.isBitmapSubtitle) {
-                          handleSwitchBitmapSubtitle(null)
-                        } else {
-                          handleSwitchSubtitle(null)
-                        }
-                      }
-                      setTrackMenuOpen(false)
-                    }}
-                  >
-                    <span className="track-popover-check">
-                      {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
-                    </span>
-                    <span className="track-popover-label">Off</span>
-                  </button>
-                  {playerState.subtitleStreams.map((s) => (
-                    <button
-                      key={s.index}
-                      className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
-                      onClick={() => {
-                        if (s.isText) {
-                          if (playerState.isBitmapSubtitle) {
-                            handleSwitchBitmapSubtitle(null).then(() => {
-                              handleSwitchSubtitle(s.index)
-                            })
-                          } else {
-                            handleSwitchSubtitle(s.index)
-                          }
-                        } else {
-                          if (s.index !== playerState.activeSubtitleIndex) {
-                            handleSwitchBitmapSubtitle(s.index)
-                          }
-                        }
-                        setTrackMenuOpen(false)
-                      }}
-                    >
-                      <span className="track-popover-check">
-                        {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
-                      </span>
-                      <span className="track-popover-label">
-                        {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
+               {/* Subtitles section */}
+               {playerState.subtitleStreams.length > 0 && (
+                 <div className="track-popover-section">
+                   <div className="track-popover-heading">Subtitles</div>
+                   <button
+                     className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
+                     onClick={() => {
+                       if (playerState.activeSubtitleIndex != null) {
+                         if (playerState.isBitmapSubtitle) {
+                           handleSwitchBitmapSubtitle(null)
+                         } else {
+                           handleSwitchSubtitle(null)
+                         }
+                       }
+                       setTrackMenuOpen(false)
+                     }}
+                   >
+                     <span className="track-popover-check">
+                       {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
+                     </span>
+                     <span className="track-popover-label">Off</span>
+                   </button>
+                   {playerState.subtitleStreams.map((s) => (
+                     <button
+                       key={s.index}
+                       className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
+                       onClick={() => {
+                         if (s.isText) {
+                           if (playerState.isBitmapSubtitle) {
+                             handleSwitchBitmapSubtitle(null).then(() => {
+                               handleSwitchSubtitle(s.index)
+                             })
+                           } else {
+                             handleSwitchSubtitle(s.index)
+                           }
+                         } else {
+                           if (s.index !== playerState.activeSubtitleIndex) {
+                             handleSwitchBitmapSubtitle(s.index)
+                           }
+                         }
+                         setTrackMenuOpen(false)
+                       }}
+                     >
+                       <span className="track-popover-check">
+                         {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
+                       </span>
+                       <span className="track-popover-label">
+                         {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
+                       </span>
+                     </button>
+                   ))}
+                 </div>
+               )}
 
-              {/* Subtitle Size */}
-              {!playerState.isBitmapSubtitle && (
-              <div className="track-popover-section">
-                <div className="track-popover-heading">Size</div>
-                <div className="track-popover-sizes">
-                  {SUB_SIZES.map((s) => (
-                    <button
-                      key={s.id}
-                      className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
-                      onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              )}
+               {/* Subtitle Size */}
+               {!playerState.isBitmapSubtitle && (
+               <div className="track-popover-section">
+                 <div className="track-popover-heading">Size</div>
+                 <div className="track-popover-sizes">
+                   {SUB_SIZES.map((s) => (
+                     <button
+                       key={s.id}
+                       className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
+                       onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
+                     >
+                       {s.label}
+                     </button>
+                   ))}
+                 </div>
+               </div>
+               )}
 
-              {/* Subtitle Appearance */}
-              {!playerState.isBitmapSubtitle && (
-              <div className="track-popover-section">
-                <div className="track-popover-heading">Appearance</div>
-                {SUB_STYLES.map((s) => (
-                  <button
-                    key={s.id}
-                    className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
-                    onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
-                  >
-                    <span className="track-popover-check">
-                      {s.id === subtitleStyle ? '\u2713' : ''}
-                    </span>
-                    <span className="track-popover-label">{s.label}</span>
-                  </button>
-                ))}
-              </div>
-              )}
+               {/* Subtitle Appearance */}
+               {!playerState.isBitmapSubtitle && (
+               <div className="track-popover-section">
+                 <div className="track-popover-heading">Appearance</div>
+                 {SUB_STYLES.map((s) => (
+                   <button
+                     key={s.id}
+                     className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
+                     onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
+                   >
+                     <span className="track-popover-check">
+                       {s.id === subtitleStyle ? '\u2713' : ''}
+                     </span>
+                     <span className="track-popover-label">{s.label}</span>
+                   </button>
+                 ))}
+               </div>
+               )}
             </refractive.div>
-          )}
+           )}
         </div>
 
         <div className="video-player-seek-left">
@@ -1048,7 +1121,7 @@ export default function VideoPlayer() {
           </div>
           <span className="video-player-time-remaining">-{formatTime(Math.max(0, Math.round(totalDuration - currentTime)))}</span>
         </div>
-      </div>
-    </div>
-  )
-}
+       </div>
+     </div>
+   )
+ }

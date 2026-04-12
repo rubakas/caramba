@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Navbar from '../components/Navbar'
 
-export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
+export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode }) {
   const [syncFolder, setSyncFolder] = useState('')
   const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
@@ -27,6 +27,11 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
   }, [apiMode?.local_playback])
 
   const loadData = useCallback(async () => {
+    // In web mode, window.api doesn't exist - skip loading desktop settings
+    if (isWebMode || !window.api?.getSettings) {
+      setLoading(false)
+      return
+    }
     try {
       const settings = await window.api.getSettings()
       const folder = settings.sync_folder || ''
@@ -38,7 +43,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [isWebMode])
 
   useEffect(() => {
     loadData()
@@ -205,7 +210,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
         {error && <div className="alert">{error}</div>}
 
         {/* API Mode Section — desktop only */}
-        {hasApiMode && (
+        {hasApiMode && !isWebMode && (
           <section className="settings-section">
             <h2 className="settings-section-title">API Mode</h2>
             <p className="settings-help">
@@ -277,47 +282,49 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange }) {
           </section>
         )}
 
-        {/* Sync Folder Section */}
-        <section className="settings-section">
-          <h2 className="settings-section-title">Database Sync</h2>
-          <p className="settings-help">
-            Choose a shared folder (Dropbox, iCloud, NAS, etc.) to sync your database between machines.
-            For network shares, paste the local mount path directly.
-          </p>
-          <div className="settings-form">
-            <div className="field">
-              <form className="folder-picker" onSubmit={handlePathSubmit}>
-                <button type="button" className="btn-choose-folder" onClick={handleChooseFolder}>
-                  Browse...
-                </button>
-                <input
-                  type="text"
-                  className={`folder-path-input${folderInaccessible ? ' folder-path-input--error' : ''}`}
-                  value={pathInput}
-                  onChange={e => setPathInput(e.target.value)}
-                  onBlur={handlePathSubmit}
-                  placeholder="/Volumes/NAS/sync-folder"
-                  spellCheck={false}
-                />
-              </form>
-              {folderInaccessible && (
-                <p className="settings-warning">
-                  Sync folder is not accessible. If this is a network share, make sure the remote volume is mounted.
-                </p>
+        {/* Sync Folder Section — desktop only */}
+        {!isWebMode && (
+          <section className="settings-section">
+            <h2 className="settings-section-title">Database Sync</h2>
+            <p className="settings-help">
+              Choose a shared folder (Dropbox, iCloud, NAS, etc.) to sync your database between machines.
+              For network shares, paste the local mount path directly.
+            </p>
+            <div className="settings-form">
+              <div className="field">
+                <form className="folder-picker" onSubmit={handlePathSubmit}>
+                  <button type="button" className="btn-choose-folder" onClick={handleChooseFolder}>
+                    Browse...
+                  </button>
+                  <input
+                    type="text"
+                    className={`folder-path-input${folderInaccessible ? ' folder-path-input--error' : ''}`}
+                    value={pathInput}
+                    onChange={e => setPathInput(e.target.value)}
+                    onBlur={handlePathSubmit}
+                    placeholder="/Volumes/NAS/sync-folder"
+                    spellCheck={false}
+                  />
+                </form>
+                {folderInaccessible && (
+                  <p className="settings-warning">
+                    Sync folder is not accessible. If this is a network share, make sure the remote volume is mounted.
+                  </p>
+                )}
+              </div>
+              {isEnabled && (
+                <div className="settings-actions">
+                  <button type="button" className="btn-ghost" onClick={handleDisable}>
+                    Disable Sync
+                  </button>
+                </div>
               )}
             </div>
-            {isEnabled && (
-              <div className="settings-actions">
-                <button type="button" className="btn-ghost" onClick={handleDisable}>
-                  Disable Sync
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
+          </section>
+        )}
 
-        {/* Sync Status */}
-        {isEnabled && status && (
+        {/* Sync Status — desktop only */}
+        {!isWebMode && isEnabled && status && (
           <section className="settings-section">
             <h2 className="settings-section-title">Sync Status</h2>
             <div className="sync-status-grid">

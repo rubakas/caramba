@@ -2,6 +2,18 @@
  * HTTP adapter — calls Rails API via fetch.
  * Used by web app and desktop in server mode.
  */
+
+// Streaming format preference key (kept for backwards compatibility)
+const STREAMING_FORMAT_KEY = 'caramba:streamingFormat'
+
+// Get streaming format: auto-detect Safari (use HLS), otherwise use fMP4
+export function getStreamingFormat() {
+  // Auto-detect Safari
+  const isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+  if (isSafari) return 'hls'
+  return 'fmp4'
+}
+
 export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   const base = baseUrl.replace(/\/+$/, '')
 
@@ -63,7 +75,8 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
 
     // Playback
     startPlayback: async (filePath, startTime, prefs) => {
-      const result = await post('/api/playback/start', { filePath, startTime, prefs })
+      const format = getStreamingFormat()
+      const result = await post('/api/playback/start', { filePath, startTime, prefs, format })
       if (result && result.sessionId) {
         activeSessionId = result.sessionId
       }

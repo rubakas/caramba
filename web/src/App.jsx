@@ -12,14 +12,21 @@ import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import Discover from '@caramba/ui/pages/Discover'
 import History from '@caramba/ui/pages/History'
+import Settings from '@caramba/ui/pages/Settings'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+// Web capabilities (no Settings in navbar)
+const webCapabilities = {
+  ...httpCapabilities,
+  hasSettings: false,
+}
 
 export default function App() {
   const adapter = useMemo(() => createHttpAdapter(API_BASE), [])
 
   return (
-    <ApiProvider adapter={adapter} capabilities={httpCapabilities}>
+    <ApiProvider adapter={adapter} capabilities={webCapabilities}>
       <ToastProvider>
         <PlayerProvider>
           <BrowserRouter>
@@ -30,6 +37,7 @@ export default function App() {
               <Route path="/movies/:slug" element={<MovieShow />} />
               <Route path="/discover" element={<Discover />} />
               <Route path="/history" element={<History />} />
+              <Route path="/settings" element={<Settings isWebMode />} />
             </Routes>
           </BrowserRouter>
           <VideoPlayer />

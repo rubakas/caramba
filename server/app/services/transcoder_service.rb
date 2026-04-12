@@ -1,14 +1,11 @@
 # Transcoder service — wraps ffmpeg/ffprobe for video streaming.
 #
-# Architecture: Direct pipe, mirroring the desktop Electron approach.
-#
-# ffmpeg transcodes the source file to fragmented MP4 and writes to stdout.
-# The controller pipes ffmpeg's stdout directly to the HTTP response via
-# ActionController::Live.  No HLS, no segment files, no database storage.
+# Architecture:
+# - fMP4 mode: Direct pipe to HTTP response via ActionController::Live (MSE clients)
+# - HLS mode: Outputs .m3u8 playlist + .ts segments to temp directory (Safari/iOS)
 #
 # Seeking kills the ffmpeg process and starts a new one from the target
-# position, exactly like the desktop path.  The client gets a new stream
-# URL and re-sets video.src.
+# position. The client gets a new stream URL and re-sets video.src.
 #
 # One active session at a time (singleton, like desktop).
 class TranscoderService
@@ -83,13 +80,18 @@ class TranscoderService
     #
     # Does NOT block waiting for output — the controller's stream action
     # will read from the ffmpeg stdout pipe.
+    #
+    # @param opts[:format] - :fmp4 (default) or :hls
     def start_session(session_id, file_path, start_time = 0, opts = {})
       mu = session_mutex(session_id)
       mu.synchronize do
         kill_ffmpeg
+        cleanup_hls_dir  # clean up any previous HLS segments
 
         duration = opts[:duration].to_f
         raise "duration is required" unless duration > 0
+
+        format = opts[:format]&.to_sym || :fmp4
 
         @session = {
           id: session_id,
@@ -99,12 +101,18 @@ class TranscoderService
           audio_stream_index: opts[:audio_stream_index],
           burn_subtitle_index: opts[:burn_subtitle_index],
           subtitle_vtt: nil,
+          format: format,
+          hls_dir: format == :hls ? File.join(TMP_ROOT, "hls", session_id) : nil,
           started_at: Time.current
         }
 
-        start_ffmpeg(file_path, start_time.to_f, opts)
+        if format == :hls
+          start_ffmpeg_hls(file_path, start_time.to_f, opts)
+        else
+          start_ffmpeg(file_path, start_time.to_f, opts)
+        end
 
-        Rails.logger.info "[Transcoder] session #{session_id}: #{File.basename(file_path)}, " \
+        Rails.logger.info "[Transcoder] session #{session_id} (#{format}): #{File.basename(file_path)}, " \
           "starting at #{start_time}s"
         session_id
       end
@@ -118,12 +126,23 @@ class TranscoderService
         return nil unless @session && @session[:id] == session_id
 
         @session[:seek_time] = seek_time.to_f
-        start_ffmpeg(
-          @session[:file_path],
-          seek_time.to_f,
-          audio_stream_index: @session[:audio_stream_index],
-          burn_subtitle_index: @session[:burn_subtitle_index]
-        )
+
+        if @session[:format] == :hls
+          cleanup_hls_dir  # remove old segments before restarting
+          start_ffmpeg_hls(
+            @session[:file_path],
+            seek_time.to_f,
+            audio_stream_index: @session[:audio_stream_index],
+            burn_subtitle_index: @session[:burn_subtitle_index]
+          )
+        else
+          start_ffmpeg(
+            @session[:file_path],
+            seek_time.to_f,
+            audio_stream_index: @session[:audio_stream_index],
+            burn_subtitle_index: @session[:burn_subtitle_index]
+          )
+        end
 
         Rails.logger.info "[Transcoder] seek session #{session_id} to #{seek_time}s"
         seek_time
@@ -148,6 +167,26 @@ class TranscoderService
 
     def stop_all
       stop_inner
+    end
+
+    # ── HLS file accessors ────────────────────────────────────────────
+
+    def hls_playlist_path(session_id)
+      return nil unless @session && @session[:id] == session_id && @session[:format] == :hls
+      File.join(@session[:hls_dir], "playlist.m3u8")
+    end
+
+    def hls_segment_path(session_id, segment_name)
+      return nil unless @session && @session[:id] == session_id && @session[:format] == :hls
+      # Sanitize segment name to prevent directory traversal
+      safe_name = File.basename(segment_name)
+      return nil unless safe_name.match?(/\Asegment_\d+\.ts\z/)
+      File.join(@session[:hls_dir], safe_name)
+    end
+
+    def hls_dir(session_id)
+      return nil unless @session && @session[:id] == session_id
+      @session[:hls_dir]
     end
 
     # ── Subtitle extraction ───────────────────────────────────────────
@@ -183,6 +222,16 @@ class TranscoderService
 
     def active?(session_id)
       @session && @session[:id] == session_id
+    end
+
+    def ffmpeg_running?
+      return false unless @ffmpeg_pid
+      begin
+        Process.kill(0, @ffmpeg_pid)
+        true
+      rescue Errno::ESRCH
+        false
+      end
     end
 
     def session_info(session_id)
@@ -305,7 +354,47 @@ class TranscoderService
     # Full stop: kill ffmpeg and clear session state.
     def stop_inner
       kill_ffmpeg
+      cleanup_hls_dir
       @session = nil
+    end
+
+    # Clean up HLS segment directory
+    def cleanup_hls_dir
+      return unless @session && @session[:hls_dir]
+      FileUtils.rm_rf(@session[:hls_dir]) if Dir.exist?(@session[:hls_dir])
+    rescue => e
+      Rails.logger.warn "[Transcoder] cleanup_hls_dir error: #{e.message}"
+    end
+
+    # ── HLS ffmpeg spawner ───────────────────────────────────────────
+
+    def start_ffmpeg_hls(file_path, seek_time, opts = {})
+      kill_ffmpeg  # kill any existing process
+
+      hls_dir = @session[:hls_dir]
+      FileUtils.mkdir_p(hls_dir)
+
+      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, opts)
+
+      # Spawn ffmpeg outputting to HLS files (not stdout)
+      log_dir = File.join(TMP_ROOT, "logs")
+      FileUtils.mkdir_p(log_dir)
+      stderr_log = File.open(File.join(log_dir, "ffmpeg_hls_stderr.log"), "w")
+
+      pid = spawn(
+        ffmpeg_path, *args,
+        in: :close,
+        out: :close,
+        err: stderr_log,
+        pgroup: true
+      )
+
+      stderr_log.close
+
+      @ffmpeg_pid = pid
+      @ffmpeg_stdout = nil  # HLS mode doesn't use stdout pipe
+
+      Rails.logger.info "[Transcoder] ffmpeg HLS started: pid=#{pid}, seek=#{seek_time}s, dir=#{hls_dir}"
     end
 
     # ── ffmpeg argument builder ──────────────────────────────────────
@@ -372,6 +461,83 @@ class TranscoderService
         -movflags frag_keyframe+empty_moov+default_base_moof
         pipe:1
       ]
+
+      args += %w[-y -nostdin]
+
+      args
+    end
+
+    # ── HLS ffmpeg argument builder ──────────────────────────────────
+    #
+    # Outputs HLS playlist + TS segments for Safari/iOS compatibility.
+
+    def build_hls_ffmpeg_args(file_path, seek_time, output_dir, opts = {})
+      args = []
+      burn_sub = opts[:burn_subtitle_index].present?
+
+      # Hardware-accelerated decoding (VideoToolbox)
+      args += %w[-hwaccel videotoolbox] unless burn_sub
+
+      # Seek before input for fast seeking
+      args += [ "-ss", seek_time.to_s ] if seek_time > 0
+
+      args += [ "-i", file_path ]
+
+      # Apply video filter to handle SAR (Sample Aspect Ratio).
+      # MPEG-TS doesn't carry SAR correctly, causing anamorphic sources to
+      # display stretched. We scale to square pixels: width * SAR, then set SAR=1.
+      # The scale filter uses -2 for height to ensure even dimensions (required by h264).
+      if burn_sub
+        # Burn subtitles + fix SAR
+        args += [ "-filter_complex", "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1" ]
+        if opts[:audio_stream_index]
+          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
+        else
+          args += [ "-map", "0:a:0" ]
+        end
+      else
+        # Scale to square pixels for anamorphic sources
+        args += [ "-vf", "scale=iw*sar:ih:flags=lanczos,setsar=1" ]
+        args += [ "-map", "0:v:0" ]
+        if opts[:audio_stream_index]
+          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
+        else
+          args += [ "-map", "0:a:0" ]
+        end
+      end
+
+      # Video encoding: H.264 via VideoToolbox
+      args += %w[
+        -c:v h264_videotoolbox
+        -b:v 4M
+        -maxrate 6M
+        -bufsize 12M
+        -profile:v high
+        -pix_fmt yuv420p
+        -g 48
+      ]
+
+      # Audio: AAC stereo
+      args += %w[-c:a aac -b:a 192k -ac 2]
+
+      # HLS output settings
+      # -hls_time 4: 4-second segments (reduces request frequency)
+      # -hls_list_size 0: VOD-style playlist keeps all segments (required for seeking)
+      # -hls_playlist_type event: playlist grows as segments are added
+      # -start_number 0: segment numbering starts at 0
+      # -output_ts_offset: reset timestamps so HLS starts at 0 (even after -ss seek)
+      args += %w[
+        -f hls
+        -hls_time 4
+        -hls_list_size 0
+        -hls_playlist_type event
+        -hls_segment_type mpegts
+        -start_number 0
+      ]
+      # Reset output timestamps to 0 when seeking
+      args += %w[-output_ts_offset 0] if seek_time > 0
+      args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.ts") ]
+      args += [ File.join(output_dir, "playlist.m3u8") ]
 
       args += %w[-y -nostdin]
 
