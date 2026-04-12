@@ -325,11 +325,9 @@ class TranscoderService
       # Seek before input for fast seeking
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
 
-      # Throttle input reading so ffmpeg doesn't flood the MSE SourceBuffer.
-      # With bitmap subtitle burn-in, software decoding + overlay is much
-      # slower so we skip the throttle entirely and let the encode speed be
-      # the natural bottleneck.  For normal (hw-accel) transcode, cap at 10x.
-      args += %w[-readrate 10] unless burn_sub
+      # No readrate throttle: let ffmpeg transcode as fast as the hardware
+      # encoder allows. The client's MSE SourceBuffer handles flow control,
+      # and removing the limit prevents buffer underruns on slower Macs.
 
       args += [ "-i", file_path ]
 
