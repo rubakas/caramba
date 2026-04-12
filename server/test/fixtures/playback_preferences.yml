@@ -1,0 +1,16 @@
+# PlaybackPreference fixtures
+bb_prefs:
+  series: breaking_bad
+  audio_language: eng
+  subtitle_language: eng
+  subtitle_off: 0
+  subtitle_size: medium
+  subtitle_style: classic
+
+matrix_prefs:
+  movie: the_matrix
+  audio_language: eng
+  subtitle_language: off
+  subtitle_off: 1
+  subtitle_size: large
+  subtitle_style: modern

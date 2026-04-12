@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Start Rails API server + web app via foreman.
+exec bin/foreman start -f Procfile.web "$@"

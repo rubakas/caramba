@@ -6,14 +6,16 @@ dist-react
 dist
 
 # Storage (user data)
-storage
-rails
+desktop/storage
 
 # Bundled binaries (downloaded by bin/setup-ffmpeg)
-vendor/ffmpeg*
+desktop/vendor/ffmpeg*
 
 # OS
 .DS_Store
 
 # Env
 .env*
+
+# pnpm
+pnpm-debug.log*

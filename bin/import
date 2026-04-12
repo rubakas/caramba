@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Import desktop's SQLite database into the Rails server.
+#
+# Usage:
+#   bin/import                          # auto-detect from Caramba.app userData
+#   bin/import /path/to/development.sqlite3   # explicit path
+set -e
+
+cd "$(dirname "$0")/.."
+
+if [ -n "$1" ]; then
+  SOURCE="$1"
+else
+  SOURCE="$HOME/Library/Application Support/Caramba/storage/development.sqlite3"
+fi
+
+if [ ! -f "$SOURCE" ]; then
+  echo "Database not found: $SOURCE"
+  echo ""
+  echo "Usage: bin/import [/path/to/development.sqlite3]"
+  echo "Default: ~/Library/Application Support/Caramba/storage/development.sqlite3"
+  exit 1
+fi
+
+echo "Source: $SOURCE"
+cd server && bin/rails db:import SOURCE="$SOURCE"

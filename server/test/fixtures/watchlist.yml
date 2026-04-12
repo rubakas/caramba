@@ -1,0 +1,23 @@
+# Watchlist fixtures (table name = watchlist)
+watchlist_show:
+  type: show
+  name: Better Call Saul
+  tvmaze_id: 618
+  poster_url: https://example.com/bcs.jpg
+  description: A prequel to Breaking Bad
+  genres: "Drama, Crime"
+  rating: 8.7
+  premiered: "2015-02-08"
+  status: Ended
+
+watchlist_movie:
+  type: movie
+  name: Interstellar
+  imdb_id: tt0816692
+  poster_url: https://example.com/interstellar.jpg
+  description: A team of explorers travel through a wormhole
+  genres: "Adventure, Drama, Sci-Fi"
+  rating: 8.6
+  year: "2014"
+  director: Christopher Nolan
+  runtime: 169

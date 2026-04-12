@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.caramba.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>DEPLOY_PATH/current/server/bin/caramba-server</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>DEPLOY_PATH/current/server</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RAILS_ENV</key>
+    <string>production</string>
+    <key>RAILS_SERVE_STATIC_FILES</key>
+    <string>1</string>
+    <key>PORT</key>
+    <string>3000</string>
+    <key>RAILS_LOG_LEVEL</key>
+    <string>info</string>
+    <key>PATH</key>
+    <string>HOME_PATH/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>DEPLOY_PATH/shared/server/log/launchd.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>DEPLOY_PATH/shared/server/log/launchd.stderr.log</string>
+</dict>
+</plist>

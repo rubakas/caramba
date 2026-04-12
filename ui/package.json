@@ -1,0 +1,14 @@
+{
+  "name": "@caramba/ui",
+  "version": "1.0.0",
+  "private": true,
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0"
+  },
+  "dependencies": {
+    "@hashintel/refractive": "^0.0.3",
+    "hls.js": "^1.6.15"
+  }
+}

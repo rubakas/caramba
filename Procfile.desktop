@@ -1,0 +1,2 @@
+vite: cd desktop && pnpm exec vite --port 5173
+electron: cd desktop && sleep 3 && VITE_DEV_URL=http://localhost:5173 pnpm exec electron .

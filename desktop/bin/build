@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+# Build the packaged app with auto version increment.
+#
+# Version format: MAJOR.MINOR.PATCH where PATCH auto-increments.
+# The last-built commit hash is stored in .build-commit. If HEAD
+# matches that hash, the version stays the same (idempotent rebuild).
+#
+# Usage: bin/build                        # Mac, no publish
+#        bin/build --publish              # Mac + publish to GitHub
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+PACKAGE_JSON="package.json"
+
+# ── 0. Parse flags ──────────────────────────────────────────────────
+PUBLISH=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --publish) PUBLISH=true ;;
+    *) echo "Unknown flag: $arg (use --publish)"; exit 1 ;;
+  esac
+done
+
+# ── 1. Pre-flight checks ───────────────────────────────────────────
+# Ensure working directory is clean (uncommitted changes can cause confusion)
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "Warning: You have uncommitted changes. Build will use the current working tree state."
+fi
+
+# ── 2. Version increment ────────────────────────────────────────────
+# Skip bumping if the last commit is already a version bump from this script.
+# This prevents an infinite loop: bump → commit → build → see new commit → bump again.
+HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+CURRENT_VERSION=$(node -e "console.log(require('./$PACKAGE_JSON').version)")
+
+if [[ "$HEAD_MSG" == v[0-9]* ]]; then
+  echo "Version $CURRENT_VERSION (last commit is a version bump — skipping)"
+else
+  # Bump patch version
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+  PATCH=$((PATCH + 1))
+  NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+  # Update package.json and commit the bump
+  node -e "
+    const fs = require('fs');
+    const pkg = JSON.parse(fs.readFileSync('$PACKAGE_JSON', 'utf-8'));
+    pkg.version = '$NEW_VERSION';
+    fs.writeFileSync('$PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
+  "
+  git add "desktop/$PACKAGE_JSON"
+  git commit -m "v$NEW_VERSION" --no-verify
+
+  echo "Version $CURRENT_VERSION → $NEW_VERSION"
+  CURRENT_VERSION="$NEW_VERSION"
+fi
+
+# ── 3. Build React frontend ────────────────────────────────────────
+echo ""
+echo "Building React frontend..."
+pnpm exec vite build
+
+# ── 4. Setup ffmpeg binaries ───────────────────────────────────────
+echo "Ensuring macOS ffmpeg binaries..."
+bin/setup-ffmpeg
+
+# ── 5. Build macOS package ─────────────────────────────────────────
+echo ""
+echo "Building macOS app v$CURRENT_VERSION..."
+pnpm exec electron-builder --mac --publish never
+
+# ── 6. Summary ─────────────────────────────────────────────────────
+echo ""
+echo "Build complete: v$CURRENT_VERSION"
+ls -lh dist/*.dmg 2>/dev/null || true
+
+# ── 7. Publish to GitHub Releases ──────────────────────────────────
+if $PUBLISH; then
+  bin/publish
+
+  echo ""
+  echo "Cleaning dist/..."
+  rm -rf dist
+fi

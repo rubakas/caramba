@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Start Rails API server + desktop app (Vite + Electron) via foreman.
+exec bin/foreman start -f Procfile.desktop "$@"
