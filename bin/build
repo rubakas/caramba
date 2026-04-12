@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Alias for desktop/bin/build
+exec desktop/bin/build "$@"
