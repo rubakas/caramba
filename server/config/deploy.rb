@@ -106,38 +106,5 @@ end
 # Disable Rails asset manifest backup task (using Propshaft, not Sprockets)
 Rake::Task["deploy:assets:backup_manifest"].clear_actions
 
-# =============================================================================
-# Setup launchd service for automatic startup
-# =============================================================================
-
-namespace :deploy do
-  task :setup_launchd do
-    on roles(:app) do
-      # Create LaunchAgents directory if it doesn't exist
-      execute :mkdir, "-p ~/Library/LaunchAgents"
-
-      # Read plist template from release directory
-      plist_template_path = release_path.join("server/config/deploy/com.caramba.server.plist.erb")
-      plist_content = capture(:cat, plist_template_path)
-
-      # Substitute placeholders
-      home_dir = capture(:echo, "$HOME").chomp
-      plist_content = plist_content
-        .gsub("DEPLOY_PATH", fetch(:deploy_to))
-        .gsub("HOME_PATH", home_dir)
-
-      # Write plist file using upload! with StringIO
-      require "stringio"
-      plist_path = "#{home_dir}/Library/LaunchAgents/com.caramba.server.plist"
-      upload! StringIO.new(plist_content), plist_path
-
-      # Unload old service if it exists, then load the new one
-      execute :launchctl, "unload #{plist_path}", raise_on_non_zero_exit: false
-      execute :launchctl, "load #{plist_path}"
-
-      puts "Launchd plist loaded at #{plist_path}"
-    end
-  end
-end
-
-after "deploy:finished", "deploy:setup_launchd"
+# Launchd restart is handled by lib/capistrano/tasks/launchd.rake
+# which hooks into deploy:publishing → launchd:restart (unload/load)

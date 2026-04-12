@@ -42,14 +42,13 @@ namespace :launchd do
     end
   end
 
-  desc "Restart the Caramba server via launchd (stop + start)"
+  desc "Restart the Caramba server via launchd (unload + load)"
   task :restart do
     on roles(:app) do
-      label = fetch(:launchd_label)
-      execute :launchctl, "stop", label, raise_on_non_zero_exit: false
-      sleep 2
-      execute :launchctl, "start", label
-      info "Caramba server restarted via launchd"
+      plist = fetch(:launchd_plist)
+      execute :launchctl, "unload", plist, raise_on_non_zero_exit: false
+      execute :launchctl, "load", plist
+      info "Caramba server restarted"
     end
   end
 
