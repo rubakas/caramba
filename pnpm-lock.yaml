@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  android:
+  android-tv:
     dependencies:
       '@capacitor/android':
         specifier: ^6.0.0

@@ -2,6 +2,9 @@ import { useState, useRef, useEffect } from 'react'
 import { formatTime, progressPercent, truncate } from '../utils'
 import { useCapabilities } from '../context/ApiContext'
 
+// Detect Android TV
+const isTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
+
 const PlaySvg = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 )
@@ -71,8 +74,45 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
     isCurrent ? 'ep-row--current' : '',
   ].filter(Boolean).join(' ')
 
+  // For TV: handle Enter on row to play, Up/Down for navigation
+  const handleRowKeyDown = (e) => {
+    if (!isTV) return
+    
+    if (e.key === 'Enter' && canPlay) {
+      e.preventDefault()
+      onPlay(ep.id)
+    }
+    // Up: go to previous row, or season tabs if first row
+    if (e.key === 'ArrowUp') {
+      const allRows = Array.from(document.querySelectorAll('.season-panel.active .ep-row[tabindex="0"]'))
+      const currentIdx = allRows.indexOf(e.currentTarget)
+      if (currentIdx === 0) {
+        // First row - go to season tabs
+        e.preventDefault()
+        const activeSeasonTab = document.querySelector('.season-tab.active')
+        if (activeSeasonTab) {
+          activeSeasonTab.focus()
+        }
+      }
+      // Otherwise let default behavior handle it
+    }
+    // Down: go to next row
+    if (e.key === 'ArrowDown') {
+      const allRows = Array.from(document.querySelectorAll('.season-panel.active .ep-row[tabindex="0"]'))
+      const currentIdx = allRows.indexOf(e.currentTarget)
+      if (currentIdx < allRows.length - 1) {
+        e.preventDefault()
+        allRows[currentIdx + 1].focus()
+      }
+    }
+  }
+
   return (
-    <div className={rowClass}>
+    <div
+      className={rowClass}
+      tabIndex={isTV ? 0 : undefined}
+      onKeyDown={handleRowKeyDown}
+    >
       <div className="ep-num">
         {watched ? (
           <span className="ep-watched-icon">{'\u2713'}</span>
@@ -98,6 +138,7 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
             className="ep-desc"
             style={{ cursor: isLong ? 'pointer' : 'default' }}
             onClick={() => isLong && setExpanded(!expanded)}
+            tabIndex={-1}
           >
             {expanded || !isLong ? desc : truncate(desc, 120)}
           </p>
@@ -121,73 +162,80 @@ export default function EpisodeRow({ episode, isCurrent, onPlay, onToggle, onOpe
           </div>
         )}
       </div>
-      <div className="ep-actions">
-        {canPlay && (
-          <button className="btn-ep-play" onClick={() => onPlay(ep.id)}>
-            <PlaySvg />
-          </button>
-        )}
-        <div className="ep-more-wrap">
-          <button
-            ref={btnRef}
-            className={`btn-ep-more${menuOpen ? ' active' : ''}`}
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            <MoreSvg />
-          </button>
-          {menuOpen && (
-            <div ref={menuRef} className="ep-popover">
-              <button
-                className="ep-popover-item"
-                onClick={() => { onToggle(ep.id); setMenuOpen(false) }}
-              >
-                <span className="ep-popover-icon">{watched ? '\u21A9' : '\u2713'}</span>
-                <span>{watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
-              </button>
-              {canOpenExternal && vlcAvailable && (
-                <button
-                  className="ep-popover-item"
-                  onClick={() => { onOpenInVlc(ep.id); setMenuOpen(false) }}
-                >
-                  <span className="ep-popover-icon">{'\u25B6'}</span>
-                  <span>Open in VLC</span>
-                </button>
-              )}
-              {canOpenExternal && (
-                <button
-                  className="ep-popover-item"
-                  onClick={() => { onOpenInDefault(ep.id); setMenuOpen(false) }}
-                >
-                  <span className="ep-popover-icon">{'\u2197'}</span>
-                  <span>Open in Default Player</span>
-                </button>
-              )}
-              {canDownload && (
-                <>
-                  <div className="ep-popover-divider" />
-                  {isDownloaded ? (
-                    <button
-                      className="ep-popover-item ep-popover-item--danger"
-                      onClick={() => { onDeleteDownload(ep.id); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{'\u2715'}</span>
-                      <span>Delete Download</span>
-                    </button>
-                  ) : !isDownloading ? (
-                    <button
-                      className="ep-popover-item"
-                      onClick={() => { onDownload(ep.id); setMenuOpen(false) }}
-                    >
-                      <span className="ep-popover-icon">{'\u2913'}</span>
-                      <span>Download</span>
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </div>
+      {/* TV Mode: No action buttons - clicking row plays episode */}
+      {!isTV && (
+        <div className="ep-actions">
+          {canPlay && (
+            <button
+              className="btn-ep-play"
+              onClick={() => onPlay(ep.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onPlay(ep.id) } }}
+            >
+              <PlaySvg />
+            </button>
           )}
+          <div className="ep-more-wrap">
+            <button
+              ref={btnRef}
+              className={`btn-ep-more${menuOpen ? ' active' : ''}`}
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              <MoreSvg />
+            </button>
+            {menuOpen && (
+              <div ref={menuRef} className="ep-popover">
+                <button
+                  className="ep-popover-item"
+                  onClick={() => { onToggle(ep.id); setMenuOpen(false) }}
+                >
+                  <span className="ep-popover-icon">{watched ? '\u21A9' : '\u2713'}</span>
+                  <span>{watched ? 'Mark Unwatched' : 'Mark Watched'}</span>
+                </button>
+                {canOpenExternal && vlcAvailable && (
+                  <button
+                    className="ep-popover-item"
+                    onClick={() => { onOpenInVlc(ep.id); setMenuOpen(false) }}
+                  >
+                    <span className="ep-popover-icon">{'\u25B6'}</span>
+                    <span>Open in VLC</span>
+                  </button>
+                )}
+                {canOpenExternal && (
+                  <button
+                    className="ep-popover-item"
+                    onClick={() => { onOpenInDefault(ep.id); setMenuOpen(false) }}
+                  >
+                    <span className="ep-popover-icon">{'\u2197'}</span>
+                    <span>Open in Default Player</span>
+                  </button>
+                )}
+                {canDownload && (
+                  <>
+                    <div className="ep-popover-divider" />
+                    {isDownloaded ? (
+                      <button
+                        className="ep-popover-item ep-popover-item--danger"
+                        onClick={() => { onDeleteDownload(ep.id); setMenuOpen(false) }}
+                      >
+                        <span className="ep-popover-icon">{'\u2715'}</span>
+                        <span>Delete Download</span>
+                      </button>
+                    ) : !isDownloading ? (
+                      <button
+                        className="ep-popover-item"
+                        onClick={() => { onDownload(ep.id); setMenuOpen(false) }}
+                      >
+                        <span className="ep-popover-icon">{'\u2913'}</span>
+                        <span>Download</span>
+                      </button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

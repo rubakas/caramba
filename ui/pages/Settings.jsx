@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Navbar from '../components/Navbar'
 
-export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode, onApiUrlChange, apiUrl }) {
+export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode, onApiUrlChange, apiUrl, hideNavbar = false }) {
   const [syncFolder, setSyncFolder] = useState('')
   const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
@@ -203,26 +203,38 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
   // --- Android TV API URL handler ---
 
   const handleAndroidApiUrlSubmit = async (e) => {
-    e.preventDefault()
+    if (e) e.preventDefault()
     const trimmed = androidApiUrlInput.trim()
-    if (trimmed === apiUrl) return
     if (!trimmed) {
       showToast('API URL cannot be empty.', true)
       return
     }
 
+    // Skip if URL hasn't changed (but allow explicit save button clicks)
+    if (trimmed === apiUrl && e?.type !== 'click') return
+
+    console.log('[Settings] Saving Android API URL:', trimmed)
     setAndroidApiSaving(true)
     try {
       // Validate URL format
       new URL(trimmed)
       
+      console.log('[Settings] Calling onApiUrlChange callback...')
       const success = await onApiUrlChange?.(trimmed)
+      console.log('[Settings] onApiUrlChange result:', success)
+      
       if (success) {
-        showToast('Server URL saved. Please reload the app for changes to take effect.')
+        showToast('Server URL saved. Reloading...')
+        // App.jsx will handle the reload, but add fallback
+        setTimeout(() => {
+          console.log('[Settings] Fallback reload triggered')
+          window.location.reload()
+        }, 1000)
       } else {
         showToast('Failed to save server URL.', true)
       }
     } catch (err) {
+      console.error('[Settings] Error saving URL:', err)
       showToast('Invalid URL format. Use http://192.168.1.100:3001', true)
     } finally {
       setAndroidApiSaving(false)
@@ -234,7 +246,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
 
   if (loading) return (
     <>
-      <Navbar active="Settings" />
+      {!hideNavbar && <Navbar active="Settings" />}
       <div style={{ padding: '120px 48px', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading...</div>
     </>
   )
@@ -245,7 +257,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
 
   return (
     <>
-      <Navbar active="Settings" />
+      {!hideNavbar && <Navbar active="Settings" />}
       <main className="settings-main">
         <h1 className="page-title">Settings</h1>
 
@@ -258,29 +270,43 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
             <h2 className="settings-section-title">Server Configuration</h2>
             <p className="settings-help">
               Configure the Caramba server URL that this TV will connect to.
-              Use http://IP:3001 format for local network servers.
+              Use http://IP:3000 format for local network servers.
             </p>
 
             <div className="settings-form">
               <div className="field">
-                <form onSubmit={handleAndroidApiUrlSubmit}>
+                <form onSubmit={handleAndroidApiUrlSubmit} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <input
                     type="url"
                     className="api-mode-url-input"
                     value={androidApiUrlInput}
                     onChange={e => setAndroidApiUrlInput(e.target.value)}
-                    onBlur={handleAndroidApiUrlSubmit}
-                    placeholder="http://192.168.1.100:3001"
+                    placeholder="http://192.168.1.100:3000"
                     spellCheck={false}
                     disabled={androidApiSaving}
+                    style={{ flex: 1 }}
                   />
+                  <button 
+                    type="button" 
+                    className="btn-primary"
+                    disabled={androidApiSaving}
+                    onClick={() => handleAndroidApiUrlSubmit({ type: 'click' })}
+                  >
+                    {androidApiSaving ? 'Saving...' : 'Save Server URL'}
+                  </button>
                 </form>
               </div>
             </div>
 
             <p className="settings-hint" style={{ marginTop: '16px' }}>
-              Example: http://192.168.1.100:3001 or http://caramba.local:3001
+              Example: http://192.168.1.100:3000 or http://nas.local:3000
             </p>
+
+            {apiUrl && (
+              <p className="settings-hint" style={{ marginTop: '8px', color: 'var(--text-secondary)' }}>
+                Current: {apiUrl}
+              </p>
+            )}
           </section>
         )}
 

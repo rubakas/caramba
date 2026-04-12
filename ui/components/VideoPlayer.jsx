@@ -80,6 +80,11 @@ export default function VideoPlayer() {
    const trackMenuRef = useRef(null)
    const clickTimerRef = useRef(null)
    const isTouchRef = useRef(false)
+   const playBtnRef = useRef(null)  // For TV auto-focus
+
+  // Detect Android TV for different control scheme
+  const isAndroidTV = typeof window !== 'undefined' && 
+    window.Capacitor?.isNativePlatform?.() === true
 
   // seekBase: the absolute time (in the source file) that corresponds to
   // video.currentTime === 0 in the current stream.  After a seek/restart,
@@ -97,6 +102,8 @@ export default function VideoPlayer() {
   const [trackMenuOpen, setTrackMenuOpen] = useState(false)
   // Bumped on every seek/audio switch so the <track> element remounts
   const [subtitleVersion, setSubtitleVersion] = useState(0)
+  // TV mode: 'seek' (default) or 'settings'
+  const [tvMode, setTvMode] = useState('seek')
 
   const totalDuration = playerState.duration || 0
   const subtitleSize = playerState.subtitleSize || 'medium'
@@ -117,6 +124,12 @@ export default function VideoPlayer() {
       setBuffering(true)
       setControlsVisible(true)
       setTrackMenuOpen(false)
+      setTvMode('seek')
+      // Start the auto-hide timer
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = setTimeout(() => {
+        setControlsVisible(false)
+      }, 3000)
     }
   }, [playerState.sessionId, playerState.open])
 
@@ -522,9 +535,12 @@ export default function VideoPlayer() {
     setControlsVisible(true)
     clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
-      if (!paused && !trackMenuOpen) setControlsVisible(false)
+      // Don't hide if paused, menu open, or in settings mode on TV
+      if (!paused && !trackMenuOpen && (!isAndroidTV || tvMode === 'seek')) {
+        setControlsVisible(false)
+      }
     }, 3000)
-  }, [paused, trackMenuOpen])
+  }, [paused, trackMenuOpen, isAndroidTV, tvMode])
 
   useEffect(() => {
     if (paused || trackMenuOpen) {
@@ -534,6 +550,18 @@ export default function VideoPlayer() {
       showControls()
     }
   }, [paused, trackMenuOpen, showControls])
+
+  // On Android TV, auto-focus play button when controls become visible
+  useEffect(() => {
+    if (isAndroidTV && controlsVisible && playBtnRef.current && !trackMenuOpen) {
+      // Only focus if nothing else is focused
+      const activeEl = document.activeElement
+      const isVideoOrBody = !activeEl || activeEl === document.body || activeEl === videoRef.current
+      if (isVideoOrBody) {
+        playBtnRef.current.focus({ preventScroll: true })
+      }
+    }
+  }, [controlsVisible, isAndroidTV, trackMenuOpen])
 
   // Close track menu when clicking outside
   useEffect(() => {
@@ -733,6 +761,40 @@ export default function VideoPlayer() {
   }, [])
 
   // --- Keyboard controls ---
+
+  // Handle Android TV back button via Capacitor App plugin
+  useEffect(() => {
+    if (!playerState.open || !isAndroidTV) return
+    
+    const setupBackHandler = async () => {
+      try {
+        const { App } = await import('@capacitor/app')
+        
+        const backHandler = App.addListener('backButton', () => {
+          console.log('[Player] Android TV back button pressed, tvMode:', tvMode)
+          if (tvMode === 'audio' || tvMode === 'subtitles') {
+            setTvMode('seek')
+          } else if (trackMenuOpen) {
+            setTrackMenuOpen(false)
+          } else {
+            handleClose()
+          }
+        })
+        
+        return () => {
+          backHandler.then(h => h.remove())
+        }
+      } catch (err) {
+        console.warn('[Player] Could not set up back handler:', err)
+      }
+    }
+    
+    const cleanup = setupBackHandler()
+    return () => {
+      cleanup?.then(fn => fn?.())
+    }
+  }, [playerState.open, isAndroidTV, trackMenuOpen, handleClose, tvMode])
+
   useEffect(() => {
     if (!playerState.open) return
 
@@ -740,9 +802,88 @@ export default function VideoPlayer() {
       const video = videoRef.current
       if (!video) return
 
+      // Android TV has two modes: 'seek' and 'settings'
+      // In seek mode: Left/Right = seek, Enter = play/pause, Up = go to settings
+      // In settings mode: D-pad navigates menu, Back = return to seek mode
+      
+      if (isAndroidTV) {
+        switch (e.key) {
+          case 'Enter':
+            e.preventDefault()
+            if (tvMode === 'seek') {
+              video.paused ? video.play() : video.pause()
+            }
+            // In settings mode, let browser handle button clicks
+            break
+          case 'Escape':
+          case 'GoBack':
+            e.preventDefault()
+            if (tvMode === 'audio' || tvMode === 'subtitles') {
+              setTvMode('seek')
+            } else {
+              handleClose()
+            }
+            break
+          case 'ArrowLeft':
+            if (tvMode === 'seek') {
+              e.preventDefault()
+              handleSeekRelative(-10)
+              showControls()
+            }
+            // In settings mode, let browser handle D-pad
+            break
+          case 'ArrowRight':
+            if (tvMode === 'seek') {
+              e.preventDefault()
+              handleSeekRelative(10)
+              showControls()
+            }
+            // In settings mode, let browser handle D-pad
+            break
+          case 'ArrowUp':
+            if (tvMode === 'seek') {
+              e.preventDefault()
+              setTvMode('audio')
+            }
+            // In settings mode, let browser handle D-pad for menu navigation (don't preventDefault)
+            break
+          case 'ArrowDown':
+            if (tvMode === 'seek') {
+              e.preventDefault()
+              setTvMode('subtitles')
+            }
+            // In settings mode, let browser handle D-pad for menu navigation (don't preventDefault)
+            break
+          case 'MediaPlayPause':
+          case 'MediaPlay':
+          case 'MediaPause':
+            e.preventDefault()
+            video.paused ? video.play() : video.pause()
+            break
+          case 'MediaStop':
+            e.preventDefault()
+            handleClose()
+            break
+          case 'MediaRewind':
+            e.preventDefault()
+            handleSeekRelative(-30)
+            break
+          case 'MediaFastForward':
+            e.preventDefault()
+            handleSeekRelative(30)
+            break
+        }
+        return
+      }
+      
+      // Desktop controls (unchanged)
       switch (e.key) {
         case ' ':
         case 'k':
+          e.preventDefault()
+          video.paused ? video.play() : video.pause()
+          break
+        case 'Enter':
           e.preventDefault()
           video.paused ? video.play() : video.pause()
           break
@@ -761,10 +902,12 @@ export default function VideoPlayer() {
         case 'ArrowLeft':
           e.preventDefault()
           handleSeekRelative(-10)
+          showControls()
           break
         case 'ArrowRight':
           e.preventDefault()
           handleSeekRelative(10)
+          showControls()
           break
         case 'ArrowUp':
           e.preventDefault()
@@ -780,18 +923,308 @@ export default function VideoPlayer() {
           e.preventDefault()
           video.muted = !video.muted
           break
+        case 'MediaPlayPause':
+        case 'MediaPlay':
+        case 'MediaPause':
+          e.preventDefault()
+          video.paused ? video.play() : video.pause()
+          break
+        case 'MediaStop':
+          e.preventDefault()
+          handleClose()
+          break
+        case 'MediaRewind':
+          e.preventDefault()
+          handleSeekRelative(-30)
+          break
+        case 'MediaFastForward':
+          e.preventDefault()
+          handleSeekRelative(30)
+          break
       }
-      showControls()
     }
 
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [playerState.open, showControls, handleClose, toggleFullscreen, handleSeekRelative, trackMenuOpen])
+  }, [playerState.open, showControls, handleClose, toggleFullscreen, handleSeekRelative, trackMenuOpen, isAndroidTV, tvMode])
 
   if (!playerState.open) return null
 
   const progressPct = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0
 
+  // Android TV: Simplified UI with two modes
+  if (isAndroidTV) {
+    // TV controls visibility state
+    const tvControlsHidden = !controlsVisible && !paused && !buffering && tvMode === 'seek'
+    const isSettingsMode = tvMode === 'audio' || tvMode === 'subtitles'
+    
+    return (
+      <div
+        ref={containerRef}
+        className={`video-player-overlay controls-visible tv-player${isSettingsMode ? ' tv-settings-mode' : ''}`}
+      >
+        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+        <video
+          ref={videoRef}
+          className="video-player-video"
+          crossOrigin="anonymous"
+          autoPlay
+          playsInline
+          muted={true}
+          controls={false}
+          onPlay={() => setPaused(false)}
+          onPause={() => setPaused(true)}
+          onWaiting={() => setBuffering(true)}
+          onCanPlay={() => {
+            setBuffering(false)
+            const v = videoRef.current
+            if (v && v.paused) v.play().catch(() => {})
+            if (v && v.muted) v.muted = false
+          }}
+          onPlaying={() => {
+            setBuffering(false)
+            const v = videoRef.current
+            if (v && v.muted) v.muted = false
+          }}
+          onEnded={handleEnded}
+        >
+          {playerState.subtitleUrl && (
+            <track key={playerState.subtitleUrl + '-' + subtitleVersion} kind="subtitles" src={playerState.subtitleUrl + '&v=' + subtitleVersion} label="Subtitles" default crossOrigin="anonymous" />
+          )}
+        </video>
+
+        {/* Top: Title info */}
+        {!tvControlsHidden && (
+          <div className="video-player-tv-top">
+            <span className="video-player-bottom-title">{playerState.title}</span>
+            {playerState.subtitle && (
+              <span className="video-player-bottom-subtitle">{playerState.subtitle}</span>
+            )}
+          </div>
+        )}
+
+        {/* Center: Show pause icon or spinner only when paused/buffering */}
+        {(paused || buffering) && (
+          <div className="video-player-tv-center">
+            {buffering ? (
+              <div className="spinner" style={{ width: 48, height: 48 }} />
+            ) : (
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.9">
+                <rect x="5" y="3" width="5" height="18" rx="1"/>
+                <rect x="14" y="3" width="5" height="18" rx="1"/>
+              </svg>
+            )}
+          </div>
+        )}
+
+        {/* TV Seek Mode: Show seek bar at bottom */}
+        {tvMode === 'seek' && !tvControlsHidden && (
+          <div className="video-player-tv-bottom">
+            <div className="video-player-tv-seek">
+              <span className="video-player-time-elapsed">{formatTime(Math.round(currentTime))}</span>
+              <div className="tv-progress-bar">
+                <div className="tv-progress-track">
+                  <div className="tv-progress-fill" style={{ width: `${progressPct}%` }} />
+                </div>
+                <div className="tv-progress-head" style={{ left: `${progressPct}%` }} />
+              </div>
+              <span className="video-player-time-remaining">-{formatTime(Math.max(0, Math.round(totalDuration - currentTime)))}</span>
+            </div>
+            <div className="video-player-tv-hint">
+              <span>◀ ▶ Seek</span>
+              <span>OK Play/Pause</span>
+              <span>▲ Audio</span>
+              <span>▼ Subtitles</span>
+            </div>
+          </div>
+        )}
+
+        {/* TV Audio Settings (Up arrow) */}
+        {tvMode === 'audio' && (
+          <div className="video-player-tv-settings" onClick={(e) => e.stopPropagation()}>
+            <div className="tv-settings-panel">
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Audio</div>
+                {playerState.audioStreams.length > 1 ? (
+                  playerState.audioStreams.map((s, idx) => {
+                    const handleSelect = () => {
+                      if (s.index !== playerState.activeAudioIndex) {
+                        handleSwitchAudio(s.index)
+                      }
+                      setTvMode('seek')
+                    }
+                    return (
+                      <button
+                        key={s.index}
+                        tabIndex={0}
+                        autoFocus={idx === 0}
+                        className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); handleSelect() }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
+                      >
+                        <span className="track-popover-check">
+                          {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
+                        </span>
+                        <span className="track-popover-label">{audioLabel(s)}</span>
+                      </button>
+                    )
+                  })
+                ) : (
+                  <button tabIndex={0} autoFocus className="track-popover-item active" onClick={() => setTvMode('seek')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setTvMode('seek') } }}>
+                    <span className="track-popover-check">{'\u2713'}</span>
+                    <span className="track-popover-label">{playerState.audioStreams[0] ? audioLabel(playerState.audioStreams[0]) : 'Default'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="video-player-tv-hint">
+              <span>▲ ▼ Navigate</span>
+              <span>OK Select</span>
+              <span>Back Return</span>
+            </div>
+          </div>
+        )}
+
+        {/* TV Subtitles Settings (Down arrow) */}
+        {tvMode === 'subtitles' && (
+          <div className="video-player-tv-settings" onClick={(e) => e.stopPropagation()}>
+            <div className="tv-settings-panel">
+              {/* Column 1: Subtitles */}
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Subtitles</div>
+                {playerState.subtitleStreams.length > 0 ? (
+                  <>
+                    {(() => {
+                      const handleOffSelect = () => {
+                        if (playerState.activeSubtitleIndex != null) {
+                          if (playerState.isBitmapSubtitle) {
+                            handleSwitchBitmapSubtitle(null)
+                          } else {
+                            handleSwitchSubtitle(null)
+                          }
+                        }
+                        setTvMode('seek')
+                      }
+                      return (
+                        <button
+                          tabIndex={0}
+                          autoFocus
+                          className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
+                          onClick={(e) => { e.stopPropagation(); handleOffSelect() }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleOffSelect() } }}
+                        >
+                          <span className="track-popover-check">
+                            {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
+                          </span>
+                          <span className="track-popover-label">Off</span>
+                        </button>
+                      )
+                    })()}
+                    {playerState.subtitleStreams.map((s) => {
+                      const handleSelect = () => {
+                        if (s.isText) {
+                          if (playerState.isBitmapSubtitle) {
+                            handleSwitchBitmapSubtitle(null).then(() => {
+                              handleSwitchSubtitle(s.index)
+                            })
+                          } else {
+                            handleSwitchSubtitle(s.index)
+                          }
+                        } else {
+                          if (s.index !== playerState.activeSubtitleIndex) {
+                            handleSwitchBitmapSubtitle(s.index)
+                          }
+                        }
+                        setTvMode('seek')
+                      }
+                      return (
+                        <button
+                          key={s.index}
+                          tabIndex={0}
+                          className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
+                          onClick={(e) => { e.stopPropagation(); handleSelect() }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
+                        >
+                          <span className="track-popover-check">
+                            {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
+                          </span>
+                          <span className="track-popover-label">
+                            {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </>
+                ) : (
+                  <button tabIndex={0} autoFocus className="track-popover-item active" onClick={() => setTvMode('seek')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setTvMode('seek') } }}>
+                    <span className="track-popover-check">{'\u2713'}</span>
+                    <span className="track-popover-label">None Available</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Column 2: Size - always show, disable if no text subtitles */}
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Size</div>
+                {SUB_SIZES.map((s) => {
+                  const isDisabled = playerState.isBitmapSubtitle || playerState.activeSubtitleIndex == null
+                  const handleSelect = () => {
+                    if (!isDisabled) setSubtitleAppearance({ subtitleSize: s.id })
+                  }
+                  return (
+                    <button
+                      key={s.id}
+                      tabIndex={isDisabled ? -1 : 0}
+                      className={`track-popover-item${s.id === subtitleSize ? ' active' : ''}${isDisabled ? ' disabled' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleSelect() }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
+                    >
+                      <span className="track-popover-check">
+                        {s.id === subtitleSize ? '\u2713' : ''}
+                      </span>
+                      <span className="track-popover-label">{s.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Column 3: Style - always show, disable if no text subtitles */}
+              <div className="track-popover-section">
+                <div className="track-popover-heading">Style</div>
+                {SUB_STYLES.map((s) => {
+                  const isDisabled = playerState.isBitmapSubtitle || playerState.activeSubtitleIndex == null
+                  const handleSelect = () => {
+                    if (!isDisabled) setSubtitleAppearance({ subtitleStyle: s.id })
+                  }
+                  return (
+                    <button
+                      key={s.id}
+                      tabIndex={isDisabled ? -1 : 0}
+                      className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}${isDisabled ? ' disabled' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); handleSelect() }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
+                    >
+                      <span className="track-popover-check">
+                        {s.id === subtitleStyle ? '\u2713' : ''}
+                      </span>
+                      <span className="track-popover-label">{s.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="video-player-tv-hint">
+              <span>◀ ▶ ▲ ▼ Navigate</span>
+              <span>OK Select</span>
+              <span>Back Return</span>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Desktop UI (unchanged)
   return (
     <div
       ref={containerRef}
@@ -867,7 +1300,7 @@ export default function VideoPlayer() {
         className={`video-player-top${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <refractive.button className="video-player-close" onClick={(e) => { e.stopPropagation(); handleClose() }} refraction={closeBtnGlass}>
+        <refractive.button className="video-player-close" tabIndex={0} onClick={(e) => { e.stopPropagation(); handleClose() }} refraction={closeBtnGlass}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
@@ -879,7 +1312,7 @@ export default function VideoPlayer() {
         className={`video-player-center${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <refractive.button className="video-player-skip-btn" onClick={() => handleSeekRelative(-10)} refraction={skipBtnGlass}>
+        <refractive.button className="video-player-skip-btn" tabIndex={0} onClick={() => handleSeekRelative(-10)} refraction={skipBtnGlass}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
           </svg>
@@ -887,7 +1320,9 @@ export default function VideoPlayer() {
         </refractive.button>
 
         <refractive.button
+          ref={playBtnRef}
           className="video-player-play-btn"
+          tabIndex={0}
           onClick={() => {
             const v = videoRef.current
             if (v) v.paused ? v.play() : v.pause()
@@ -903,7 +1338,7 @@ export default function VideoPlayer() {
           )}
         </refractive.button>
 
-        <refractive.button className="video-player-skip-btn" onClick={() => handleSeekRelative(30)} refraction={skipBtnGlass}>
+        <refractive.button className="video-player-skip-btn" tabIndex={0} onClick={() => handleSeekRelative(30)} refraction={skipBtnGlass}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"/>
           </svg>
@@ -930,6 +1365,7 @@ export default function VideoPlayer() {
             <input
               type="range"
               className="video-player-volume-slider"
+              tabIndex={0}
               min={0}
               max={1}
               step={0.05}
@@ -938,7 +1374,7 @@ export default function VideoPlayer() {
               style={{ background: `linear-gradient(to right, #fff 0%, #fff ${volume * 100}%, rgba(255,255,255,.3) ${volume * 100}%, rgba(255,255,255,.3) 100%)` }}
             />
             {/* Volume icon (mute toggle) */}
-            <button className="video-player-util-icon" onClick={() => {
+            <button className="video-player-util-icon" tabIndex={0} onClick={() => {
               const v = videoRef.current
               if (v) {
                 v.muted = !v.muted
@@ -958,6 +1394,7 @@ export default function VideoPlayer() {
             {/* Settings icon */}
             <button
               className={`video-player-util-icon${trackMenuOpen ? ' active' : ''}`}
+              tabIndex={0}
               onClick={() => setTrackMenuOpen(v => !v)}
               title="Audio & Subtitles"
             >
@@ -966,7 +1403,7 @@ export default function VideoPlayer() {
               </svg>
             </button>
             {/* Fullscreen icon */}
-            <button className="video-player-util-icon" onClick={toggleFullscreen}>
+            <button className="video-player-util-icon" tabIndex={0} onClick={toggleFullscreen}>
               {isFullscreen ? (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
@@ -985,9 +1422,11 @@ export default function VideoPlayer() {
                {playerState.audioStreams.length > 1 && (
                  <div className="track-popover-section">
                    <div className="track-popover-heading">Audio</div>
-                   {playerState.audioStreams.map((s) => (
+                   {playerState.audioStreams.map((s, idx) => (
                      <button
                        key={s.index}
+                       tabIndex={0}
+                       autoFocus={idx === 0}
                        className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
                        onClick={() => {
                          if (s.index !== playerState.activeAudioIndex) {
@@ -1010,6 +1449,8 @@ export default function VideoPlayer() {
                  <div className="track-popover-section">
                    <div className="track-popover-heading">Subtitles</div>
                    <button
+                     tabIndex={0}
+                     autoFocus={playerState.audioStreams.length <= 1}
                      className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
                      onClick={() => {
                        if (playerState.activeSubtitleIndex != null) {
@@ -1030,6 +1471,7 @@ export default function VideoPlayer() {
                    {playerState.subtitleStreams.map((s) => (
                      <button
                        key={s.index}
+                       tabIndex={0}
                        className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
                        onClick={() => {
                          if (s.isText) {

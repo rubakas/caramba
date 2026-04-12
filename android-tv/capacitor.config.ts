@@ -5,7 +5,14 @@ const config: CapacitorConfig = {
   appName: 'Caramba',
   webDir: '../web/dist',
   server: {
-    androidScheme: 'https'
+    // Use http to allow connections to local http servers
+    androidScheme: 'http',
+    // Allow mixed content (http requests from the app)
+    allowNavigation: ['*']
+  },
+  android: {
+    // Allow cleartext (http) traffic
+    allowMixedContent: true
   },
   plugins: {
     SplashScreen: {

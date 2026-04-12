@@ -7,6 +7,8 @@ import PosterCard from '../components/PosterCard'
 import { useGlassConfig } from '../config/useGlassConfig'
 import { useApi, useCapabilities } from '../context/ApiContext'
 
+const isAndroidTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
+
 const FilmIcon = () => (
   <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
     <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
@@ -88,12 +90,13 @@ export default function Library() {
         <main className="library">
           <h2 className="section-title">My Library</h2>
           <div className="series-grid">
-            {seriesList.map(s => (
+            {seriesList.map((s, idx) => (
               <PosterCard
                 key={s.slug}
                 item={s}
                 type="series"
                 resumable={!!resumables[s.slug]}
+                autoFocus={isAndroidTV && idx === 0}
               />
             ))}
             {canAdd && (

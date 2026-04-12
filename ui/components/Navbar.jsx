@@ -7,6 +7,9 @@ const PlayIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 )
 
+// Detect Android TV
+const isTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
+
 export default function Navbar({ active, actions, rightContent }) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -27,7 +30,7 @@ export default function Navbar({ active, actions, rightContent }) {
       className="topnav"
       refraction={navbarGlass}
     >
-      <a className="topnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
+      <a className="topnav-brand" onClick={() => navigate('/')} style={{ cursor: 'pointer' }} tabIndex={isTV ? -1 : undefined}>
         Caramba
       </a>
       <div className="topnav-links">
