@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Publish build artifacts to GitHub Releases.
+#
+# Reads version from package.json, collects APK from build outputs,
+# and creates (or updates) a GitHub release via `gh`.
+#
+# Usage: bin/publish
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Require gh CLI
+if ! command -v gh &>/dev/null; then
+  echo "Error: gh CLI not found. Install it: brew install gh"
+  exit 1
+fi
+
+# Require git
+if ! command -v git &>/dev/null; then
+  echo "Error: git not found."
+  exit 1
+fi
+
+# Warn if working tree is dirty
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "Warning: Working tree has uncommitted changes. Publishing from a dirty state."
+fi
+
+CURRENT_VERSION=$(node -e "console.log(require('./package.json').version)")
+HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# Collect artifacts
+ARTIFACTS=()
+for f in android/app/build/outputs/apk/debug/*.apk android/app/build/outputs/apk/release/*.apk; do
+  [ -f "$f" ] && ARTIFACTS+=("$f")
+done
+
+if [ ${#ARTIFACTS[@]} -eq 0 ]; then
+  echo "Error: No APK artifacts found — run bin/build first."
+  exit 1
+fi
+
+TAG="v$CURRENT_VERSION"
+echo "Publishing $TAG to GitHub Releases..."
+echo "  Assets: ${ARTIFACTS[*]}"
+
+# Check if release already exists for this tag
+if gh release view "$TAG" &>/dev/null; then
+  echo "  Release $TAG already exists — uploading assets (overwrite)..."
+  gh release upload "$TAG" "${ARTIFACTS[@]}" --clobber
+else
+  gh release create "$TAG" "${ARTIFACTS[@]}" \
+    --title "Android TV $CURRENT_VERSION" \
+    --notes "Caramba Android TV app for Google Chromecast with Google TV.
+
+## Installation
+1. Enable Developer Mode on your Chromecast
+2. Connect via ADB: \`adb connect <chromecast-ip>\`
+3. Install: \`adb install app-debug.apk\`
+
+## Changes
+$HEAD_MSG"
+fi
+
+echo ""
+echo "Published: $(gh release view "$TAG" --json url -q '.url')"

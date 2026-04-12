@@ -21,6 +21,9 @@ const MoreSvg = () => (
   </svg>
 )
 
+// Detect Android TV
+const isTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
+
 export default function MovieShow() {
   const { slug } = useParams()
   const navigate = useNavigate()
@@ -284,6 +287,7 @@ export default function MovieShow() {
                   target="_blank"
                   rel="noreferrer"
                   className="show-imdb"
+                  tabIndex={isTV ? -1 : 0}
                 >
                   IMDb
                 </a>

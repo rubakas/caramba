@@ -1,3 +1,45 @@
 #!/usr/bin/env bash
-# Alias for desktop/bin/build
-exec desktop/bin/build "$@"
+#
+# Build all Caramba apps (desktop + android-tv).
+#
+# Usage: bin/build                # Build both
+#        bin/build --publish      # Build both + publish to GitHub
+#        bin/build --android-tv   # Build only Android TV
+#        bin/build --desktop      # Build only Desktop
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+PUBLISH=""
+BUILD_DESKTOP=true
+BUILD_ANDROID_TV=true
+
+for arg in "$@"; do
+  case "$arg" in
+    --publish) PUBLISH="--publish" ;;
+    --android-tv) BUILD_DESKTOP=false ;;
+    --desktop) BUILD_ANDROID_TV=false ;;
+    *) echo "Unknown flag: $arg"; exit 1 ;;
+  esac
+done
+
+if $BUILD_DESKTOP; then
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "Building Desktop app..."
+  echo "═══════════════════════════════════════════════════════════════"
+  desktop/bin/build $PUBLISH || echo "⚠ Desktop build failed, continuing..."
+fi
+
+if $BUILD_ANDROID_TV; then
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "Building Android TV app..."
+  echo "═══════════════════════════════════════════════════════════════"
+  android-tv/bin/build $PUBLISH
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "Build complete!"
+echo "═══════════════════════════════════════════════════════════════"

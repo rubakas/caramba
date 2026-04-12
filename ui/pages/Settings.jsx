@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Navbar from '../components/Navbar'
 
-export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode }) {
+export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode, onApiUrlChange, apiUrl, hideNavbar = false }) {
   const [syncFolder, setSyncFolder] = useState('')
   const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
@@ -9,10 +9,14 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // API mode local state
+  // API mode local state (desktop)
   const [serverUrlInput, setServerUrlInput] = useState(apiMode?.server_url || '')
   const [localPlaybackOn, setLocalPlaybackOn] = useState(apiMode?.local_playback !== false)
   const [apiSaving, setApiSaving] = useState(false)
+
+  // Android TV API URL state
+  const [androidApiUrlInput, setAndroidApiUrlInput] = useState(apiUrl || 'http://localhost:3001')
+  const [androidApiSaving, setAndroidApiSaving] = useState(false)
 
   // Sync serverUrlInput when apiMode prop changes (e.g. initial load)
   useEffect(() => {
@@ -26,8 +30,15 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     setLocalPlaybackOn(apiMode?.local_playback !== false)
   }, [apiMode?.local_playback])
 
+  // Sync Android TV API URL input
+  useEffect(() => {
+    if (apiUrl) {
+      setAndroidApiUrlInput(apiUrl)
+    }
+  }, [apiUrl])
+
   const loadData = useCallback(async () => {
-    // In web mode, window.api doesn't exist - skip loading desktop settings
+    // In web mode or Android TV, window.api doesn't exist - skip loading desktop settings
     if (isWebMode || !window.api?.getSettings) {
       setLoading(false)
       return
@@ -119,7 +130,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     }
   }
 
-  // --- API Mode handlers ---
+  // --- API Mode handlers (desktop) ---
 
   const handleApiToggle = async () => {
     if (!window.api?.setApiMode) return
@@ -189,9 +200,53 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     }
   }
 
+  // --- Android TV API URL handler ---
+
+  const handleAndroidApiUrlSubmit = async (e) => {
+    if (e) e.preventDefault()
+    const trimmed = androidApiUrlInput.trim()
+    if (!trimmed) {
+      showToast('API URL cannot be empty.', true)
+      return
+    }
+
+    // Skip if URL hasn't changed (but allow explicit save button clicks)
+    if (trimmed === apiUrl && e?.type !== 'click') return
+
+    console.log('[Settings] Saving Android API URL:', trimmed)
+    setAndroidApiSaving(true)
+    try {
+      // Validate URL format
+      new URL(trimmed)
+      
+      console.log('[Settings] Calling onApiUrlChange callback...')
+      const success = await onApiUrlChange?.(trimmed)
+      console.log('[Settings] onApiUrlChange result:', success)
+      
+      if (success) {
+        showToast('Server URL saved. Reloading...')
+        // App.jsx will handle the reload, but add fallback
+        setTimeout(() => {
+          console.log('[Settings] Fallback reload triggered')
+          window.location.reload()
+        }, 1000)
+      } else {
+        showToast('Failed to save server URL.', true)
+      }
+    } catch (err) {
+      console.error('[Settings] Error saving URL:', err)
+      showToast('Invalid URL format. Use http://192.168.1.100:3001', true)
+    } finally {
+      setAndroidApiSaving(false)
+    }
+  }
+
+  // Detect if this is Android TV mode
+  const isAndroidTvMode = !!onApiUrlChange
+
   if (loading) return (
     <>
-      <Navbar active="Settings" />
+      {!hideNavbar && <Navbar active="Settings" />}
       <div style={{ padding: '120px 48px', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading...</div>
     </>
   )
@@ -202,12 +257,58 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
 
   return (
     <>
-      <Navbar active="Settings" />
+      {!hideNavbar && <Navbar active="Settings" />}
       <main className="settings-main">
         <h1 className="page-title">Settings</h1>
 
         {message && <div className="alert alert--success">{message}</div>}
         {error && <div className="alert">{error}</div>}
+
+        {/* Android TV API URL Section */}
+        {isAndroidTvMode && (
+          <section className="settings-section">
+            <h2 className="settings-section-title">Server Configuration</h2>
+            <p className="settings-help">
+              Configure the Caramba server URL that this TV will connect to.
+              Use http://IP:3000 format for local network servers.
+            </p>
+
+            <div className="settings-form">
+              <div className="field">
+                <form onSubmit={handleAndroidApiUrlSubmit} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <input
+                    type="url"
+                    className="api-mode-url-input"
+                    value={androidApiUrlInput}
+                    onChange={e => setAndroidApiUrlInput(e.target.value)}
+                    placeholder="http://192.168.1.100:3000"
+                    spellCheck={false}
+                    disabled={androidApiSaving}
+                    style={{ flex: 1 }}
+                  />
+                  <button 
+                    type="button" 
+                    className="btn-primary"
+                    disabled={androidApiSaving}
+                    onClick={() => handleAndroidApiUrlSubmit({ type: 'click' })}
+                  >
+                    {androidApiSaving ? 'Saving...' : 'Save Server URL'}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <p className="settings-hint" style={{ marginTop: '16px' }}>
+              Example: http://192.168.1.100:3000 or http://nas.local:3000
+            </p>
+
+            {apiUrl && (
+              <p className="settings-hint" style={{ marginTop: '8px', color: 'var(--text-secondary)' }}>
+                Current: {apiUrl}
+              </p>
+            )}
+          </section>
+        )}
 
         {/* API Mode Section — desktop only */}
         {hasApiMode && !isWebMode && (
@@ -283,7 +384,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
         )}
 
         {/* Sync Folder Section — desktop only */}
-        {!isWebMode && (
+        {!isWebMode && !isAndroidTvMode && (
           <section className="settings-section">
             <h2 className="settings-section-title">Database Sync</h2>
             <p className="settings-help">
@@ -324,7 +425,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
         )}
 
         {/* Sync Status — desktop only */}
-        {!isWebMode && isEnabled && status && (
+        {!isWebMode && !isAndroidTvMode && isEnabled && status && (
           <section className="settings-section">
             <h2 className="settings-section-title">Sync Status</h2>
             <div className="sync-status-grid">
@@ -374,8 +475,6 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
             <p className="settings-hint">Database syncs automatically when you open or close the app.</p>
           </section>
         )}
-
-
       </main>
     </>
   )

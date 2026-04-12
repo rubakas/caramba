@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { useMemo } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { ApiProvider } from '@caramba/ui/context/ApiContext'
 import { createHttpAdapter, httpCapabilities } from '@caramba/ui/adapters/http'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
@@ -14,7 +14,18 @@ import Discover from '@caramba/ui/pages/Discover'
 import History from '@caramba/ui/pages/History'
 import Settings from '@caramba/ui/pages/Settings'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+// Check if running in Capacitor (Android/iOS native app)
+const isCapacitor = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform === true
+
+// Android TV capabilities - show Settings with API URL config, no file management
+const androidTvCapabilities = {
+  ...httpCapabilities,
+  hasSettings: true,
+  canDownload: false,
+  canAdd: false,
+  canManage: false,
+  canOpenExternal: false,
+}
 
 // Web capabilities (no Settings in navbar)
 const webCapabilities = {
@@ -23,10 +34,156 @@ const webCapabilities = {
 }
 
 export default function App() {
-  const adapter = useMemo(() => createHttpAdapter(API_BASE), [])
+  const [apiUrl, setApiUrl] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isNativeApp, setIsNativeApp] = useState(false)
+
+  // Load configurable API URL
+  useEffect(() => {
+    checkPlatformAndLoadUrl()
+  }, [])
+
+  // Add tv-mode class to body when running on Android TV
+  useEffect(() => {
+    if (isNativeApp) {
+      document.body.classList.add('tv-mode')
+      console.log('[App] Added tv-mode class to body')
+    }
+    return () => {
+      document.body.classList.remove('tv-mode')
+    }
+  }, [isNativeApp])
+
+  const checkPlatformAndLoadUrl = async () => {
+    try {
+      // Check if Capacitor Preferences plugin is available
+      const hasCapacitor = typeof window !== 'undefined' && 
+                           window.Capacitor?.Plugins?.Preferences
+
+      if (hasCapacitor) {
+        setIsNativeApp(true)
+        
+        // Try to load saved API URL
+        const { value } = await window.Capacitor.Plugins.Preferences.get({
+          key: 'caramba_api_url'
+        })
+        
+        if (value) {
+          console.log('Loaded API URL from preferences:', value)
+          setApiUrl(value)
+        } else {
+          // No URL saved yet, use empty (will show setup needed)
+          console.log('No API URL saved, using default')
+          setApiUrl('')
+        }
+      } else {
+        // Web mode - use environment variable or empty
+        setIsNativeApp(false)
+        setApiUrl(import.meta.env.VITE_API_BASE || '')
+      }
+    } catch (error) {
+      console.error('Failed to load API URL:', error)
+      setApiUrl('')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleApiUrlChange = async (newUrl) => {
+    if (!newUrl) return false
+
+    try {
+      // Save to Capacitor Preferences
+      if (window.Capacitor?.Plugins?.Preferences) {
+        await window.Capacitor.Plugins.Preferences.set({
+          key: 'caramba_api_url',
+          value: newUrl
+        })
+        console.log('Saved API URL:', newUrl)
+      }
+      
+      // Update state and force reload to apply new URL
+      setApiUrl(newUrl)
+      
+      // Force reload the app to recreate adapter with new URL
+      setTimeout(() => {
+        window.location.reload()
+      }, 500)
+      
+      return true
+    } catch (error) {
+      console.error('Failed to save API URL:', error)
+      return false
+    }
+  }
+
+  const capabilities = isNativeApp ? androidTvCapabilities : webCapabilities
+  
+  // Create adapter with current API URL
+  const adapter = useMemo(() => {
+    console.log('Creating HTTP adapter with base URL:', apiUrl)
+    return createHttpAdapter(apiUrl || '')
+  }, [apiUrl])
+
+  if (isLoading) {
+    // For native apps, show minimal loading state (no text to avoid double loading)
+    // The page-level loading will show instead
+    if (isNativeApp || window.Capacitor?.Plugins?.Preferences) {
+      return (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          background: '#000',
+        }} />
+      )
+    }
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#000',
+        color: '#fff',
+        fontSize: '24px'
+      }}>
+        Loading...
+      </div>
+    )
+  }
+
+  // Show setup screen if no API URL configured on native app
+  if (isNativeApp && !apiUrl) {
+    return (
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100vh',
+        background: '#000',
+        color: '#fff',
+        padding: '40px',
+        textAlign: 'center'
+      }}>
+        <h1 style={{ fontSize: '32px', marginBottom: '16px' }}>Welcome to Caramba</h1>
+        <p style={{ fontSize: '18px', color: '#aaa', marginBottom: '32px' }}>
+          Please configure your server URL to get started.
+        </p>
+        <Settings 
+          isWebMode={false}
+          onApiUrlChange={handleApiUrlChange}
+          apiUrl={apiUrl}
+          hideNavbar={true}
+        />
+      </div>
+    )
+  }
 
   return (
-    <ApiProvider adapter={adapter} capabilities={webCapabilities}>
+    <ApiProvider adapter={adapter} capabilities={capabilities}>
       <ToastProvider>
         <PlayerProvider>
           <BrowserRouter>
@@ -37,7 +194,13 @@ export default function App() {
               <Route path="/movies/:slug" element={<MovieShow />} />
               <Route path="/discover" element={<Discover />} />
               <Route path="/history" element={<History />} />
-              <Route path="/settings" element={<Settings isWebMode />} />
+              <Route path="/settings" element={
+                <Settings 
+                  isWebMode={!isNativeApp}
+                  onApiUrlChange={isNativeApp ? handleApiUrlChange : undefined}
+                  apiUrl={isNativeApp ? apiUrl : undefined}
+                />
+              } />
             </Routes>
           </BrowserRouter>
           <VideoPlayer />

@@ -31,6 +31,18 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "Warning: You have uncommitted changes. Build will use the current working tree state."
 fi
 
+# Install dependencies
+echo "Installing dependencies..."
+cd ..
+pnpm install
+cd desktop
+
+# Workaround: electron-builder looks for 'electron-rebuild' but pnpm uses '@electron/rebuild'
+if [ ! -e node_modules/electron-rebuild ]; then
+  mkdir -p node_modules
+  ln -sf ../../node_modules/.pnpm/@electron+rebuild@4.0.3/node_modules/@electron/rebuild node_modules/electron-rebuild
+fi
+
 # ── 2. Version increment ────────────────────────────────────────────
 # Skip bumping if the last commit is already a version bump from this script.
 # This prevents an infinite loop: bump → commit → build → see new commit → bump again.

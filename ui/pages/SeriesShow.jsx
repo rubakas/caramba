@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { refractive } from '../config/refractive'
 import Navbar from '../components/Navbar'
@@ -31,6 +31,10 @@ export default function SeriesShow() {
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState({}) // episodeId -> progress (0-1)
+  
+  // Ref for auto-focusing primary CTA on Android TV
+  const primaryCtaRef = useRef(null)
+  const isTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
 
   const loadData = useCallback(async () => {
     try {
@@ -88,6 +92,19 @@ export default function SeriesShow() {
       unsubDl()
     }
   }, [loadData, api])
+
+  // Auto-focus primary CTA button on Android TV after data loads
+  useEffect(() => {
+    if (isTV && !loading && series && primaryCtaRef.current) {
+      // Small delay to ensure DOM is ready
+      const timer = setTimeout(() => {
+        // Focus without scrolling, then scroll to top so hero stays visible
+        primaryCtaRef.current?.focus({ preventScroll: true })
+        window.scrollTo({ top: 0, behavior: 'instant' })
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [isTV, loading, series])
 
   const handlePlay = async (episodeId) => {
     const result = await api.playEpisode(episodeId)
@@ -273,6 +290,7 @@ export default function SeriesShow() {
                     target="_blank"
                     rel="noreferrer"
                     className="show-imdb"
+                    tabIndex={isTV ? -1 : 0}
                   >
                     IMDb
                   </a>
@@ -323,7 +341,7 @@ export default function SeriesShow() {
                   </div>
                 </div>
                 {canPlay && (
-                  <refractive.button className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass}>
+                  <refractive.button ref={primaryCtaRef} className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass} tabIndex={0}>
                     {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
                   </refractive.button>
                 )}
@@ -344,7 +362,7 @@ export default function SeriesShow() {
                   )}
                 </div>
                 {canPlay && (
-                  <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass}>
+                  <refractive.button ref={showResumeCta ? undefined : primaryCtaRef} className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass} tabIndex={0}>
                     {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
                   </refractive.button>
                 )}
@@ -360,7 +378,7 @@ export default function SeriesShow() {
                     </div>
                   </div>
                   {canPlay && (
-                    <refractive.button className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass}>
+                    <refractive.button ref={showResumeCta ? undefined : primaryCtaRef} className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass} tabIndex={0}>
                       {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
                     </refractive.button>
                   )}
