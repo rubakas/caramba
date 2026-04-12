@@ -131,7 +131,11 @@ namespace :deploy do
       plist_path = "#{home_dir}/Library/LaunchAgents/com.caramba.server.plist"
       upload! StringIO.new(plist_content), plist_path
 
-      puts "Launchd plist installed at #{plist_path}"
+      # Unload old service if it exists, then load the new one
+      execute :launchctl, "unload #{plist_path}", raise_on_non_zero_exit: false
+      execute :launchctl, "load #{plist_path}"
+
+      puts "Launchd plist loaded at #{plist_path}"
     end
   end
 end
