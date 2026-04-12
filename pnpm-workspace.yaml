@@ -2,7 +2,7 @@ packages:
   - ui
   - desktop
   - web
-  - android
+  - android-tv
 allowBuilds:
   '3': true
   ' ': true

@@ -25,7 +25,7 @@ Native Android TV app for Google Chromecast with Google TV devices. Powered by C
 
 1. **Install dependencies**
    ```bash
-   cd android
+   cd android-tv
    pnpm install
    ```
 
@@ -99,8 +99,8 @@ Caramba Android TV (Capacitor WebView)
 ## Files
 
 - `capacitor.config.ts` - Main Capacitor configuration
-- `android/app/src/main/java/com/caramba/tv/` - Native Android code
-- `android/app/build.gradle` - Android build configuration
+- `android-tv/app/src/main/java/com/caramba/tv/` - Native Android code
+- `android-tv/app/build.gradle` - Android build configuration
 
 ## Troubleshooting
 

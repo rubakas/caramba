@@ -75,13 +75,13 @@ pnpm build
 ### Step 3: Sync to Android
 
 ```bash
-cd ../android
+cd ../android-tv
 npx cap sync android
 ```
 
 This copies:
-- Web build assets → `android/app/src/main/assets/public/`
-- Capacitor config → `android/app/src/main/assets/capacitor.config.json`
+- Web build assets → `android-tv/app/src/main/assets/public/`
+- Capacitor config → `android-tv/app/src/main/assets/capacitor.config.json`
 
 ### Step 4: Open in Android Studio
 
@@ -96,7 +96,7 @@ This launches Android Studio with the Android project ready to build.
 **Option A: Via Android Studio UI**
 1. Build → Build Bundle(s) / APK(s) → Build APK(s)
 2. Wait for build to complete
-3. APK location: `android/app/release/app-release-unsigned.apk`
+3. APK location: `android-tv/app/release/app-release-unsigned.apk`
 
 **Option B: Via CLI (Gradle)**
 ```bash
