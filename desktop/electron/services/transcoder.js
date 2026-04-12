@@ -168,11 +168,9 @@ function start(filePath, seekTime = 0, opts = {}) {
     args.push('-ss', String(seekTime))
   }
 
-  // Throttle input reading to ~1.5x realtime so ffmpeg builds a
-  // comfortable buffer ahead of playback without flooding the
-  // browser's MSE SourceBuffer.  -re (1x) is too strict and
-  // causes buffering stalls; uncapped is too fast and overflows.
-  args.push('-readrate', '1.5')
+  // No readrate throttle: let ffmpeg transcode as fast as the hardware
+  // encoder allows. The player's MSE SourceBuffer handles flow control,
+  // and removing the limit prevents buffer underruns on slower Macs.
 
   args.push('-i', filePath)
 
