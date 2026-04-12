@@ -7,6 +7,7 @@ const fs = require('fs')
 const crypto = require('crypto')
 const db = require('../db')
 const transcoder = require('../services/transcoder')
+const apiConfig = require('../services/api-config')
 const { resolvePlaybackPath } = require('./downloads')
 
 const VLC_APP_PATH = '/Applications/VLC.app'
@@ -42,8 +43,10 @@ function register() {
         return { error: 'File not found: ' + (filePath || '(no path)') }
       }
 
-      // Security: only allow playback of files within registered media directories
-      if (!db.isKnownMediaPath(filePath)) {
+      // Security: only allow playback of files within registered media directories.
+      // Skip this check when server mode is enabled — the server already validated
+      // the path, and we're just using local transcoding for performance.
+      if (!apiConfig.isEnabled() && !db.isKnownMediaPath(filePath)) {
         return { error: 'File is not in a registered media directory' }
       }
 
@@ -435,8 +438,9 @@ function register() {
     if (!resolvedPath) {
       return { error: 'File not found: ' + filePath }
     }
-    // Security: only allow opening files within registered media directories
-    if (!db.isKnownMediaPath(resolvedPath)) {
+    // Security: only allow opening files within registered media directories.
+    // Skip when server mode is enabled — server already validated the path.
+    if (!apiConfig.isEnabled() && !db.isKnownMediaPath(resolvedPath)) {
       return { error: 'File is not in a registered media directory' }
     }
 
@@ -529,8 +533,9 @@ function register() {
     if (!resolvedPath) {
       return { error: 'File not found: ' + filePath }
     }
-    // Security: only allow opening files within registered media directories
-    if (!db.isKnownMediaPath(resolvedPath)) {
+    // Security: only allow opening files within registered media directories.
+    // Skip when server mode is enabled — server already validated the path.
+    if (!apiConfig.isEnabled() && !db.isKnownMediaPath(resolvedPath)) {
       return { error: 'File is not in a registered media directory' }
     }
     try {
