@@ -28,6 +28,8 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
   let connected = false
   let checking = false
   let pingTimer = null
+  let initialCheckDone = false
+  let initialCheckPromise = null
 
   // Track whether current playback session uses local or remote transcoder.
   // 'local' = desktop transcoder + stream:// protocol
@@ -54,6 +56,7 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
       setConnected(false)
     } finally {
       checking = false
+      initialCheckDone = true
     }
     return connected
   }
@@ -66,7 +69,7 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
   }
 
   function startPolling() {
-    checkConnection()
+    initialCheckPromise = checkConnection()
     pingTimer = setInterval(checkConnection, 30000)
   }
 
@@ -84,6 +87,10 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
   /** Try HTTP, fall back to local on network error */
   function withFallback(httpFn, localFn) {
     return async (...args) => {
+      // Wait for initial connection check before deciding
+      if (!initialCheckDone && initialCheckPromise) {
+        await initialCheckPromise
+      }
       if (connected) {
         try {
           return await httpFn(...args)
