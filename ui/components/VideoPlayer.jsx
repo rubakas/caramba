@@ -391,18 +391,13 @@ export default function VideoPlayer() {
             return true
           }
           
-          // Pump function - reads from stream with backpressure
+          // Pump function - reads from stream continuously.
+          // We never pause the pump — TCP backpressure and the browser's
+          // internal fetch buffer handle flow control naturally.  Pausing
+          // reader.read() on constrained devices (Chromecast) can cause
+          // the browser to drop the HTTP connection.
           const pump = () => {
             if (!reader || streamDone || hasError) return
-            
-            // Check if we should pause - buffer is full enough
-            const bufferedAhead = getBufferedAhead()
-            if (bufferedAhead > 30 || queue.length > 50) {
-              pumpPaused = true
-              console.log('[MSE] Pausing pump - buffered ahead:', bufferedAhead.toFixed(1), 's, queue:', queue.length)
-              startResumeChecker()  // Start timer to check when to resume
-              return
-            }
             
             reader.read().then(({ done, value }) => {
               if (done) {
