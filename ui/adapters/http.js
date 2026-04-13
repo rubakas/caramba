@@ -199,12 +199,16 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     onUpdateAvailable: noopUnsub, // Not needed — we check manually on load
     onDownloadProgress: (cb) => {
       if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaUpdater) {
-        // Capacitor event listener returns a Promise<PluginListenerHandle>
         let handle = null
-        window.Capacitor.Plugins.CarambaUpdater.addListener('downloadProgress', cb)
-          .then(h => { handle = h })
+        const result = window.Capacitor.Plugins.CarambaUpdater.addListener('downloadProgress', cb)
+        // Handle both Promise (Capacitor 6+) and sync (older) returns
+        if (result && typeof result.then === 'function') {
+          result.then(h => { handle = h }).catch(() => {})
+        } else if (result) {
+          handle = result
+        }
         return () => {
-          if (handle) handle.remove()
+          if (handle && handle.remove) handle.remove()
         }
       }
       return noop
