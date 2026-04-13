@@ -56,10 +56,10 @@ npx cap sync android
 echo ""
 echo "Building Android TV app $CURRENT_VERSION..."
 cd android
-./gradlew clean assembleDebug
+VERSION_NUM="${CURRENT_VERSION#v}"
+./gradlew clean assembleDebug -PappVersionName="$VERSION_NUM"
 
 # Rename APK to include version
-VERSION_NUM="${CURRENT_VERSION#v}"
 APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
 APK_NAME="Caramba-${VERSION_NUM}-android-tv.apk"
 mv "$APK_SRC" "app/build/outputs/apk/debug/$APK_NAME"

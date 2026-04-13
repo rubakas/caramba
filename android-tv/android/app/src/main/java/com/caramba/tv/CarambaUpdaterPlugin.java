@@ -55,12 +55,12 @@ public class CarambaUpdaterPlugin extends Plugin {
         if (version == null) return null;
         String cleaned = version.replaceFirst("^v", "");
         String[] parts = cleaned.split("\\.");
-        if (parts.length != 3) return null;
+        if (parts.length < 2 || parts.length > 3) return null;
         try {
             return new int[] {
                 Integer.parseInt(parts[0]),
                 Integer.parseInt(parts[1]),
-                Integer.parseInt(parts[2])
+                parts.length == 3 ? Integer.parseInt(parts[2]) : 0
             };
         } catch (NumberFormatException e) {
             return null;
