@@ -372,6 +372,10 @@ const episodes = {
     ).get(seriesId, code)
   },
 
+  findByFilePath(filePath) {
+    return get().prepare('SELECT * FROM episodes WHERE file_path = ?').get(filePath)
+  },
+
   upsert({ series_id, code, title, season_number, episode_number, file_path }) {
     const existing = this.findByCode(series_id, code)
     if (existing) {

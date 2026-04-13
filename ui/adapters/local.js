@@ -51,12 +51,14 @@ export function createLocalAdapter() {
     openInDefault: (...args) => api.openInDefault(...args),
 
     // Downloads
-    downloadEpisode: (id) => api.downloadEpisode(id),
-    deleteDownloadEpisode: (id) => api.deleteDownloadEpisode(id),
-    downloadSeason: (seriesId, seasonNum) => api.downloadSeason(seriesId, seasonNum),
-    deleteDownloadSeason: (seriesId, seasonNum) => api.deleteDownloadSeason(seriesId, seasonNum),
-    downloadMovie: (id) => api.downloadMovie(id),
-    deleteDownloadMovie: (id) => api.deleteDownloadMovie(id),
+    downloadEpisode: (arg) => api.downloadEpisode(arg),
+    deleteDownloadEpisode: (arg) => api.deleteDownloadEpisode(arg),
+    downloadSeason: (arg) => api.downloadSeason(arg),
+    deleteDownloadSeason: (arg) => api.deleteDownloadSeason(arg),
+    downloadMovie: (arg) => api.downloadMovie(arg),
+    deleteDownloadMovie: (arg) => api.deleteDownloadMovie(arg),
+    getDownloadStatusByFilePaths: (filePaths) => api.getDownloadStatusByFilePaths(filePaths),
+    getMovieDownloadStatusByFilePath: (filePath) => api.getMovieDownloadStatusByFilePath(filePath),
 
     // Discover
     searchShows: (query, type) => api.searchShows(query, type),

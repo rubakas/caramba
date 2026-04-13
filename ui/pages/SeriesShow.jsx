@@ -38,14 +38,17 @@ export default function SeriesShow() {
 
   const loadData = useCallback(async () => {
     try {
-      const data = await api.getSeriesShow(slug)
+      const [data, hasVlc] = await Promise.all([
+        api.getSeriesShow(slug),
+        api.checkVlc(),
+      ])
       if (!data) { navigate('/'); return }
       setSeries(data.series)
       setEpisodes(data.episodes)
       setSeasons(data.seasons)
       setResumeEp(data.resumeEp)
       setNextEp(data.nextEp)
-      setVlcAvailable(data.vlcAvailable || false)
+      setVlcAvailable(hasVlc)
 
       // Determine active season: last watched episode's season, or first season
       setActiveSeason(prev => {
@@ -144,8 +147,11 @@ export default function SeriesShow() {
   }
 
   const handleDownloadEpisode = async (episodeId) => {
+    // Find the episode to get its file_path (needed for hybrid mode where server IDs differ from local)
+    const ep = episodes.find(e => e.id === episodeId)
     showToast('Starting download...', { type: 'info', duration: 2000 })
-    const result = await api.downloadEpisode(episodeId)
+    // Pass serverEpisodeId for downloading from server when local file is not available
+    const result = await api.downloadEpisode({ episodeId, filePath: ep?.file_path, serverEpisodeId: episodeId })
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.ok) {
@@ -155,7 +161,9 @@ export default function SeriesShow() {
   }
 
   const handleDeleteDownloadEpisode = async (episodeId) => {
-    await api.deleteDownloadEpisode(episodeId)
+    // Find the episode to get its file_path (needed for hybrid mode where server IDs differ from local)
+    const ep = episodes.find(e => e.id === episodeId)
+    await api.deleteDownloadEpisode({ episodeId, filePath: ep?.file_path })
     showToast('Download deleted', { type: 'info', duration: 2000 })
     loadData()
   }
@@ -163,7 +171,8 @@ export default function SeriesShow() {
   const handleDownloadSeason = async (seasonNumber) => {
     if (!series) return
     showToast(`Downloading Season ${seasonNumber}...`, { type: 'info', duration: 3000 })
-    const result = await api.downloadSeason(series.id, seasonNumber)
+    // Pass seriesSlug for hybrid mode where server IDs differ from local
+    const result = await api.downloadSeason({ seriesId: series.id, seriesSlug: series.slug, seasonNumber })
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.results) {
@@ -180,7 +189,8 @@ export default function SeriesShow() {
 
   const handleDeleteSeasonDownloads = async (seasonNumber) => {
     if (!series) return
-    await api.deleteDownloadSeason(series.id, seasonNumber)
+    // Pass seriesSlug for hybrid mode where server IDs differ from local
+    await api.deleteDownloadSeason({ seriesId: series.id, seriesSlug: series.slug, seasonNumber })
     showToast(`Season ${seasonNumber} downloads deleted`, { type: 'info', duration: 2000 })
     loadData()
   }

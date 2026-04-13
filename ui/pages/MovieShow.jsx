@@ -122,7 +122,8 @@ export default function MovieShow() {
   const handleDownload = async () => {
     if (!movie) return
     showToast('Starting download...', { type: 'info', duration: 2000 })
-    const result = await api.downloadMovie(movie.id)
+    // Pass filePath and serverMovieId for hybrid mode
+    const result = await api.downloadMovie({ movieId: movie.id, filePath: movie.file_path, serverMovieId: movie.id })
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.ok) {
@@ -133,7 +134,8 @@ export default function MovieShow() {
 
   const handleDeleteDownload = async () => {
     if (!movie) return
-    await api.deleteDownloadMovie(movie.id)
+    // Pass filePath for hybrid mode
+    await api.deleteDownloadMovie({ movieId: movie.id, filePath: movie.file_path })
     showToast('Download deleted', { type: 'info', duration: 2000 })
     loadData()
   }

@@ -101,15 +101,17 @@ contextBridge.exposeInMainWorld('api', {
   saveGlassConfig: (config) => ipcRenderer.invoke('dev:saveGlassConfig', config),
 
   // Downloads (offline media cache)
-  downloadEpisode: (episodeId) => ipcRenderer.invoke('downloads:episode', episodeId),
-  downloadSeason: (seriesId, seasonNumber) => ipcRenderer.invoke('downloads:season', seriesId, seasonNumber),
-  downloadMovie: (movieId) => ipcRenderer.invoke('downloads:movie', movieId),
+  downloadEpisode: (arg) => ipcRenderer.invoke('downloads:episode', arg),
+  downloadSeason: (arg) => ipcRenderer.invoke('downloads:season', arg),
+  downloadMovie: (arg) => ipcRenderer.invoke('downloads:movie', arg),
   cancelDownload: (downloadId) => ipcRenderer.invoke('downloads:cancel', downloadId),
-  deleteDownloadEpisode: (episodeId) => ipcRenderer.invoke('downloads:deleteEpisode', episodeId),
-  deleteDownloadSeason: (seriesId, seasonNumber) => ipcRenderer.invoke('downloads:deleteSeason', seriesId, seasonNumber),
-  deleteDownloadMovie: (movieId) => ipcRenderer.invoke('downloads:deleteMovie', movieId),
+  deleteDownloadEpisode: (arg) => ipcRenderer.invoke('downloads:deleteEpisode', arg),
+  deleteDownloadSeason: (arg) => ipcRenderer.invoke('downloads:deleteSeason', arg),
+  deleteDownloadMovie: (arg) => ipcRenderer.invoke('downloads:deleteMovie', arg),
   listDownloads: () => ipcRenderer.invoke('downloads:list'),
   getStorageInfo: () => ipcRenderer.invoke('downloads:storageInfo'),
+  getDownloadStatusByFilePaths: (filePaths) => ipcRenderer.invoke('downloads:statusByFilePaths', filePaths),
+  getMovieDownloadStatusByFilePath: (filePath) => ipcRenderer.invoke('downloads:movieStatusByFilePath', filePath),
   onMediaDownloadProgress: (cb) => {
     const handler = (_e, data) => cb(data)
     ipcRenderer.on('downloads:progress', handler)

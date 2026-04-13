@@ -135,7 +135,53 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     // Series
     listSeries: withFallback(http.listSeries, local.listSeries),
     getResumable: withFallback(http.getResumable, local.getResumable),
-    getSeriesShow: withFallback(http.getSeriesShow, local.getSeriesShow),
+    // Custom getSeriesShow that enriches server data with local download status
+    getSeriesShow: async (slug) => {
+      // Wait for initial connection check before deciding
+      if (!initialCheckDone && initialCheckPromise) {
+        await initialCheckPromise
+      }
+
+      let data = null
+      let fromServer = false
+
+      if (connected) {
+        try {
+          data = await http.getSeriesShow(slug)
+          fromServer = true
+        } catch (err) {
+          if (isNetworkError(err)) {
+            setConnected(false)
+            console.warn('[hybrid] API unreachable, falling back to local:', err.message)
+          } else {
+            throw err
+          }
+        }
+      }
+
+      if (!data) {
+        data = await local.getSeriesShow(slug)
+        fromServer = false
+      }
+
+      // If data came from server, enrich episodes with local download status
+      if (data && fromServer && data.episodes && data.episodes.length > 0) {
+        const filePaths = data.episodes.map(ep => ep.file_path).filter(Boolean)
+        if (filePaths.length > 0) {
+          try {
+            const downloadStatus = await local.getDownloadStatusByFilePaths(filePaths)
+            data.episodes = data.episodes.map(ep => ({
+              ...ep,
+              download: ep.file_path ? (downloadStatus[ep.file_path] || null) : null,
+            }))
+          } catch (err) {
+            console.warn('[hybrid] Failed to get local download status:', err.message)
+          }
+        }
+      }
+
+      return data
+    },
     addSeries: local.addSeries,
     scanSeries: local.scanSeries,
     refreshSeriesMetadata: local.refreshSeriesMetadata,
@@ -149,7 +195,46 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
 
     // Movies — playMovie prefers HTTP (server has authoritative resume state)
     listMovies: withFallback(http.listMovies, local.listMovies),
-    getMovie: withFallback(http.getMovie, local.getMovie),
+    // Custom getMovie that enriches server data with local download status
+    getMovie: async (slug) => {
+      if (!initialCheckDone && initialCheckPromise) {
+        await initialCheckPromise
+      }
+
+      let data = null
+      let fromServer = false
+
+      if (connected) {
+        try {
+          data = await http.getMovie(slug)
+          fromServer = true
+        } catch (err) {
+          if (isNetworkError(err)) {
+            setConnected(false)
+            console.warn('[hybrid] API unreachable, falling back to local:', err.message)
+          } else {
+            throw err
+          }
+        }
+      }
+
+      if (!data) {
+        data = await local.getMovie(slug)
+        fromServer = false
+      }
+
+      // If data came from server, enrich with local download status
+      if (data && fromServer && data.file_path) {
+        try {
+          const downloadStatus = await local.getMovieDownloadStatusByFilePath(data.file_path)
+          data.download = downloadStatus || null
+        } catch (err) {
+          console.warn('[hybrid] Failed to get local movie download status:', err.message)
+        }
+      }
+
+      return data
+    },
     addMovies: local.addMovies,
     toggleMovie: withFallback(http.toggleMovie, local.toggleMovie),
     refreshMovieMetadata: local.refreshMovieMetadata,
@@ -268,6 +353,8 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     deleteDownloadSeason: local.deleteDownloadSeason,
     downloadMovie: local.downloadMovie,
     deleteDownloadMovie: local.deleteDownloadMovie,
+    getDownloadStatusByFilePaths: local.getDownloadStatusByFilePaths,
+    getMovieDownloadStatusByFilePath: local.getMovieDownloadStatusByFilePath,
 
     // === Discover: HTTP preferred, local fallback ===
     searchShows: withFallback(http.searchShows, local.searchShows),
