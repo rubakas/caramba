@@ -335,16 +335,19 @@ export default function VideoPlayer() {
             if (hasError) return
             
             if (queue.length > 0 && !sourceBuffer.updating) {
+              const chunk = queue[0]
               try {
-                sourceBuffer.appendBuffer(queue.shift())
+                sourceBuffer.appendBuffer(chunk)
+                queue.shift()  // Only remove after successful append
                 chunksAppended++
               } catch (e) {
                 if (e.name === 'QuotaExceededError') {
-                  console.warn('[MSE] QuotaExceededError - trimming buffer')
-                  // Try to trim, chunk stays in queue for retry
+                  console.warn('[MSE] QuotaExceededError - trimming buffer, chunk kept for retry')
+                  // Chunk stays at front of queue for retry after trim
                   trimBuffer()
                 } else {
                   console.error('[MSE] appendBuffer error:', e)
+                  queue.shift()  // Discard bad chunk
                   if (e.message?.includes('error attribute is not null')) {
                     console.error('[MSE] Video element in error state - will trigger recovery')
                     hasError = true
@@ -360,9 +363,18 @@ export default function VideoPlayer() {
           }
 
           sourceBuffer.addEventListener('updateend', () => {
-            // Always try to trim old data first
-            if (trimBuffer()) return
-            flushQueue()
+            // Trim old data if needed, then always flush queue.
+            // trimBuffer() calls sourceBuffer.remove() which triggers
+            // another updateend when done — but we still flush here to
+            // avoid gaps on slow devices.
+            if (!sourceBuffer.updating) {
+              trimBuffer()
+            }
+            // If trimBuffer started a remove, updateend will fire again.
+            // If not (nothing to trim), flush queue immediately.
+            if (!sourceBuffer.updating) {
+              flushQueue()
+            }
           })
 
           const appendChunk = (chunk) => {
