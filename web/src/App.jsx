@@ -13,6 +13,7 @@ import MovieShow from '@caramba/ui/pages/MovieShow'
 import Discover from '@caramba/ui/pages/Discover'
 import History from '@caramba/ui/pages/History'
 import Settings from '@caramba/ui/pages/Settings'
+import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Check if running in Capacitor (Android/iOS native app)
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform === true
@@ -122,8 +123,13 @@ export default function App() {
   // Create adapter with current API URL
   const adapter = useMemo(() => {
     console.log('Creating HTTP adapter with base URL:', apiUrl)
-    return createHttpAdapter(apiUrl || '')
-  }, [apiUrl])
+    const httpAdapter = createHttpAdapter(apiUrl || '')
+    // Expose adapter as window.api for components that access it directly (e.g., UpdatePrompt)
+    if (isNativeApp) {
+      window.api = httpAdapter
+    }
+    return httpAdapter
+  }, [apiUrl, isNativeApp])
 
   if (isLoading) {
     // For native apps, show minimal loading state (no text to avoid double loading)
@@ -205,6 +211,8 @@ export default function App() {
           </BrowserRouter>
           <VideoPlayer />
           <ToastContainer />
+          {/* Show update prompt on Android TV (Capacitor) */}
+          {isNativeApp && <UpdatePrompt />}
         </PlayerProvider>
       </ToastProvider>
     </ApiProvider>

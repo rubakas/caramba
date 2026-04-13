@@ -189,12 +189,38 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     onMediaDownloadProgress: noopUnsub,
     onSubtitlesReady: noopUnsub,
 
-    // Updates — no-ops
-    checkForUpdate: noopAsync,
-    onUpdateAvailable: noopUnsub,
-    onDownloadProgress: noopUnsub,
-    downloadUpdate: noopAsync,
-    installUpdate: noopAsync,
+    // Updates — use Capacitor CarambaUpdater plugin if available, otherwise no-ops
+    checkForUpdate: async () => {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaUpdater) {
+        return window.Capacitor.Plugins.CarambaUpdater.checkForUpdate()
+      }
+      return null
+    },
+    onUpdateAvailable: noopUnsub, // Not needed — we check manually on load
+    onDownloadProgress: (cb) => {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaUpdater) {
+        // Capacitor event listener returns a Promise<PluginListenerHandle>
+        let handle = null
+        window.Capacitor.Plugins.CarambaUpdater.addListener('downloadProgress', cb)
+          .then(h => { handle = h })
+        return () => {
+          if (handle) handle.remove()
+        }
+      }
+      return noop
+    },
+    downloadUpdate: async () => {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaUpdater) {
+        return window.Capacitor.Plugins.CarambaUpdater.downloadUpdate()
+      }
+      return { ok: false, error: 'Updates not available' }
+    },
+    installUpdate: async () => {
+      if (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaUpdater) {
+        return window.Capacitor.Plugins.CarambaUpdater.installUpdate()
+      }
+      return { ok: false, error: 'Updates not available' }
+    },
   }
 }
 
