@@ -415,8 +415,7 @@ class TranscoderService
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
 
       # No readrate throttle: let ffmpeg transcode as fast as the hardware
-      # encoder allows. The client's MSE SourceBuffer handles flow control,
-      # and removing the limit prevents buffer underruns on slower Macs.
+      # encoder allows. The client's MSE SourceBuffer handles flow control.
 
       args += [ "-i", file_path ]
 

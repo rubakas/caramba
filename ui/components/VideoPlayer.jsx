@@ -164,17 +164,23 @@ export default function VideoPlayer() {
     if (!mse) return
     mseRef.current = null
 
-    // 1. Abort the in-flight fetch first — this stops pumping data
+    // 1. Clear the resume check interval
+    if (mse.resumeCheckInterval) {
+      clearInterval(mse.resumeCheckInterval)
+      mse.resumeCheckInterval = null
+    }
+
+    // 2. Abort the in-flight fetch first — this stops pumping data
     try { mse.abortController.abort() } catch {}
 
-    // 2. Abort SourceBuffer (stops any pending appendBuffer/remove)
+    // 3. Abort SourceBuffer (stops any pending appendBuffer/remove)
     try {
       if (mse.sourceBuffer && mse.mediaSource.readyState === 'open') {
         mse.sourceBuffer.abort()
       }
     } catch {}
 
-    // 3. Revoke the blob URL (frees memory)
+    // 4. Revoke the blob URL (frees memory)
     if (mse.objectUrl) {
       URL.revokeObjectURL(mse.objectUrl)
     }
@@ -216,7 +222,7 @@ export default function VideoPlayer() {
         video.src = objectUrl
 
         const abortController = new AbortController()
-        const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl }
+        const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl, resumeCheckInterval: null }
         mseRef.current = mseState
 
         mediaSource.addEventListener('sourceopen', () => {
@@ -241,17 +247,39 @@ export default function VideoPlayer() {
           const queue = []
           let streamDone = false
           let chunksAppended = 0
+          let hasError = false  // Track if video element has entered error state
+          let pumpPaused = false  // Track if we've paused reading from stream
+          let reader = null  // Store reader reference for resuming
+
+          // Get how far ahead we've buffered from current playback position
+          const getBufferedAhead = () => {
+            try {
+              const vid = videoRef.current
+              if (!vid || sourceBuffer.buffered.length === 0) return 0
+              const playPos = isFinite(vid.currentTime) ? vid.currentTime : 0
+              // Find the buffered range containing current position
+              for (let i = 0; i < sourceBuffer.buffered.length; i++) {
+                const start = sourceBuffer.buffered.start(i)
+                const end = sourceBuffer.buffered.end(i)
+                if (playPos >= start && playPos <= end) {
+                  return end - playPos
+                }
+              }
+              return 0
+            } catch { return 0 }
+          }
 
           // Trim played-back data so the buffer doesn't grow forever.
-          // Keeps from (currentTime - 10s) forward.
+          // Keeps from (currentTime - 5s) forward.
           const trimBuffer = () => {
             try {
               if (sourceBuffer.buffered.length === 0 || sourceBuffer.updating) return false
               const bufStart = sourceBuffer.buffered.start(0)
               const vid = videoRef.current
               const playPos = vid && isFinite(vid.currentTime) ? vid.currentTime : 0
-              const trimEnd = Math.max(bufStart, playPos - 10)
-              if (trimEnd - bufStart > 1) {
+              // Keep only 5s behind playhead
+              const trimEnd = Math.max(bufStart, playPos - 5)
+              if (trimEnd - bufStart > 0.5) {
                 sourceBuffer.remove(bufStart, trimEnd)
                 return true
               }
@@ -267,49 +295,127 @@ export default function VideoPlayer() {
             if (chunksAppended === 0) return  // no data ever appended
             try {
               if (sourceBuffer.buffered.length > 0) {
+                console.log('[MSE] Calling endOfStream(), buffered ranges:', sourceBuffer.buffered.length)
                 mediaSource.endOfStream()
               }
             } catch {}
           }
 
+          // Resume pumping data from stream if we were paused
+          const maybeResumePump = () => {
+            if (pumpPaused && !streamDone && reader && !hasError) {
+              const bufferedAhead = getBufferedAhead()
+              // Resume when buffer drops below 15s
+              if (bufferedAhead < 15) {
+                console.log('[MSE] Resuming pump - buffered ahead:', bufferedAhead.toFixed(1), 's')
+                pumpPaused = false
+                pump()
+              }
+            }
+          }
+          
+          // Start a timer to periodically check if we should resume pumping
+          // This is needed because when pump is paused and queue is empty,
+          // there are no updateend events to trigger maybeResumePump
+          const startResumeChecker = () => {
+            if (mseState.resumeCheckInterval) return
+            mseState.resumeCheckInterval = setInterval(() => {
+              if (pumpPaused && !streamDone && !hasError) {
+                maybeResumePump()
+              } else if (streamDone || hasError) {
+                // Stop checking if stream is done or has error
+                clearInterval(mseState.resumeCheckInterval)
+                mseState.resumeCheckInterval = null
+              }
+            }, 1000)  // Check every second
+          }
+
           const flushQueue = () => {
+            // Don't try to append if video is in error state
+            if (hasError) return
+            
             if (queue.length > 0 && !sourceBuffer.updating) {
               try {
                 sourceBuffer.appendBuffer(queue.shift())
                 chunksAppended++
               } catch (e) {
                 if (e.name === 'QuotaExceededError') {
-                  console.warn('[MSE] QuotaExceededError, dropping queued chunks')
-                  queue.length = 0
+                  console.warn('[MSE] QuotaExceededError - trimming buffer')
+                  // Try to trim, chunk stays in queue for retry
+                  trimBuffer()
                 } else {
                   console.error('[MSE] appendBuffer error:', e)
+                  if (e.message?.includes('error attribute is not null')) {
+                    console.error('[MSE] Video element in error state - will trigger recovery')
+                    hasError = true
+                  }
                 }
               }
             } else if (streamDone && queue.length === 0 && !sourceBuffer.updating) {
               safeEndOfStream()
             }
+            
+            // Check if we can resume pumping
+            maybeResumePump()
           }
 
           sourceBuffer.addEventListener('updateend', () => {
+            // Always try to trim old data first
             if (trimBuffer()) return
             flushQueue()
           })
 
           const appendChunk = (chunk) => {
-            if (sourceBuffer.updating || queue.length > 0) {
-              queue.push(chunk)
-            } else {
-              try {
-                sourceBuffer.appendBuffer(chunk)
-                chunksAppended++
-              } catch (e) {
-                if (e.name === 'QuotaExceededError') {
-                  console.warn('[MSE] QuotaExceededError, dropping chunk')
-                } else {
-                  console.error('[MSE] appendBuffer error:', e)
-                }
-              }
+            // Don't accept new chunks if video is in error state
+            if (hasError) return false
+            
+            queue.push(chunk)
+            
+            // Try to flush immediately if not updating
+            if (!sourceBuffer.updating) {
+              flushQueue()
             }
+            
+            return true
+          }
+          
+          // Pump function - reads from stream with backpressure
+          const pump = () => {
+            if (!reader || streamDone || hasError) return
+            
+            // Check if we should pause - buffer is full enough
+            const bufferedAhead = getBufferedAhead()
+            if (bufferedAhead > 30 || queue.length > 50) {
+              pumpPaused = true
+              console.log('[MSE] Pausing pump - buffered ahead:', bufferedAhead.toFixed(1), 's, queue:', queue.length)
+              startResumeChecker()  // Start timer to check when to resume
+              return
+            }
+            
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                console.log('[MSE] Stream ended')
+                streamDone = true
+                if (mseState.resumeCheckInterval) {
+                  clearInterval(mseState.resumeCheckInterval)
+                  mseState.resumeCheckInterval = null
+                }
+                if (queue.length === 0 && !sourceBuffer.updating) {
+                  safeEndOfStream()
+                }
+                return
+              }
+              
+              appendChunk(value)
+              
+              // Continue pumping (will check backpressure at start)
+              pump()
+            }).catch((err) => {
+              // fetch aborted or network error — normal during seek/close
+              if (err.name !== 'AbortError') {
+                console.warn('[MSE] pump error:', err.message)
+              }
+            })
           }
 
           // Fetch the stream and pipe chunks into SourceBuffer.
@@ -319,24 +425,13 @@ export default function VideoPlayer() {
                 console.error('[MSE] Stream fetch failed:', response.status, response.statusText)
                 return
               }
-              const reader = response.body.getReader()
-              const pump = () => {
-                reader.read().then(({ done, value }) => {
-                  if (done) {
-                    streamDone = true
-                    safeEndOfStream()
-                    return
-                  }
-                  appendChunk(value)
-                  pump()
-                }).catch(() => {
-                  // fetch aborted or network error — normal during seek/close
-                })
-              }
+              reader = response.body.getReader()
               pump()
             })
-            .catch(() => {
-              // fetch aborted — normal during seek/close
+            .catch((err) => {
+              if (err.name !== 'AbortError') {
+                console.warn('[MSE] fetch error:', err.message)
+              }
             })
 
           // Don't call video.play() here — wait for data to arrive.
@@ -497,22 +592,57 @@ export default function VideoPlayer() {
     if (doSeekRef.current) doSeekRef.current(absTime)
   }, [])
 
-  // On video error: log it. The stall detection timer will handle recovery
-  // if the video remains in buffering state.  Don't eagerly recover here —
-  // calling cleanupMse + re-seek in a tight loop causes the
-  // "endOfStream before HAVE_METADATA" cascade.
+  // On video error: trigger recovery after a short delay.
+  // This handles CHUNK_DEMUXER_ERROR and other decode failures.
+  const errorRecoveryRef = useRef(null)
+  const lastRecoveryTimeRef = useRef(0)  // Timestamp of last recovery to debounce
+  
   useEffect(() => {
     if (!playerState.open) return
     const video = videoRef.current
     if (!video) return
 
     const onError = () => {
-      console.warn('[MSE] Video element error:', video.error?.message)
+      const err = video.error
+      // Ignore phantom errors where video.error is null
+      // This can happen when error events fire from previous sessions
+      if (!err) {
+        console.log('[MSE] Ignoring error event - video.error is null')
+        return
+      }
+      
+      const errorCode = err.code  // 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED
+      const errorMsg = err.message || 'unknown'
+      console.warn('[MSE] Video element error:', errorMsg, 'code:', errorCode)
+      
+      // Debounce: skip if we recovered recently (within 3 seconds)
+      const now = Date.now()
+      if (now - lastRecoveryTimeRef.current < 3000) {
+        console.log('[MSE] Skipping error - recently recovered')
+        return
+      }
+      
+      // Clear any pending recovery
+      if (errorRecoveryRef.current) {
+        clearTimeout(errorRecoveryRef.current)
+      }
+      
+      // Schedule recovery after 1 second (avoid tight retry loops)
+      errorRecoveryRef.current = setTimeout(() => {
+        console.warn('[MSE] Triggering recovery after video error')
+        lastRecoveryTimeRef.current = Date.now()
+        triggerRecovery()
+      }, 1000)
     }
 
     video.addEventListener('error', onError)
-    return () => video.removeEventListener('error', onError)
-  }, [playerState.open, playerState.sessionId])
+    return () => {
+      video.removeEventListener('error', onError)
+      if (errorRecoveryRef.current) {
+        clearTimeout(errorRecoveryRef.current)
+      }
+    }
+  }, [playerState.open, playerState.sessionId, triggerRecovery])
 
   useEffect(() => {
     if (!playerState.open) return
@@ -972,9 +1102,11 @@ export default function VideoPlayer() {
           playsInline
           muted={true}
           controls={false}
-          onPlay={() => setPaused(false)}
-          onPause={() => setPaused(true)}
-          onWaiting={() => setBuffering(true)}
+          onPlay={() => { console.log('[Video] play event'); setPaused(false) }}
+          onPause={() => { console.log('[Video] pause event', new Error().stack); setPaused(true) }}
+          onWaiting={() => { console.log('[Video] waiting event'); setBuffering(true) }}
+          onStalled={() => console.log('[Video] stalled event')}
+          onSuspend={() => console.log('[Video] suspend event')}
           onCanPlay={() => {
             setBuffering(false)
             const v = videoRef.current
@@ -1271,10 +1403,12 @@ export default function VideoPlayer() {
              }, 250)
            }
          }}
-        onPlay={() => setPaused(false)}
-        onPause={() => setPaused(true)}
-        onWaiting={() => setBuffering(true)}
-        onCanPlay={() => {
+         onPlay={() => { console.log('[Video] play event'); setPaused(false) }}
+         onPause={() => { console.log('[Video] pause event', new Error().stack); setPaused(true) }}
+         onWaiting={() => { console.log('[Video] waiting event'); setBuffering(true) }}
+         onStalled={() => console.log('[Video] stalled event')}
+         onSuspend={() => console.log('[Video] suspend event')}
+         onCanPlay={() => {
           setBuffering(false)
           // Ensure playback starts — autoPlay may not fire with MSE
           const v = videoRef.current

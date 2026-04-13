@@ -169,8 +169,7 @@ function start(filePath, seekTime = 0, opts = {}) {
   }
 
   // No readrate throttle: let ffmpeg transcode as fast as the hardware
-  // encoder allows. The player's MSE SourceBuffer handles flow control,
-  // and removing the limit prevents buffer underruns on slower Macs.
+  // encoder allows. The client's MSE SourceBuffer handles flow control.
 
   args.push('-i', filePath)
 
