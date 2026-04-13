@@ -1,7 +1,6 @@
 class Api::PlaybackController < Api::BaseController
-  # The stream action uses ActionController::Live to pipe ffmpeg's
-  # fragmented MP4 output directly to the HTTP response.
-  include ActionController::Live
+  # NOTE: ActionController::Live is included dynamically only in the `stream`
+  # action via `extend`. This avoids breaking regular render calls in other actions.
 
   # ── Existing endpoints ──────────────────────────────────────────────
 
@@ -89,25 +88,13 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, file_path, start_time,
       audio_stream_index: audio_stream_index,
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
+      subtitle_stream_index: subtitle_stream_index,
       duration: info[:duration],
       format: format)
 
     session[:playback_session_id] = session_id
 
-    # Extract text subtitles synchronously (full file, absolute timestamps).
-    # Must complete before response is sent so client can load track element.
-    # Desktop works the same way — VTT cues use absolute times that match
-    # video.currentTime directly.
-    if subtitle_stream_index && !is_bitmap
-      vtt = TranscoderService.extract_subtitles(file_path, subtitle_stream_index)
-      if vtt
-        TranscoderService.set_session_subtitle(session_id, vtt, stream_index: subtitle_stream_index)
-        Rails.logger.info "[Subtitle] Extracted #{vtt.lines.count} lines for stream #{subtitle_stream_index}"
-      else
-        Rails.logger.warn "[Subtitle] Failed to extract subtitles for stream #{subtitle_stream_index}"
-      end
-    end
-
+    # Subtitles are extracted asynchronously by TranscoderService
     stream_url = format == :hls ? nil : "#{api_base_url}/api/playback/stream/#{session_id}"
     hls_url = format == :hls ? "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8" : nil
     subtitle_url = subtitle_stream_index && !is_bitmap ? "#{api_base_url}/api/playback/subtitles?session=#{session_id}" : nil
@@ -132,47 +119,8 @@ class Api::PlaybackController < Api::BaseController
     render json: { error: e.message }, status: :internal_server_error
   end
 
-  # GET /api/playback/stream/:session_id
-  #
-  # Pipes ffmpeg's fragmented MP4 stdout directly to the HTTP response.
-  # This mirrors the desktop Electron stream:// protocol handler.
-  # The browser's <video> element can play fMP4 natively.
-  def stream
-    session_id = params[:session_id]
-
-    unless TranscoderService.active?(session_id)
-      response.headers["Content-Type"] = "text/plain"
-      response.stream.write "Session not found"
-      response.stream.close
-      return
-    end
-
-    io = TranscoderService.stream_io
-    unless io
-      response.headers["Content-Type"] = "text/plain"
-      response.stream.write "No active stream"
-      response.stream.close
-      return
-    end
-
-    response.headers["Content-Type"] = "video/mp4"
-    response.headers["Cache-Control"] = "no-cache, no-store"
-    response.headers["X-Accel-Buffering"] = "no"  # disable nginx buffering if proxied
-    response.headers["Last-Modified"] = Time.now.httpdate  # prevent Rack::ConditionalGet buffering
-    response.headers["ETag"] = nil  # prevent Rack::ETag buffering
-
-    # Pipe ffmpeg stdout → HTTP response in 64KB chunks.
-    # Force binary encoding so Rack/Puma don't attempt any re-encoding.
-    begin
-      while (chunk = io.read(65_536))
-        response.stream.write(chunk)
-      end
-    rescue IOError, Errno::EPIPE, ActionController::Live::ClientDisconnected => e
-      Rails.logger.debug "[Stream] client disconnected or pipe closed: #{e.class}"
-    ensure
-      response.stream.close
-    end
-  end
+  # NOTE: The stream action is in Api::PlaybackStreamController to isolate
+  # ActionController::Live from this controller's regular render calls.
 
   # POST /api/playback/seek
   # Body: { session, seekTime }
@@ -245,6 +193,10 @@ class Api::PlaybackController < Api::BaseController
   # seek position.  After a seek, video.currentTime restarts from 0, but
   # the extracted VTT has absolute timestamps from the source file.
   # This mirrors the desktop subtitle:// protocol which also shifts by seekBase.
+  # GET /api/playback/subtitles?session=X
+  #
+  # Serves WebVTT subtitles. Returns empty VTT if not yet extracted.
+  # Client should retry if subtitles are expected but not ready.
   def subtitles
     session_id = params[:session]
     vtt = TranscoderService.get_session_subtitle(session_id)

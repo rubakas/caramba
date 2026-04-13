@@ -87,19 +87,26 @@ export default function MovieShow() {
   }, [loadData, api])
 
   const handlePlay = async () => {
-    const result = await api.playMovie(slug)
-    if (!result || result.error) {
-      showToast(result?.error || 'Failed to start playback', { type: 'error' })
-      return
+    try {
+      const result = await api.playMovie(slug)
+      if (!result || result.error) {
+        showToast(result?.error || 'Failed to start playback', { type: 'error' })
+        return
+      }
+      await openPlayer({
+        type: 'movie',
+        movieId: result.movie_id,
+        filePath: result.file_path,
+        startTime: result.start_time,
+        title: movie?.title || '',
+      })
+      loadData()
+    } catch (err) {
+      // Extract error message from API response if available
+      const msg = err.message?.replace(/^API \d+:\s*/, '') || 'Failed to start playback'
+      const parsed = msg.startsWith('{') ? JSON.parse(msg) : null
+      showToast(parsed?.error || msg, { type: 'error' })
     }
-    await openPlayer({
-      type: 'movie',
-      movieId: result.movie_id,
-      filePath: result.file_path,
-      startTime: result.start_time,
-      title: movie?.title || '',
-    })
-    loadData()
   }
 
   const handleToggle = async () => {

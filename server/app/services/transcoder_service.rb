@@ -86,12 +86,15 @@ class TranscoderService
       mu = session_mutex(session_id)
       mu.synchronize do
         kill_ffmpeg
+        kill_subtitle_extractor
         cleanup_hls_dir  # clean up any previous HLS segments
 
         duration = opts[:duration].to_f
         raise "duration is required" unless duration > 0
 
         format = opts[:format]&.to_sym || :fmp4
+        subtitle_stream_index = opts[:subtitle_stream_index]
+        is_bitmap = opts[:burn_subtitle_index].present?
 
         @session = {
           id: session_id,
@@ -100,6 +103,7 @@ class TranscoderService
           seek_time: start_time.to_f,
           audio_stream_index: opts[:audio_stream_index],
           burn_subtitle_index: opts[:burn_subtitle_index],
+          subtitle_stream_index: subtitle_stream_index,
           subtitle_vtt: nil,
           format: format,
           hls_dir: format == :hls ? File.join(TMP_ROOT, "hls", session_id) : nil,
@@ -110,6 +114,11 @@ class TranscoderService
           start_ffmpeg_hls(file_path, start_time.to_f, opts)
         else
           start_ffmpeg(file_path, start_time.to_f, opts)
+        end
+
+        # Extract text subtitles in background (non-blocking)
+        if subtitle_stream_index && !is_bitmap
+          extract_subtitles_async(session_id, file_path, subtitle_stream_index)
         end
 
         Rails.logger.info "[Transcoder] session #{session_id} (#{format}): #{File.basename(file_path)}, " \
@@ -191,6 +200,7 @@ class TranscoderService
 
     # ── Subtitle extraction ───────────────────────────────────────────
 
+    # Synchronous extraction (used internally)
     def extract_subtitles(file_path, stream_index)
       args = %w[-v quiet]
       args += [ "-i", file_path ]
@@ -199,11 +209,72 @@ class TranscoderService
 
       stdout, stderr, status = run_command(ffmpeg_path, args)
       unless status.success? && stdout.present?
-        Rails.logger.warn "[Subtitle] extraction failed: code=#{status.exitstatus}, stderr=#{stderr[0..300]}"
+        Rails.logger.warn "[Subtitle] extraction failed: code=#{status.exitstatus}, stderr=#{stderr.to_s[0..300]}"
         return nil
       end
 
       stdout
+    end
+
+    # Async extraction in a background process (non-blocking)
+    def extract_subtitles_async(session_id, file_path, stream_index)
+      kill_subtitle_extractor
+
+      args = %w[-v quiet]
+      args += [ "-i", file_path ]
+      args += [ "-map", "0:#{stream_index}" ]
+      args += %w[-c:s webvtt -f webvtt pipe:1]
+
+      rd, wr = IO.pipe
+      rd.binmode
+
+      pid = spawn(
+        ffmpeg_path, *args,
+        in: :close,
+        out: wr,
+        err: :close,
+        pgroup: true
+      )
+      wr.close
+
+      @subtitle_pid = pid
+      @subtitle_session_id = session_id
+      @subtitle_stream_index = stream_index
+
+      # Read output in a thread (doesn't block Puma)
+      Thread.new do
+        begin
+          vtt = rd.read
+          rd.close
+          Process.waitpid(pid, Process::WNOHANG) rescue nil
+
+          if vtt.present? && @session && @session[:id] == session_id
+            @session[:subtitle_vtt] = vtt
+            @session[:active_subtitle_index] = stream_index
+            Rails.logger.info "[Subtitle] Extracted #{vtt.lines.count} lines for stream #{stream_index}"
+          end
+        rescue IOError, Errno::EPIPE => e
+          Rails.logger.debug "[Subtitle] extraction stopped: #{e.class}"
+        rescue => e
+          Rails.logger.error "[Subtitle] extraction error: #{e.message}"
+        ensure
+          @subtitle_pid = nil
+        end
+      end
+    end
+
+    def kill_subtitle_extractor
+      pid = @subtitle_pid
+      @subtitle_pid = nil
+
+      return unless pid
+
+      begin
+        Process.kill("TERM", pid)
+        Process.waitpid(pid, Process::WNOHANG)
+      rescue Errno::ESRCH, Errno::ECHILD
+        # already dead
+      end
     end
 
     def set_session_subtitle(session_id, vtt, stream_index: nil)
@@ -354,6 +425,7 @@ class TranscoderService
     # Full stop: kill ffmpeg and clear session state.
     def stop_inner
       kill_ffmpeg
+      kill_subtitle_extractor
       cleanup_hls_dir
       @session = nil
     end
@@ -414,8 +486,8 @@ class TranscoderService
       # Seek before input for fast seeking
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
 
-      # No readrate throttle: let ffmpeg transcode as fast as the hardware
-      # encoder allows. The client's MSE SourceBuffer handles flow control.
+      # Reduce startup latency: don't analyze the whole file
+      args += %w[-analyzeduration 2000000 -probesize 2000000]
 
       args += [ "-i", file_path ]
 
@@ -436,10 +508,11 @@ class TranscoderService
       end
 
       # Video encoding: H.264 via VideoToolbox (matches desktop)
-      # -g 48 = keyframe every 2s at 24fps. Without this, VideoToolbox
-      # inserts keyframes every ~0.5s which fragments the MP4 excessively.
+      # -realtime 1: prioritize encoding speed over compression efficiency
+      # -g 48 = keyframe every 2s at 24fps
       args += %w[
         -c:v h264_videotoolbox
+        -realtime 1
         -b:v 4M
         -maxrate 6M
         -bufsize 12M

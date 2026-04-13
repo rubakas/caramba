@@ -1508,7 +1508,7 @@ export default function VideoPlayer() {
               style={{ background: `linear-gradient(to right, #fff 0%, #fff ${volume * 100}%, rgba(255,255,255,.3) ${volume * 100}%, rgba(255,255,255,.3) 100%)` }}
             />
             {/* Volume icon (mute toggle) */}
-            <button className="video-player-util-icon" tabIndex={0} onClick={() => {
+            <button className="video-player-util-icon video-player-volume-btn" tabIndex={0} onClick={() => {
               const v = videoRef.current
               if (v) {
                 v.muted = !v.muted

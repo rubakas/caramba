@@ -46,7 +46,9 @@ Rails.application.routes.draw do
     end
 
     # Video stream: pipes ffmpeg fMP4 output directly to HTTP response
-    get "playback/stream/:session_id", to: "playback#stream", as: :playback_stream
+    # Uses separate controller with ActionController::Live to avoid breaking
+    # regular render calls in PlaybackController.
+    get "playback/stream/:session_id", to: "playback_stream#stream", as: :playback_stream
 
     # HLS stream: serves playlist and segments for Safari/iOS
     get "playback/hls/:session_id/playlist.m3u8", to: "playback#hls_playlist", as: :playback_hls_playlist
