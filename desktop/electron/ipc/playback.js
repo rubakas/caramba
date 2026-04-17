@@ -97,7 +97,7 @@ function register() {
       }
 
       // Start transcoding — burn bitmap subtitles into video if selected
-      transcoder.start(filePath, startTime, {
+      await transcoder.start(filePath, startTime, {
         audioStreamIndex,
         burnSubtitleIndex: isBitmapSubtitle ? subtitleStreamIndex : undefined,
       })
@@ -130,7 +130,7 @@ function register() {
       }
 
       return {
-        streamUrl: 'stream://video',
+        streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
         duration: info.duration,
         startTime,
         subtitleUrl: null, // subtitles arrive asynchronously
@@ -152,14 +152,14 @@ function register() {
     const filePath = transcoder.getActiveFilePath()
     if (!filePath) return { error: 'No active playback' }
 
-    transcoder.start(filePath, seekTime, {
+    await transcoder.start(filePath, seekTime, {
       audioStreamIndex: currentAudioStreamIndex,
       burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
     })
     currentSeekBase = seekTime
 
     return {
-      streamUrl: 'stream://video',
+      streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
     }
   })
@@ -173,14 +173,14 @@ function register() {
     const seekTime = currentSeekBase + (currentVideoTime || 0)
     currentAudioStreamIndex = audioStreamIndex
 
-    transcoder.start(filePath, seekTime, {
+    await transcoder.start(filePath, seekTime, {
       audioStreamIndex,
       burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
     })
     currentSeekBase = seekTime
 
     return {
-      streamUrl: 'stream://video',
+      streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
     }
   })
@@ -237,14 +237,14 @@ function register() {
     const seekTime = currentSeekBase + (currentVideoTime || 0)
     currentBurnSubtitleIndex = subtitleStreamIndex // null = off
 
-    transcoder.start(filePath, seekTime, {
+    await transcoder.start(filePath, seekTime, {
       audioStreamIndex: currentAudioStreamIndex,
       burnSubtitleIndex: subtitleStreamIndex ?? undefined,
     })
     currentSeekBase = seekTime
 
     return {
-      streamUrl: 'stream://video',
+      streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
     }
   })

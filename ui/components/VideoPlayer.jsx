@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
+import Hls from 'hls.js'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi } from '../context/ApiContext'
@@ -91,7 +92,6 @@ export default function VideoPlayer() {
   // ffmpeg starts from seekBase, so the video element's timeline resets to 0.
   // Absolute time = seekBase + video.currentTime.
   const seekBaseRef = useRef(0)
-  const stallTimerRef = useRef(null)
 
   const [paused, setPaused] = useState(false)
   const [currentTime, setCurrentTime] = useState(0) // absolute time for display
@@ -151,44 +151,18 @@ export default function VideoPlayer() {
   }, [playerState.open])
 
   // ── Source attachment ─────────────────────────────────────────────
-  // For HLS (Safari/iOS or hls.js), use native or library playback.
-  // For HTTP streams (web path), use MediaSource Extensions (MSE) to
-  // feed fMP4 chunks to the browser.  This avoids Chrome's issues with
-  // playing fragmented MP4 directly via <video src="http://...">.
-  //
-  // For stream:// (desktop/Electron), use direct src assignment.
-  const mseRef = useRef(null)   // { mediaSource, sourceBuffer, abortController }
+  // All platforms are fed an HLS manifest:
+  //   - Safari / iOS — native HLS via <video src="…m3u8">
+  //   - Chromium / Firefox / Android WebView — hls.js
+  // Desktop Electron serves the same manifest via the stream:// protocol;
+  // the fetch/playback code path is identical.
+  const hlsRef = useRef(null)
 
-  const cleanupMse = useCallback(() => {
-    const mse = mseRef.current
-    if (!mse) return
-    mseRef.current = null
-
-    // 1. Clear the resume check interval
-    if (mse.resumeCheckInterval) {
-      clearInterval(mse.resumeCheckInterval)
-      mse.resumeCheckInterval = null
+  const cleanupSource = useCallback(() => {
+    if (hlsRef.current) {
+      try { hlsRef.current.destroy() } catch {}
+      hlsRef.current = null
     }
-
-    // 2. Abort the in-flight fetch first — this stops pumping data
-    try { mse.abortController.abort() } catch {}
-
-    // 3. Abort SourceBuffer (stops any pending appendBuffer/remove)
-    try {
-      if (mse.sourceBuffer && mse.mediaSource.readyState === 'open') {
-        mse.sourceBuffer.abort()
-      }
-    } catch {}
-
-    // 4. Revoke the blob URL (frees memory)
-    if (mse.objectUrl) {
-      URL.revokeObjectURL(mse.objectUrl)
-    }
-
-    // NOTE: Do NOT call mediaSource.endOfStream() here.
-    // Calling endOfStream() before the demuxer has HAVE_METADATA causes
-    // a Chrome DEMUXER_ERROR_COULD_NOT_OPEN.  Revoking the object URL
-    // and aborting the fetch is sufficient for cleanup.
   }, [])
 
   useEffect(() => {
@@ -196,276 +170,75 @@ export default function VideoPlayer() {
     const video = videoRef.current
     if (!video) return
 
-    // Determine which URL to use
-    const hlsUrl = playerState.hlsUrl
-    const streamUrl = playerState.streamUrl
+    const manifestUrl = playerState.hlsUrl || playerState.streamUrl
+    if (!manifestUrl) return
 
-    // Clean up any previous MSE session
-    cleanupMse()
+    cleanupSource()
 
-    if (hlsUrl) {
-      // ── HLS path (Safari/iOS native) ────────────────────────────
-      // Safari and iOS support HLS natively via <video src="...m3u8">
-      console.log('[HLS] Setting video src:', hlsUrl)
-      video.src = hlsUrl
+    const useNativeHls = video.canPlayType('application/vnd.apple.mpegurl')
+
+    if (useNativeHls) {
+      console.log('[Player] Native HLS:', manifestUrl)
+      video.src = manifestUrl
       video.load()
-      video.play().catch((err) => {
-        console.error('[HLS] play() rejected:', err.name, err.message)
+      video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
+    } else if (Hls.isSupported()) {
+      console.log('[Player] hls.js:', manifestUrl)
+      const hls = new Hls({
+        // Conservative buffer caps — Android TV WebView has tight memory limits.
+        maxBufferLength: 30,                // seconds forward
+        maxMaxBufferLength: 60,             // seconds hard cap
+        maxBufferSize: 60 * 1024 * 1024,    // 60 MB
+        backBufferLength: 15,               // seconds behind playhead
+        // Retry transient network errors before giving up
+        manifestLoadingMaxRetry: 5,
+        manifestLoadingRetryDelay: 1000,
+        levelLoadingMaxRetry: 5,
+        levelLoadingRetryDelay: 1000,
+        fragLoadingMaxRetry: 5,
+        fragLoadingRetryDelay: 1000,
       })
-    } else if (streamUrl) {
-      const isHttpStream = streamUrl.startsWith('http://') || streamUrl.startsWith('https://')
+      hlsRef.current = hls
+      hls.loadSource(manifestUrl)
+      hls.attachMedia(video)
 
-      if (isHttpStream && typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028,mp4a.40.2"')) {
-        // ── MSE path (web) ──────────────────────────────────────────
-        const mediaSource = new MediaSource()
-        const objectUrl = URL.createObjectURL(mediaSource)
-        video.src = objectUrl
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
+      })
 
-        const abortController = new AbortController()
-        const mseState = { mediaSource, sourceBuffer: null, abortController, objectUrl, resumeCheckInterval: null }
-        mseRef.current = mseState
-
-        mediaSource.addEventListener('sourceopen', () => {
-          // Guard: if we were cleaned up before sourceopen fired, bail out
-          if (mseRef.current !== mseState) return
-
-          let sourceBuffer
-          try {
-            sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.640028,mp4a.40.2"')
-          } catch (e) {
-            console.error('[MSE] addSourceBuffer failed:', e)
-            // Fallback to direct src
-            URL.revokeObjectURL(objectUrl)
-            video.src = streamUrl
-            video.load()
-            video.play().catch(() => {})
-            return
-          }
-
-          mseState.sourceBuffer = sourceBuffer
-
-          const queue = []
-          let streamDone = false
-          let chunksAppended = 0
-          let hasError = false  // Track if video element has entered error state
-          let pumpPaused = false  // Track if we've paused reading from stream
-          let reader = null  // Store reader reference for resuming
-
-          // Get how far ahead we've buffered from current playback position
-          const getBufferedAhead = () => {
-            try {
-              const vid = videoRef.current
-              if (!vid || sourceBuffer.buffered.length === 0) return 0
-              const playPos = isFinite(vid.currentTime) ? vid.currentTime : 0
-              // Find the buffered range containing current position
-              for (let i = 0; i < sourceBuffer.buffered.length; i++) {
-                const start = sourceBuffer.buffered.start(i)
-                const end = sourceBuffer.buffered.end(i)
-                if (playPos >= start && playPos <= end) {
-                  return end - playPos
-                }
-              }
-              return 0
-            } catch { return 0 }
-          }
-
-          // Trim played-back data so the buffer doesn't grow forever.
-          // Keeps from (currentTime - 5s) forward.
-          const trimBuffer = () => {
-            try {
-              if (sourceBuffer.buffered.length === 0 || sourceBuffer.updating) return false
-              const bufStart = sourceBuffer.buffered.start(0)
-              const vid = videoRef.current
-              const playPos = vid && isFinite(vid.currentTime) ? vid.currentTime : 0
-              // Keep only 5s behind playhead
-              const trimEnd = Math.max(bufStart, playPos - 5)
-              if (trimEnd - bufStart > 0.5) {
-                sourceBuffer.remove(bufStart, trimEnd)
-                return true
-              }
-            } catch {}
-            return false
-          }
-
-          // Safe endOfStream: only call if we actually appended data and
-          // the demuxer has had a chance to initialize (buffered ranges exist).
-          const safeEndOfStream = () => {
-            if (mediaSource.readyState !== 'open') return
-            if (sourceBuffer.updating) return
-            if (chunksAppended === 0) return  // no data ever appended
-            try {
-              if (sourceBuffer.buffered.length > 0) {
-                console.log('[MSE] Calling endOfStream(), buffered ranges:', sourceBuffer.buffered.length)
-                mediaSource.endOfStream()
-              }
-            } catch {}
-          }
-
-          // Resume pumping data from stream if we were paused
-          const maybeResumePump = () => {
-            if (pumpPaused && !streamDone && reader && !hasError) {
-              const bufferedAhead = getBufferedAhead()
-              // Resume when buffer drops below 15s
-              if (bufferedAhead < 15) {
-                console.log('[MSE] Resuming pump - buffered ahead:', bufferedAhead.toFixed(1), 's')
-                pumpPaused = false
-                pump()
-              }
-            }
-          }
-          
-          // Start a timer to periodically check if we should resume pumping
-          // This is needed because when pump is paused and queue is empty,
-          // there are no updateend events to trigger maybeResumePump
-          const startResumeChecker = () => {
-            if (mseState.resumeCheckInterval) return
-            mseState.resumeCheckInterval = setInterval(() => {
-              if (pumpPaused && !streamDone && !hasError) {
-                maybeResumePump()
-              } else if (streamDone || hasError) {
-                // Stop checking if stream is done or has error
-                clearInterval(mseState.resumeCheckInterval)
-                mseState.resumeCheckInterval = null
-              }
-            }, 1000)  // Check every second
-          }
-
-          const flushQueue = () => {
-            // Don't try to append if video is in error state
-            if (hasError) return
-            
-            if (queue.length > 0 && !sourceBuffer.updating) {
-              const chunk = queue[0]
-              try {
-                sourceBuffer.appendBuffer(chunk)
-                queue.shift()  // Only remove after successful append
-                chunksAppended++
-              } catch (e) {
-                if (e.name === 'QuotaExceededError') {
-                  console.warn('[MSE] QuotaExceededError - trimming buffer, chunk kept for retry')
-                  // Chunk stays at front of queue for retry after trim
-                  trimBuffer()
-                } else {
-                  console.error('[MSE] appendBuffer error:', e)
-                  queue.shift()  // Discard bad chunk
-                  if (e.message?.includes('error attribute is not null')) {
-                    console.error('[MSE] Video element in error state - will trigger recovery')
-                    hasError = true
-                  }
-                }
-              }
-            } else if (streamDone && queue.length === 0 && !sourceBuffer.updating) {
-              safeEndOfStream()
-            }
-            
-            // Check if we can resume pumping
-            maybeResumePump()
-          }
-
-          sourceBuffer.addEventListener('updateend', () => {
-            // Trim old data if needed, then always flush queue.
-            // trimBuffer() calls sourceBuffer.remove() which triggers
-            // another updateend when done — but we still flush here to
-            // avoid gaps on slow devices.
-            if (!sourceBuffer.updating) {
-              trimBuffer()
-            }
-            // If trimBuffer started a remove, updateend will fire again.
-            // If not (nothing to trim), flush queue immediately.
-            if (!sourceBuffer.updating) {
-              flushQueue()
-            }
-          })
-
-          const appendChunk = (chunk) => {
-            // Don't accept new chunks if video is in error state
-            if (hasError) return false
-            
-            queue.push(chunk)
-            
-            // Try to flush immediately if not updating
-            if (!sourceBuffer.updating) {
-              flushQueue()
-            }
-            
-            return true
-          }
-          
-          // Pump function - reads from stream continuously.
-          // We never pause the pump — TCP backpressure and the browser's
-          // internal fetch buffer handle flow control naturally.  Pausing
-          // reader.read() on constrained devices (Chromecast) can cause
-          // the browser to drop the HTTP connection.
-          const pump = () => {
-            if (!reader || streamDone || hasError) return
-            
-            reader.read().then(({ done, value }) => {
-              if (done) {
-                console.log('[MSE] Stream ended')
-                streamDone = true
-                if (mseState.resumeCheckInterval) {
-                  clearInterval(mseState.resumeCheckInterval)
-                  mseState.resumeCheckInterval = null
-                }
-                if (queue.length === 0 && !sourceBuffer.updating) {
-                  safeEndOfStream()
-                }
-                return
-              }
-              
-              appendChunk(value)
-              
-              // Continue pumping (will check backpressure at start)
-              pump()
-            }).catch((err) => {
-              // fetch aborted or network error — normal during seek/close
-              if (err.name !== 'AbortError') {
-                console.warn('[MSE] pump error:', err.message)
-              }
-            })
-          }
-
-          // Fetch the stream and pipe chunks into SourceBuffer.
-          fetch(streamUrl, { signal: abortController.signal })
-            .then(response => {
-              if (!response.ok) {
-                console.error('[MSE] Stream fetch failed:', response.status, response.statusText)
-                return
-              }
-              reader = response.body.getReader()
-              pump()
-            })
-            .catch((err) => {
-              if (err.name !== 'AbortError') {
-                console.warn('[MSE] fetch error:', err.message)
-              }
-            })
-
-          // Don't call video.play() here — wait for data to arrive.
-          // The <video autoPlay> attribute + canplay event will handle it.
-        }, { once: true })
-      } else {
-        // ── Direct src path (desktop / fallback) ────────────────────
-        video.src = streamUrl
-        video.load()
-        video.play().catch(() => {})
-      }
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal) {
+          console.log('[Player] hls.js non-fatal:', data.type, data.details)
+          return
+        }
+        console.warn('[Player] hls.js fatal:', data.type, data.details)
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            hls.startLoad()
+            break
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            hls.recoverMediaError()
+            break
+          default:
+            cleanupSource()
+        }
+      })
+    } else {
+      console.warn('[Player] No HLS support; falling back to direct src')
+      video.src = manifestUrl
+      video.load()
+      video.play().catch(() => {})
     }
 
     return () => {
-      cleanupMse()
-      // For the direct-src path (stream://), clear the video src so the
-      // browser's internal loader stops requesting the old stream.
-      // Without this, re-firing the effect (e.g. stall recovery) leaves
-      // the old connection alive, and the video element may keep retrying
-      // a dead stream indefinitely.
+      cleanupSource()
       const v = videoRef.current
-      if (v && !mseRef.current) {
+      if (v) {
         v.removeAttribute('src')
-        v.load()  // forces the element to release the old connection
+        v.load()
       }
     }
-  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, cleanupMse])
+  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, cleanupSource])
 
   // Helper: disable all text tracks on the video element.
   const disableAllTextTracks = useCallback(() => {
@@ -582,91 +355,6 @@ export default function VideoPlayer() {
     return () => clearInterval(timer)
   }, [playerState.open, playerState.type, playerState.episodeId, playerState.movieId, totalDuration])
 
-  // Stall detection: if buffering persists for 10s without recovery,
-  // automatically re-seek to the current position to restart the
-  // ffmpeg → MSE pipeline.  This handles cases where ffmpeg dies
-  // silently or the SourceBuffer enters an unrecoverable state.
-  // We use doSeekRef to avoid a dependency cycle (doSeek → setBuffering
-  // → buffering → this effect → doSeek).
-  const doSeekRef = useRef(null)
-
-  const triggerRecovery = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    const absTime = seekBaseRef.current + (isFinite(video.currentTime) ? video.currentTime : 0)
-    console.warn(`Auto-recovering playback at ${absTime.toFixed(1)}s`)
-    seekingRef.current = false
-    if (doSeekRef.current) doSeekRef.current(absTime)
-  }, [])
-
-  // On video error: trigger recovery after a short delay.
-  // This handles CHUNK_DEMUXER_ERROR and other decode failures.
-  const errorRecoveryRef = useRef(null)
-  const lastRecoveryTimeRef = useRef(0)  // Timestamp of last recovery to debounce
-  
-  useEffect(() => {
-    if (!playerState.open) return
-    const video = videoRef.current
-    if (!video) return
-
-    const onError = () => {
-      const err = video.error
-      // Ignore phantom errors where video.error is null
-      // This can happen when error events fire from previous sessions
-      if (!err) {
-        console.log('[MSE] Ignoring error event - video.error is null')
-        return
-      }
-      
-      const errorCode = err.code  // 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED
-      const errorMsg = err.message || 'unknown'
-      console.warn('[MSE] Video element error:', errorMsg, 'code:', errorCode)
-      
-      // Debounce: skip if we recovered recently (within 3 seconds)
-      const now = Date.now()
-      if (now - lastRecoveryTimeRef.current < 3000) {
-        console.log('[MSE] Skipping error - recently recovered')
-        return
-      }
-      
-      // Clear any pending recovery
-      if (errorRecoveryRef.current) {
-        clearTimeout(errorRecoveryRef.current)
-      }
-      
-      // Schedule recovery after 1 second (avoid tight retry loops)
-      errorRecoveryRef.current = setTimeout(() => {
-        console.warn('[MSE] Triggering recovery after video error')
-        lastRecoveryTimeRef.current = Date.now()
-        triggerRecovery()
-      }, 1000)
-    }
-
-    video.addEventListener('error', onError)
-    return () => {
-      video.removeEventListener('error', onError)
-      if (errorRecoveryRef.current) {
-        clearTimeout(errorRecoveryRef.current)
-      }
-    }
-  }, [playerState.open, playerState.sessionId, triggerRecovery])
-
-  useEffect(() => {
-    if (!playerState.open) return
-
-    if (buffering && !paused) {
-      stallTimerRef.current = setTimeout(triggerRecovery, 10000)
-    } else {
-      clearTimeout(stallTimerRef.current)
-      stallTimerRef.current = null
-    }
-
-    return () => {
-      clearTimeout(stallTimerRef.current)
-      stallTimerRef.current = null
-    }
-  }, [buffering, paused, playerState.open, triggerRecovery])
-
   // Show/hide controls on mouse activity
   const showControls = useCallback(() => {
     setControlsVisible(true)
@@ -772,8 +460,8 @@ export default function VideoPlayer() {
 
       const result = await seekPlayback(absoluteTime)
       if (result) {
-        // seekPlayback updates playerState.streamUrl + seekBase + sessionId,
-        // which triggers the MSE useEffect to set up a new stream.
+        // seekPlayback updates playerState.hlsUrl + seekBase + sessionId,
+        // which triggers the source useEffect to set up a new stream.
         seekBaseRef.current = result.seekBase ?? absoluteTime
         setCurrentTime(absoluteTime)
         setSubtitleVersion(v => v + 1)
@@ -784,7 +472,6 @@ export default function VideoPlayer() {
       seekingRef.current = false
     }
   }, [disableAllTextTracks, seekPlayback])
-  doSeekRef.current = doSeek
 
   const handleSeekRelative = useCallback((delta) => {
     const video = videoRef.current

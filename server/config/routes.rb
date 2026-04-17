@@ -45,15 +45,10 @@ Rails.application.routes.draw do
       post :switch_bitmap_subtitle
     end
 
-    # Video stream: pipes ffmpeg fMP4 output directly to HTTP response
-    # Uses separate controller with ActionController::Live to avoid breaking
-    # regular render calls in PlaybackController.
-    get "playback/stream/:session_id", to: "playback_stream#stream", as: :playback_stream
-
-    # HLS stream: serves playlist and segments for Safari/iOS
+    # HLS stream: serves playlist, init segment, and media segments
     get "playback/hls/:session_id/playlist.m3u8", to: "playback#hls_playlist", as: :playback_hls_playlist
-    get "playback/hls/:session_id/:segment", to: "playback#hls_segment", as: :playback_hls_segment,
-        constraints: { segment: /segment_\d+\.ts/ }
+    get "playback/hls/:session_id/:asset", to: "playback#hls_asset", as: :playback_hls_asset,
+        constraints: { asset: /(?:init\.mp4|segment_\d+\.m4s)/ }
 
     resources :history, only: [ :index ], controller: :history do
       collection do

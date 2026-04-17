@@ -1,20 +1,9 @@
 const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const { Readable } = require('stream')
 const db = require('./db')
 const dbSync = require('./services/db-sync')
 const transcoder = require('./services/transcoder')
-
-// Suppress stream errors from transcoder teardown — they are harmless
-// (e.g. write-after-end from ffmpeg pipe during stop/restart)
-process.on('uncaughtException', (err) => {
-  if (err.code === 'ERR_STREAM_WRITE_AFTER_END' || err.code === 'ERR_STREAM_DESTROYED') {
-    console.warn('Suppressed stream error:', err.message)
-    return
-  }
-  console.error('Uncaught exception:', err)
-})
 
 // IPC modules
 const seriesIpc = require('./ipc/series')
@@ -194,20 +183,54 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 app.whenReady().then(() => {
-  // Register stream:// protocol — serves transcoded video from ffmpeg pipe
-  protocol.handle('stream', () => {
-    const transcoderStream = transcoder.getActiveStream()
-    if (!transcoderStream) {
-      return new Response('No active stream', { status: 404 })
+  // Register stream:// protocol — serves HLS manifest and segments from the
+  // transcoder session directory. Requests look like:
+  //   stream://video/playlist.m3u8
+  //   stream://video/init.mp4
+  //   stream://video/segment_42.m4s
+  protocol.handle('stream', async (request) => {
+    const url = new URL(request.url)
+    const assetName = url.pathname.replace(/^\/+/, '') || 'playlist.m3u8'
+
+    const assetPath = transcoder.resolveAsset(assetName)
+    if (!assetPath) {
+      return new Response('Bad asset', { status: 400 })
     }
 
-    // Convert Node.js PassThrough to a web ReadableStream
-    const readable = Readable.toWeb(transcoderStream)
+    const isPlaylist = assetName === 'playlist.m3u8'
 
-    return new Response(readable, {
+    // ffmpeg writes the playlist and segments on its own schedule. Poll briefly.
+    const timeoutMs = isPlaylist ? 3000 : 1500
+    const pollEveryMs = 150
+    const started = Date.now()
+    while (!fs.existsSync(assetPath) && Date.now() - started < timeoutMs) {
+      await new Promise(r => setTimeout(r, pollEveryMs))
+    }
+
+    if (!fs.existsSync(assetPath)) {
+      return new Response('Not ready', { status: 404 })
+    }
+
+    if (isPlaylist) {
+      let text = fs.readFileSync(assetPath, 'utf8')
+      // If ffmpeg has exited without writing ENDLIST, append it so hls.js
+      // stops polling for more segments.
+      if (!transcoder.isActive() && !text.includes('#EXT-X-ENDLIST')) {
+        text = text.trimEnd() + '\n#EXT-X-ENDLIST\n'
+      }
+      return new Response(text, {
+        headers: {
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          'Cache-Control': 'no-cache',
+        },
+      })
+    }
+
+    const body = fs.readFileSync(assetPath)
+    return new Response(body, {
       headers: {
         'Content-Type': 'video/mp4',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'max-age=3600',
       },
     })
   })
