@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  Debug-build resource overrides. These shadow the matching strings in
+  src/main/res/values/strings.xml when assembling the `debug` buildType,
+  so the dev APK shows up on the Android TV launcher as a separate app
+  with a clearly distinct name — easy to tell apart from the production
+  Caramba install (which has applicationId com.caramba.tv; debug has
+  com.caramba.tv.dev).
+-->
+<resources>
+    <string name="app_name">Caramba Dev</string>
+    <string name="title_activity_main">Caramba Dev</string>
+</resources>
