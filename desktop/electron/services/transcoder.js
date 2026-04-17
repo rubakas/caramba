@@ -154,7 +154,28 @@ function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex) {
   return audioCodec === 'aac' ? 'direct_play' : 'audio_transcode'
 }
 
-function buildArgs(filePath, seekTime, outputDir, strategy, opts) {
+// Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
+// meaningfully higher bitrate than x264 to reach the same perceptual quality.
+function fullTranscodeVideoArgs(probeResult) {
+  const width = probeResult.video?.width || 0
+  let bitrate, maxrate, bufsize
+  if (width >= 3000)      { [bitrate, maxrate, bufsize] = ['20M', '30M', '60M'] }  // 4K
+  else if (width >= 1800) { [bitrate, maxrate, bufsize] = ['12M', '18M', '36M'] }  // 1080p
+  else if (width >= 1100) { [bitrate, maxrate, bufsize] = ['8M',  '12M', '24M'] }  // 720p
+  else                    { [bitrate, maxrate, bufsize] = ['4M',  '6M',  '12M'] }  // SD
+
+  return [
+    '-c:v', 'h264_videotoolbox',
+    '-b:v', bitrate,
+    '-maxrate', maxrate,
+    '-bufsize', bufsize,
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-g', '48',
+  ]
+}
+
+function buildArgs(filePath, seekTime, outputDir, strategy, probeResult, opts) {
   const args = []
   const burnSub = opts.burnSubtitleIndex != null
 
@@ -193,15 +214,7 @@ function buildArgs(filePath, seekTime, outputDir, strategy, opts) {
       args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
       break
     case 'full_transcode':
-      args.push(
-        '-c:v', 'h264_videotoolbox',
-        '-b:v', '4M',
-        '-maxrate', '6M',
-        '-bufsize', '12M',
-        '-profile:v', 'high',
-        '-pix_fmt', 'yuv420p',
-        '-g', '48',
-      )
+      args.push(...fullTranscodeVideoArgs(probeResult))
       args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
       break
   }
@@ -239,7 +252,7 @@ async function start(filePath, seekTime = 0, opts = {}) {
   const dir = sessionDir(sessionId)
   fs.mkdirSync(dir, { recursive: true })
 
-  const args = buildArgs(filePath, seekTime, dir, strategy, opts)
+  const args = buildArgs(filePath, seekTime, dir, strategy, probeResult, opts)
 
   const proc = spawn(FFMPEG_PATH, args, {
     stdio: ['ignore', 'ignore', 'pipe'],

@@ -388,7 +388,7 @@ class TranscoderService
       probe_result = probe(file_path)
       strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index])
 
-      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, opts)
+      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result, opts)
 
       log_dir = File.join(TMP_ROOT, "logs")
       FileUtils.mkdir_p(log_dir)
@@ -415,7 +415,31 @@ class TranscoderService
     # native Safari, Android TV WebView, and correct SAR handling out of
     # the box.
 
-    def build_hls_ffmpeg_args(file_path, seek_time, output_dir, strategy, opts = {})
+    # Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
+    # meaningfully higher bitrate than x264 to reach the same perceptual quality;
+    # at 4 Mbps a 1080p HEVC source transcodes visibly softer than the original.
+    # On LAN we have plenty of bandwidth — spend it.
+    def full_transcode_video_args(probe_result)
+      width = probe_result.dig(:video, :width).to_i
+      bitrate, maxrate, bufsize =
+        if width >= 3000      then [ "20M", "30M", "60M" ]   # 4K
+        elsif width >= 1800   then [ "12M", "18M", "36M" ]   # 1080p
+        elsif width >= 1100   then [ "8M",  "12M", "24M" ]   # 720p
+        else                       [ "4M",  "6M",  "12M" ]   # SD
+        end
+
+      [
+        "-c:v", "h264_videotoolbox",
+        "-b:v", bitrate,
+        "-maxrate", maxrate,
+        "-bufsize", bufsize,
+        "-profile:v", "high",
+        "-pix_fmt", "yuv420p",
+        "-g", "48"
+      ]
+    end
+
+    def build_hls_ffmpeg_args(file_path, seek_time, output_dir, strategy, probe_result, opts = {})
       args = []
       burn_sub = opts[:burn_subtitle_index].present?
 
@@ -454,15 +478,7 @@ class TranscoderService
         args += %w[-c:v copy]
         args += %w[-c:a aac -b:a 192k -ac 2]
       when :full_transcode
-        args += %w[
-          -c:v h264_videotoolbox
-          -b:v 4M
-          -maxrate 6M
-          -bufsize 12M
-          -profile:v high
-          -pix_fmt yuv420p
-          -g 48
-        ]
+        args += full_transcode_video_args(probe_result)
         args += %w[-c:a aac -b:a 192k -ac 2]
       end
 
