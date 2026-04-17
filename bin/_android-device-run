@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# Helper called from Procfile.android-device. Same as bin/_android-run but
+# targets a real Android TV device (Chromecast with Google TV, Google TV
+# Streamer, etc.) reachable over `adb connect <ip>:5555`.
+#
+# Differences from the emulator flow:
+#   - No AVD boot.
+#   - `--host` is the Mac's LAN IP (not 10.0.2.2), so the device's WebView
+#     can fetch the Vite dev bundle and the API over Wi-Fi.
+#   - `--forwardPorts 3001:3001` still runs (adb reverse works over TCP adb),
+#     which keeps the `http://localhost:3001` fallback in the app's API
+#     settings functional; but the dev-mode UI will auto-point at the LAN
+#     IP so no manual config is needed.
+#   - Target device serial is the first non-emulator device reported by adb.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+ANDROID_SDK="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
+ADB="$ANDROID_SDK/platform-tools/adb"
+VITE_PORT="${VITE_PORT:-3000}"
+RAILS_PORT="${RAILS_PORT:-3001}"
+
+if [ ! -x "$ADB" ]; then
+  echo "[android-device] adb not found at $ADB — install Android SDK or set ANDROID_SDK_ROOT" >&2
+  exit 1
+fi
+
+# 1. Pick the first real device (serial NOT starting with "emulator-").
+TARGET="${CARAMBA_DEVICE:-}"
+if [ -z "$TARGET" ]; then
+  TARGET=$("$ADB" devices | awk 'NR>1 && $2=="device" && $1 !~ /^emulator-/ {print $1; exit}')
+fi
+
+if [ -z "$TARGET" ]; then
+  echo "[android-device] No real adb device attached. Enable Developer options on the device," >&2
+  echo "[android-device] then run: adb connect <device-ip>:5555" >&2
+  echo "[android-device] Or set CARAMBA_DEVICE=<serial> to force a specific target." >&2
+  exit 1
+fi
+
+echo "[android-device] Target device: $TARGET"
+
+# 2. Detect the Mac's LAN IP (first non-loopback IPv4 on an active interface).
+LAN_IP="${CARAMBA_HOST_IP:-}"
+if [ -z "$LAN_IP" ]; then
+  LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || true)
+  [ -z "$LAN_IP" ] && LAN_IP=$(ipconfig getifaddr en1 2>/dev/null || true)
+fi
+
+if [ -z "$LAN_IP" ]; then
+  echo "[android-device] Couldn't determine LAN IP. Set CARAMBA_HOST_IP=<your.ip> and retry." >&2
+  exit 1
+fi
+
+echo "[android-device] Using host IP: $LAN_IP"
+
+# 3. Wait for Vite.
+echo "[android-device] Waiting for Vite dev server on http://localhost:$VITE_PORT ..."
+until curl -sSf -o /dev/null "http://localhost:$VITE_PORT/"; do
+  sleep 1
+done
+
+# 4. Run Capacitor with live-reload pointed at the LAN IP + explicit target.
+echo "[android-device] Running Capacitor live-reload (target=$TARGET host=$LAN_IP port=$VITE_PORT)..."
+cd android-tv
+exec pnpm exec cap run android -l \
+  --target "$TARGET" \
+  --host "$LAN_IP" \
+  --port "$VITE_PORT" \
+  --forwardPorts "$RAILS_PORT:$RAILS_PORT"

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Helper called from Procfile.android. Boots the Android TV emulator
+# (unless a device is already attached), waits for Vite to be ready,
+# then runs Capacitor with live-reload pointing at the dev server.
+#
+# Emulator → host mapping on Android is via 10.0.2.2 (the guest-side
+# alias for the host's loopback). `--forwardPorts 3001:3001` also
+# adb-reverses so absolute URLs like http://localhost:3001/... (which
+# Rails emits in `hlsUrl`) resolve inside the emulator.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+ANDROID_SDK="${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}"
+ADB="$ANDROID_SDK/platform-tools/adb"
+EMULATOR="$ANDROID_SDK/emulator/emulator"
+AVD="${CARAMBA_AVD:-Television_4K}"
+VITE_PORT="${VITE_PORT:-3000}"
+RAILS_PORT="${RAILS_PORT:-3001}"
+EMU_HOST="10.0.2.2"
+
+if [ ! -x "$ADB" ]; then
+  echo "[android] adb not found at $ADB — install Android SDK or set ANDROID_SDK_ROOT" >&2
+  exit 1
+fi
+
+# 1. Boot emulator if no device is already attached.
+if ! "$ADB" devices | awk 'NR>1' | grep -qw 'device'; then
+  if [ ! -x "$EMULATOR" ]; then
+    echo "[android] emulator binary not found at $EMULATOR" >&2
+    exit 1
+  fi
+  echo "[android] Booting AVD '$AVD'..."
+  "$EMULATOR" -avd "$AVD" -no-boot-anim -netdelay none -netspeed full \
+    > /tmp/caramba-emulator.log 2>&1 &
+fi
+
+# 2. Wait for the emulator to finish booting.
+echo "[android] Waiting for adb device..."
+"$ADB" wait-for-device
+echo "[android] Waiting for Android boot to complete..."
+until [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+  sleep 2
+done
+
+# 3. Wait for Vite.
+echo "[android] Waiting for Vite dev server on http://localhost:$VITE_PORT ..."
+until curl -sSf -o /dev/null "http://localhost:$VITE_PORT/"; do
+  sleep 1
+done
+
+# 4. Pick the emulator explicitly — cap run otherwise prompts interactively
+# when multiple devices (e.g. a real Chromecast + the AVD) are attached,
+# and foreman's non-TTY stdin leaves that prompt hanging forever.
+echo "[android] Running Capacitor with live-reload (target=$AVD host=$EMU_HOST port=$VITE_PORT)..."
+cd android-tv
+exec pnpm exec cap run android -l \
+  --target "$AVD" \
+  --host "$EMU_HOST" \
+  --port "$VITE_PORT" \
+  --forwardPorts "$RAILS_PORT:$RAILS_PORT"

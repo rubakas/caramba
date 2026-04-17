@@ -1,20 +1,9 @@
 const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const { Readable } = require('stream')
 const db = require('./db')
 const dbSync = require('./services/db-sync')
 const transcoder = require('./services/transcoder')
-
-// Suppress stream errors from transcoder teardown — they are harmless
-// (e.g. write-after-end from ffmpeg pipe during stop/restart)
-process.on('uncaughtException', (err) => {
-  if (err.code === 'ERR_STREAM_WRITE_AFTER_END' || err.code === 'ERR_STREAM_DESTROYED') {
-    console.warn('Suppressed stream error:', err.message)
-    return
-  }
-  console.error('Uncaught exception:', err)
-})
 
 // IPC modules
 const seriesIpc = require('./ipc/series')
@@ -194,20 +183,69 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 app.whenReady().then(() => {
-  // Register stream:// protocol — serves transcoded video from ffmpeg pipe
-  protocol.handle('stream', () => {
-    const transcoderStream = transcoder.getActiveStream()
-    if (!transcoderStream) {
-      return new Response('No active stream', { status: 404 })
+  // Register stream:// protocol — serves HLS manifest and segments from the
+  // transcoder session directory. Requests look like:
+  //   stream://video/playlist.m3u8
+  //   stream://video/init.mp4
+  //   stream://video/segment_42.m4s
+  // The `stream:` scheme is non-special under WHATWG URL rules, so different
+  // Electron versions disagree on pathname parsing. Pull the last path
+  // component off the raw URL directly to stay safe.
+  protocol.handle('stream', async (request) => {
+    const pathPart = request.url.replace(/^stream:\/\/[^/]*\/?/, '').split('?')[0]
+    const assetName = pathPart || 'playlist.m3u8'
+
+    const resolved = transcoder.resolveAsset(assetName)
+    if (resolved.status === 'bad_name') {
+      return new Response('Bad asset', { status: 400 })
+    }
+    if (resolved.status === 'no_session') {
+      // No active transcoder yet (e.g. mid-seek before the new session has
+      // been installed). Return 404 so hls.js retries instead of giving up.
+      return new Response('No active session', { status: 404 })
+    }
+    const assetPath = resolved.path
+
+    const isPlaylist = assetName === 'playlist.m3u8'
+
+    // ffmpeg writes the playlist and segments on its own schedule. Give
+    // segments up to 4s to appear — longer than the 2s segment duration so
+    // we respond successfully even when encoding briefly lags behind playback.
+    const timeoutMs = isPlaylist ? 3000 : 4000
+    const pollEveryMs = 150
+    const started = Date.now()
+    while (!fs.existsSync(assetPath) && Date.now() - started < timeoutMs) {
+      await new Promise(r => setTimeout(r, pollEveryMs))
     }
 
-    // Convert Node.js PassThrough to a web ReadableStream
-    const readable = Readable.toWeb(transcoderStream)
+    if (!fs.existsSync(assetPath)) {
+      return new Response('Not ready', { status: 404 })
+    }
 
-    return new Response(readable, {
+    if (isPlaylist) {
+      let text = fs.readFileSync(assetPath, 'utf8')
+      // If ffmpeg has exited without writing ENDLIST, append it so hls.js
+      // stops polling for more segments.
+      if (!transcoder.isActive() && !text.includes('#EXT-X-ENDLIST')) {
+        text = text.trimEnd() + '\n#EXT-X-ENDLIST\n'
+      }
+      return new Response(text, {
+        headers: {
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          'Cache-Control': 'no-store',
+        },
+      })
+    }
+
+    const body = fs.readFileSync(assetPath)
+    return new Response(body, {
       headers: {
         'Content-Type': 'video/mp4',
-        'Cache-Control': 'no-cache',
+        // Must not cache: segment filenames reset to segment_0 on every
+        // seek/session restart, so the same URL carries different content
+        // across sessions. Caching would hand back stale bytes and desync
+        // hls.js's PTS tracking.
+        'Cache-Control': 'no-store',
       },
     })
   })

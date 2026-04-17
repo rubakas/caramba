@@ -3,15 +3,26 @@
  * Used by web app and desktop in server mode.
  */
 
-// Streaming format preference key (kept for backwards compatibility)
-const STREAMING_FORMAT_KEY = 'caramba:streamingFormat'
+// Probe the browser's MSE decoder support once. The server uses this to
+// decide whether to direct-play HEVC (fast, high-quality) or force a
+// transcode to H.264 (slower but universally supported). Android WebView
+// in particular often lacks MSE HEVC support even when the device itself
+// can hardware-decode HEVC in other contexts.
+function detectCodecSupport() {
+  if (typeof MediaSource === 'undefined' || typeof MediaSource.isTypeSupported !== 'function') {
+    return { h264: true, hevc: false }
+  }
+  const test = (type) => { try { return MediaSource.isTypeSupported(type) } catch { return false } }
+  return {
+    h264: test('video/mp4; codecs="avc1.640028"'),
+    hevc: test('video/mp4; codecs="hvc1.1.6.L120.B0"') || test('video/mp4; codecs="hev1.1.6.L120.B0"'),
+  }
+}
 
-// Get streaming format: auto-detect Safari (use HLS), otherwise use fMP4
-export function getStreamingFormat() {
-  // Auto-detect Safari
-  const isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
-  if (isSafari) return 'hls'
-  return 'fmp4'
+let _codecSupport = null
+function codecSupport() {
+  if (_codecSupport === null) _codecSupport = detectCodecSupport()
+  return _codecSupport
 }
 
 export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
@@ -75,8 +86,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
 
     // Playback
     startPlayback: async (filePath, startTime, prefs) => {
-      const format = getStreamingFormat()
-      const result = await post('/api/playback/start', { filePath, startTime, prefs, format })
+      const result = await post('/api/playback/start', { filePath, startTime, prefs, codecSupport: codecSupport() })
       if (result && result.sessionId) {
         activeSessionId = result.sessionId
       }

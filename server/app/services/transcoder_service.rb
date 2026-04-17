@@ -1,13 +1,16 @@
-# Transcoder service — wraps ffmpeg/ffprobe for video streaming.
+# Transcoder service — wraps ffmpeg/ffprobe for HLS video streaming.
 #
-# Architecture:
-# - fMP4 mode: Direct pipe to HTTP response via ActionController::Live (MSE clients)
-# - HLS mode: Outputs .m3u8 playlist + .ts segments to temp directory (Safari/iOS)
+# Output is always HLS with CMAF (fMP4) segments. Every client — Chromium
+# desktop/web, Android TV WebView, Safari/iOS — plays from the same manifest.
 #
-# Seeking kills the ffmpeg process and starts a new one from the target
-# position. The client gets a new stream URL and re-sets video.src.
+# Three transcoding strategies, chosen per file via ffprobe:
+#   1. direct_play — video H.264 + audio AAC: `-c copy`, zero encode CPU
+#   2. audio_transcode — video H.264 + non-AAC audio: copy video, re-encode audio
+#   3. full_transcode — HEVC or other: VideoToolbox H.264 encode
 #
-# One active session at a time (singleton, like desktop).
+# One active session at a time. Seeking kills ffmpeg and restarts from the
+# new position (same behaviour as before). A persistent segment cache is a
+# planned follow-up.
 class TranscoderService
   TMP_ROOT = File.join(Dir.tmpdir, "caramba-sessions")
 
@@ -25,11 +28,21 @@ class TranscoderService
     # ── Probe ─────────────────────────────────────────────────────────
 
     def probe(file_path)
-      args = %w[-v quiet -print_format json -show_format -show_streams]
+      args = %w[-v error -print_format json -show_format -show_streams]
       args << file_path
 
       stdout, stderr, status = run_command(ffprobe_path, args)
-      raise "ffprobe exited with #{status.exitstatus}: #{stderr[0..300]}" unless status.success?
+      unless status.success?
+        raw = stderr.to_s[0..300]
+        if raw =~ /Operation not permitted|Permission denied|EPERM|EACCES/i
+          raise "macOS blocked reading #{file_path}. " \
+                "The process running the Rails server needs Full Disk Access " \
+                "(or the terminal launching it does) in System Settings → " \
+                "Privacy & Security → Full Disk Access. Alternatively, move the " \
+                "media out of ~/Desktop, ~/Documents, or ~/Downloads."
+        end
+        raise "ffprobe exited with #{status.exitstatus}: #{raw}"
+      end
 
       data = JSON.parse(stdout)
       video_stream = (data["streams"] || []).find { |s| s["codec_type"] == "video" && s["codec_name"] != "mjpeg" }
@@ -75,24 +88,16 @@ class TranscoderService
 
     # ── Session management ────────────────────────────────────────────
 
-    # Start (or restart) a session.  Kills any existing ffmpeg process,
-    # spawns a new one, and stores session metadata.
-    #
-    # Does NOT block waiting for output — the controller's stream action
-    # will read from the ffmpeg stdout pipe.
-    #
-    # @param opts[:format] - :fmp4 (default) or :hls
     def start_session(session_id, file_path, start_time = 0, opts = {})
       mu = session_mutex(session_id)
       mu.synchronize do
         kill_ffmpeg
         kill_subtitle_extractor
-        cleanup_hls_dir  # clean up any previous HLS segments
+        cleanup_hls_dir
 
         duration = opts[:duration].to_f
         raise "duration is required" unless duration > 0
 
-        format = opts[:format]&.to_sym || :fmp4
         subtitle_stream_index = opts[:subtitle_stream_index]
         is_bitmap = opts[:burn_subtitle_index].present?
 
@@ -105,30 +110,22 @@ class TranscoderService
           burn_subtitle_index: opts[:burn_subtitle_index],
           subtitle_stream_index: subtitle_stream_index,
           subtitle_vtt: nil,
-          format: format,
-          hls_dir: format == :hls ? File.join(TMP_ROOT, "hls", session_id) : nil,
+          hls_dir: File.join(TMP_ROOT, "hls", session_id),
+          codec_support: opts[:codec_support],
           started_at: Time.current
         }
 
-        if format == :hls
-          start_ffmpeg_hls(file_path, start_time.to_f, opts)
-        else
-          start_ffmpeg(file_path, start_time.to_f, opts)
-        end
+        start_ffmpeg_hls(file_path, start_time.to_f, opts)
 
-        # Extract text subtitles in background (non-blocking)
         if subtitle_stream_index && !is_bitmap
           extract_subtitles_async(session_id, file_path, subtitle_stream_index)
         end
 
-        Rails.logger.info "[Transcoder] session #{session_id} (#{format}): #{File.basename(file_path)}, " \
-          "starting at #{start_time}s"
+        Rails.logger.info "[Transcoder] session #{session_id}: #{File.basename(file_path)}, starting at #{start_time}s"
         session_id
       end
     end
 
-    # Seek: kill ffmpeg and restart from a new position.
-    # Returns the new seek time.
     def seek_session(session_id, seek_time)
       mu = session_mutex(session_id)
       mu.synchronize do
@@ -136,33 +133,17 @@ class TranscoderService
 
         @session[:seek_time] = seek_time.to_f
 
-        if @session[:format] == :hls
-          cleanup_hls_dir  # remove old segments before restarting
-          start_ffmpeg_hls(
-            @session[:file_path],
-            seek_time.to_f,
-            audio_stream_index: @session[:audio_stream_index],
-            burn_subtitle_index: @session[:burn_subtitle_index]
-          )
-        else
-          start_ffmpeg(
-            @session[:file_path],
-            seek_time.to_f,
-            audio_stream_index: @session[:audio_stream_index],
-            burn_subtitle_index: @session[:burn_subtitle_index]
-          )
-        end
+        cleanup_hls_dir
+        start_ffmpeg_hls(
+          @session[:file_path],
+          seek_time.to_f,
+          audio_stream_index: @session[:audio_stream_index],
+          burn_subtitle_index: @session[:burn_subtitle_index]
+        )
 
         Rails.logger.info "[Transcoder] seek session #{session_id} to #{seek_time}s"
         seek_time
       end
-    end
-
-    # Get the ffmpeg stdout IO for streaming to the client.
-    # Returns nil if no active session.
-    def stream_io
-      return nil unless @ffmpeg_pid && @ffmpeg_stdout
-      @ffmpeg_stdout
     end
 
     def stop_session(session_id)
@@ -181,15 +162,16 @@ class TranscoderService
     # ── HLS file accessors ────────────────────────────────────────────
 
     def hls_playlist_path(session_id)
-      return nil unless @session && @session[:id] == session_id && @session[:format] == :hls
+      return nil unless @session && @session[:id] == session_id
       File.join(@session[:hls_dir], "playlist.m3u8")
     end
 
-    def hls_segment_path(session_id, segment_name)
-      return nil unless @session && @session[:id] == session_id && @session[:format] == :hls
-      # Sanitize segment name to prevent directory traversal
-      safe_name = File.basename(segment_name)
-      return nil unless safe_name.match?(/\Asegment_\d+\.ts\z/)
+    # Serve init segment (init.mp4) or media segments (segment_N.m4s).
+    # Name is sanitised to prevent directory traversal.
+    def hls_asset_path(session_id, asset_name)
+      return nil unless @session && @session[:id] == session_id
+      safe_name = File.basename(asset_name)
+      return nil unless safe_name == "init.mp4" || safe_name.match?(/\Asegment_\d+\.m4s\z/)
       File.join(@session[:hls_dir], safe_name)
     end
 
@@ -200,7 +182,6 @@ class TranscoderService
 
     # ── Subtitle extraction ───────────────────────────────────────────
 
-    # Synchronous extraction (used internally)
     def extract_subtitles(file_path, stream_index)
       args = %w[-v quiet]
       args += [ "-i", file_path ]
@@ -216,7 +197,6 @@ class TranscoderService
       stdout
     end
 
-    # Async extraction in a background process (non-blocking)
     def extract_subtitles_async(session_id, file_path, stream_index)
       kill_subtitle_extractor
 
@@ -241,7 +221,6 @@ class TranscoderService
       @subtitle_session_id = session_id
       @subtitle_stream_index = stream_index
 
-      # Read output in a thread (doesn't block Puma)
       Thread.new do
         begin
           vtt = rd.read
@@ -313,7 +292,7 @@ class TranscoderService
     # ── VTT timestamp shifting ────────────────────────────────────────
     #
     # After a seek, video.currentTime restarts from 0 but the extracted
-    # VTT has absolute timestamps.  Shift them so they align with the
+    # VTT has absolute timestamps. Shift them so they align with the
     # video element's relative timeline.
 
     def shift_vtt(vtt, offset)
@@ -348,10 +327,50 @@ class TranscoderService
       result.join("\n")
     end
 
-    # Current seek base for subtitle shifting
     def current_seek_time(session_id)
       return 0 unless @session && @session[:id] == session_id
       @session[:seek_time] || 0
+    end
+
+    # ── Strategy selection (public for controller/tests) ──────────────
+
+    # Client-supplied MSE codec capabilities trump our fixed list, because
+    # MSE HEVC support varies wildly: present on Chromium/macOS and Safari,
+    # but often missing in Android WebView (including Android TV WebView on
+    # many system images) even when the device can hardware-decode HEVC
+    # elsewhere. Fallback defaults assume a modern Chromium desktop — HEVC
+    # allowed — which covers Electron and desktop browsers.
+    DEFAULT_CLIENT_DIRECT_PLAY_CODECS = %w[h264 hevc h265].freeze
+
+    def allowed_direct_play_codecs(codec_support)
+      return DEFAULT_CLIENT_DIRECT_PLAY_CODECS if codec_support.nil?
+      allowed = []
+      allowed += %w[h264] if truthy?(codec_support[:h264]) || truthy?(codec_support["h264"])
+      allowed += %w[hevc h265] if truthy?(codec_support[:hevc]) || truthy?(codec_support["hevc"])
+      # If client reported nothing, assume baseline H.264 (universal).
+      allowed.empty? ? %w[h264] : allowed
+    end
+
+    def truthy?(v)
+      v == true || v == "true" || v == 1 || v == "1"
+    end
+
+    # Returns one of :direct_play, :audio_transcode, :full_transcode.
+    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil)
+      return :full_transcode if burn_subtitle_index
+
+      video_codec = probe_result.dig(:video, :codec)
+      allowed = allowed_direct_play_codecs(codec_support)
+      return :full_transcode unless allowed.include?(video_codec)
+
+      audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
+      audio_codec = audio_stream ? audio_stream[:codec] : nil
+
+      if audio_codec == "aac"
+        :direct_play
+      else
+        :audio_transcode
+      end
     end
 
     private
@@ -362,67 +381,23 @@ class TranscoderService
 
     # ── ffmpeg process management ─────────────────────────────────────
 
-    def start_ffmpeg(file_path, seek_time, opts = {})
-      kill_ffmpeg  # kill any existing process (preserves @session)
-
-      args = build_ffmpeg_args(file_path, seek_time, opts)
-
-      # Spawn ffmpeg with stdout as a pipe (for streaming to client)
-      # and stderr going to a log file for debugging.
-      log_dir = File.join(TMP_ROOT, "logs")
-      FileUtils.mkdir_p(log_dir)
-      stderr_log = File.open(File.join(log_dir, "ffmpeg_stderr.log"), "w")
-
-      rd, wr = IO.pipe
-      rd.binmode
-
-      pid = spawn(
-        ffmpeg_path, *args,
-        in: :close,
-        out: wr,
-        err: stderr_log,
-        pgroup: true
-      )
-
-      wr.close          # parent doesn't write
-      stderr_log.close   # let the child own it
-
-      @ffmpeg_pid = pid
-      @ffmpeg_stdout = rd
-      @ffmpeg_stderr_log = stderr_log
-
-      Rails.logger.info "[Transcoder] ffmpeg started: pid=#{pid}, seek=#{seek_time}s"
-    end
-
-    # Kill the ffmpeg process and close the IO pipe.
-    # Does NOT clear @session — that's the caller's responsibility.
     def kill_ffmpeg
       pid = @ffmpeg_pid
-      stdout = @ffmpeg_stdout
-
       @ffmpeg_pid = nil
-      @ffmpeg_stdout = nil
-
-      if stdout
-        stdout.close rescue nil
-      end
 
       return unless pid
 
       begin
         Process.kill("KILL", pid)
       rescue Errno::ESRCH
-        # already dead
       end
 
       begin
         Process.waitpid(pid, Process::WNOHANG)
       rescue Errno::ECHILD
-        # already reaped
       end
     end
 
-    # Full stop: kill ffmpeg and clear session state.
     def stop_inner
       kill_ffmpeg
       kill_subtitle_extractor
@@ -430,7 +405,6 @@ class TranscoderService
       @session = nil
     end
 
-    # Clean up HLS segment directory
     def cleanup_hls_dir
       return unless @session && @session[:hls_dir]
       FileUtils.rm_rf(@session[:hls_dir]) if Dir.exist?(@session[:hls_dir])
@@ -438,17 +412,18 @@ class TranscoderService
       Rails.logger.warn "[Transcoder] cleanup_hls_dir error: #{e.message}"
     end
 
-    # ── HLS ffmpeg spawner ───────────────────────────────────────────
-
     def start_ffmpeg_hls(file_path, seek_time, opts = {})
-      kill_ffmpeg  # kill any existing process
+      kill_ffmpeg
 
       hls_dir = @session[:hls_dir]
       FileUtils.mkdir_p(hls_dir)
 
-      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, opts)
+      probe_result = probe(file_path)
+      codec_support = @session && @session[:codec_support]
+      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support)
 
-      # Spawn ffmpeg outputting to HLS files (not stdout)
+      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result, opts)
+
       log_dir = File.join(TMP_ROOT, "logs")
       FileUtils.mkdir_p(log_dir)
       stderr_log = File.open(File.join(log_dir, "ffmpeg_hls_stderr.log"), "w")
@@ -462,153 +437,103 @@ class TranscoderService
       )
 
       stderr_log.close
-
       @ffmpeg_pid = pid
-      @ffmpeg_stdout = nil  # HLS mode doesn't use stdout pipe
 
-      Rails.logger.info "[Transcoder] ffmpeg HLS started: pid=#{pid}, seek=#{seek_time}s, dir=#{hls_dir}"
+      Rails.logger.info "[Transcoder] ffmpeg HLS started: pid=#{pid}, strategy=#{strategy}, seek=#{seek_time}s, dir=#{hls_dir}"
     end
 
     # ── ffmpeg argument builder ──────────────────────────────────────
     #
-    # Mirrors desktop/electron/services/transcoder.js exactly:
-    # H.264 via VideoToolbox + AAC → fragmented MP4 on stdout.
+    # Single HLS output pipeline. Strategy decides which codec flags to use.
+    # CMAF / fMP4 segments (not MPEG-TS): better compatibility with hls.js,
+    # native Safari, Android TV WebView, and correct SAR handling out of
+    # the box.
 
-    def build_ffmpeg_args(file_path, seek_time, opts = {})
-      args = []
-      burn_sub = opts[:burn_subtitle_index].present?
-
-      # Hardware-accelerated decoding (VideoToolbox).
-      # When burning bitmap subtitles we need the overlay filter which
-      # operates on software frames, so skip hwaccel.
-      args += %w[-hwaccel videotoolbox] unless burn_sub
-
-      # Seek before input for fast seeking
-      args += [ "-ss", seek_time.to_s ] if seek_time > 0
-
-      # Reduce startup latency: don't analyze the whole file
-      args += %w[-analyzeduration 2000000 -probesize 2000000]
-
-      args += [ "-i", file_path ]
-
-      if burn_sub
-        args += [ "-filter_complex", "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay" ]
-        if opts[:audio_stream_index]
-          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
-        else
-          args += [ "-map", "0:a:0" ]
+    # Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
+    # meaningfully higher bitrate than x264 to reach the same perceptual quality;
+    # at 4 Mbps a 1080p HEVC source transcodes visibly softer than the original.
+    # On LAN we have plenty of bandwidth — spend it.
+    def full_transcode_video_args(probe_result)
+      width = probe_result.dig(:video, :width).to_i
+      bitrate, maxrate, bufsize =
+        if width >= 3000      then [ "20M", "30M", "60M" ]   # 4K
+        elsif width >= 1800   then [ "12M", "18M", "36M" ]   # 1080p
+        elsif width >= 1100   then [ "8M",  "12M", "24M" ]   # 720p
+        else                       [ "4M",  "6M",  "12M" ]   # SD
         end
-      else
-        args += [ "-map", "0:v:0" ]
-        if opts[:audio_stream_index]
-          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
-        else
-          args += [ "-map", "0:a:0" ]
-        end
-      end
 
-      # Video encoding: H.264 via VideoToolbox (matches desktop)
-      # -realtime 1: prioritize encoding speed over compression efficiency
-      # -g 48 = keyframe every 2s at 24fps
-      args += %w[
-        -c:v h264_videotoolbox
-        -realtime 1
-        -b:v 4M
-        -maxrate 6M
-        -bufsize 12M
-        -profile:v high
-        -pix_fmt yuv420p
-        -g 48
+      [
+        "-c:v", "h264_videotoolbox",
+        "-b:v", bitrate,
+        "-maxrate", maxrate,
+        "-bufsize", bufsize,
+        "-profile:v", "high",
+        "-pix_fmt", "yuv420p",
+        "-g", "48"
       ]
-
-      # Audio: AAC stereo
-      args += %w[-c:a aac -b:a 192k -ac 2]
-
-      # Output: fragmented MP4 to stdout.
-      # empty_moov: no samples in the initial moov (required for streaming)
-      # default_base_moof: each moof is self-contained (required for MSE/fMP4)
-      # frag_keyframe: start a new fragment at each keyframe
-      args += %w[
-        -f mp4
-        -movflags frag_keyframe+empty_moov+default_base_moof
-        pipe:1
-      ]
-
-      args += %w[-y -nostdin]
-
-      args
     end
 
-    # ── HLS ffmpeg argument builder ──────────────────────────────────
-    #
-    # Outputs HLS playlist + TS segments for Safari/iOS compatibility.
-
-    def build_hls_ffmpeg_args(file_path, seek_time, output_dir, opts = {})
+    def build_hls_ffmpeg_args(file_path, seek_time, output_dir, strategy, probe_result, opts = {})
       args = []
       burn_sub = opts[:burn_subtitle_index].present?
 
-      # Hardware-accelerated decoding (VideoToolbox)
-      args += %w[-hwaccel videotoolbox] unless burn_sub
+      # Hardware decode (macOS VideoToolbox). Skip when burning bitmap
+      # subtitles because the overlay filter operates on software frames.
+      # Also skip for direct-play (-c copy) since there's no decode path.
+      if strategy == :full_transcode && !burn_sub
+        args += %w[-hwaccel videotoolbox]
+      end
 
-      # Seek before input for fast seeking
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
+      args += %w[-analyzeduration 2000000 -probesize 2000000] if strategy == :full_transcode
 
       args += [ "-i", file_path ]
 
-      # Apply video filter to handle SAR (Sample Aspect Ratio).
-      # MPEG-TS doesn't carry SAR correctly, causing anamorphic sources to
-      # display stretched. We scale to square pixels: width * SAR, then set SAR=1.
-      # The scale filter uses -2 for height to ensure even dimensions (required by h264).
+      # Filters / stream mapping
       if burn_sub
-        # Burn subtitles + fix SAR
         args += [ "-filter_complex", "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1" ]
-        if opts[:audio_stream_index]
-          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
-        else
-          args += [ "-map", "0:a:0" ]
-        end
-      else
-        # Scale to square pixels for anamorphic sources
+        args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
+      elsif strategy == :full_transcode
+        # Anamorphic source handling: enforce square pixels.
         args += [ "-vf", "scale=iw*sar:ih:flags=lanczos,setsar=1" ]
         args += [ "-map", "0:v:0" ]
-        if opts[:audio_stream_index]
-          args += [ "-map", "0:#{opts[:audio_stream_index]}" ]
-        else
-          args += [ "-map", "0:a:0" ]
-        end
+        args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
+      else
+        args += [ "-map", "0:v:0" ]
+        args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
       end
 
-      # Video encoding: H.264 via VideoToolbox
-      args += %w[
-        -c:v h264_videotoolbox
-        -b:v 4M
-        -maxrate 6M
-        -bufsize 12M
-        -profile:v high
-        -pix_fmt yuv420p
-        -g 48
-      ]
+      # Codec selection per strategy
+      case strategy
+      when :direct_play
+        # No re-encode — just remux into CMAF segments.
+        args += %w[-c copy]
+      when :audio_transcode
+        args += %w[-c:v copy]
+        args += %w[-c:a aac -b:a 192k -ac 2]
+      when :full_transcode
+        args += full_transcode_video_args(probe_result)
+        args += %w[-c:a aac -b:a 192k -ac 2]
+      end
 
-      # Audio: AAC stereo
-      args += %w[-c:a aac -b:a 192k -ac 2]
-
-      # HLS output settings
-      # -hls_time 4: 4-second segments (reduces request frequency)
-      # -hls_list_size 0: VOD-style playlist keeps all segments (required for seeking)
-      # -hls_playlist_type event: playlist grows as segments are added
-      # -start_number 0: segment numbering starts at 0
-      # -output_ts_offset: reset timestamps so HLS starts at 0 (even after -ss seek)
+      # HLS output: CMAF (fMP4) segments.
+      #   hls_time 2       — 2-second segments so the playlist grows faster than
+      #                      playback consumes it, even under 1× realtime encode
+      #                      (avoids the "play 4s, stall for 1–3s, resume" pattern).
+      #   temp_file        — atomic write: ffmpeg writes *.tmp then renames, so
+      #                      the HTTP server never sees a half-flushed segment.
+      #   independent_segments — each segment decodes standalone.
       args += %w[
         -f hls
-        -hls_time 4
+        -hls_time 2
         -hls_list_size 0
         -hls_playlist_type event
-        -hls_segment_type mpegts
+        -hls_segment_type fmp4
+        -hls_flags independent_segments+temp_file
         -start_number 0
       ]
-      # Reset output timestamps to 0 when seeking
-      args += %w[-output_ts_offset 0] if seek_time > 0
-      args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.ts") ]
+      args += [ "-hls_fmp4_init_filename", "init.mp4" ]
+      args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.m4s") ]
       args += [ File.join(output_dir, "playlist.m3u8") ]
 
       args += %w[-y -nostdin]

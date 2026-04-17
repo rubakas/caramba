@@ -22,8 +22,7 @@
 # The default is set to 3 threads as it's deemed a decent compromise between
 # throughput and latency for the average Rails application.
 #
-# Streaming note: the direct-pipe video stream endpoint ties up one Puma
-# thread for the duration of playback (ActionController::Live).  5 threads
+# Streaming note: HLS playback issues a segment request every ~4s.  5 threads
 # gives enough headroom for one active stream plus normal API traffic on a
 # small local-network deployment.
 #

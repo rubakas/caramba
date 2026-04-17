@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Start Rails API server + web (Vite) + Android TV app on a REAL device
+# (Chromecast with Google TV, Google TV Streamer, etc.) via Capacitor
+# live-reload over LAN.
+#
+# Prereqs:
+#   - Android SDK installed at $HOME/Library/Android/sdk
+#     (override with ANDROID_SDK_ROOT if elsewhere)
+#   - Device has Developer options enabled and ADB debugging on
+#   - `adb connect <device-ip>:5555` has been run (check with `adb devices`)
+#   - Device is on the same Wi-Fi as this Mac
+#   - `pnpm install` has been run in android-tv/
+#
+# Overrides:
+#   CARAMBA_DEVICE=<serial>   pick a specific adb device
+#   CARAMBA_HOST_IP=<ip>      override LAN IP auto-detection
+exec bin/foreman start -f Procfile.android-device "$@"
