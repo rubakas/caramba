@@ -188,14 +188,23 @@ app.whenReady().then(() => {
   //   stream://video/playlist.m3u8
   //   stream://video/init.mp4
   //   stream://video/segment_42.m4s
+  // The `stream:` scheme is non-special under WHATWG URL rules, so different
+  // Electron versions disagree on pathname parsing. Pull the last path
+  // component off the raw URL directly to stay safe.
   protocol.handle('stream', async (request) => {
-    const url = new URL(request.url)
-    const assetName = url.pathname.replace(/^\/+/, '') || 'playlist.m3u8'
+    const pathPart = request.url.replace(/^stream:\/\/[^/]*\/?/, '').split('?')[0]
+    const assetName = pathPart || 'playlist.m3u8'
 
-    const assetPath = transcoder.resolveAsset(assetName)
-    if (!assetPath) {
+    const resolved = transcoder.resolveAsset(assetName)
+    if (resolved.status === 'bad_name') {
       return new Response('Bad asset', { status: 400 })
     }
+    if (resolved.status === 'no_session') {
+      // No active transcoder yet (e.g. mid-seek before the new session has
+      // been installed). Return 404 so hls.js retries instead of giving up.
+      return new Response('No active session', { status: 404 })
+    }
+    const assetPath = resolved.path
 
     const isPlaylist = assetName === 'playlist.m3u8'
 

@@ -239,20 +239,21 @@ function buildArgs(filePath, seekTime, outputDir, strategy, probeResult, opts) {
   return args
 }
 
-// Start transcoding. Creates a session directory, spawns ffmpeg writing
-// HLS there, and returns a session descriptor. The caller uses the
-// session id via the stream:// protocol.
+// Start transcoding. Probes the file, spawns a new ffmpeg, then atomically
+// swaps over the active-session state and tears down the old process. Keeping
+// `activeDir` set across the whole operation means in-flight requests from a
+// previous hls.js instance never hit a null session and 400 out — they get
+// served from the new session's directory (usually 404 for not-yet-produced
+// segments, which hls.js retries cleanly).
 async function start(filePath, seekTime = 0, opts = {}) {
-  stop()
-
   const probeResult = await probe(filePath)
   const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex)
 
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-  const dir = sessionDir(sessionId)
-  fs.mkdirSync(dir, { recursive: true })
+  const newDir = sessionDir(sessionId)
+  fs.mkdirSync(newDir, { recursive: true })
 
-  const args = buildArgs(filePath, seekTime, dir, strategy, probeResult, opts)
+  const args = buildArgs(filePath, seekTime, newDir, strategy, probeResult, opts)
 
   const proc = spawn(FFMPEG_PATH, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -275,13 +276,24 @@ async function start(filePath, seekTime = 0, opts = {}) {
     console.error(`Transcoder: ffmpeg error — ${err.message}`)
   })
 
+  // Atomic swap: install the new session, then tear down the old one.
+  const oldProc = activeProcess
+  const oldDir = activeDir
+
   activeProcess = proc
   activeSessionId = sessionId
-  activeDir = dir
+  activeDir = newDir
   activeFilePath = filePath
   activeStartTime = seekTime
 
-  console.log(`Transcoder: started ${path.basename(filePath)} @ ${seekTime}s, strategy=${strategy}, dir=${dir}`)
+  if (oldProc) {
+    try { oldProc.kill('SIGKILL') } catch {}
+  }
+  if (oldDir && oldDir !== newDir) {
+    wipeDir(oldDir)
+  }
+
+  console.log(`Transcoder: started ${path.basename(filePath)} @ ${seekTime}s, strategy=${strategy}, dir=${newDir}`)
   return { sessionId, strategy }
 }
 
@@ -322,17 +334,22 @@ function getActiveFilePath() { return activeFilePath }
 function getActiveStartTime() { return activeStartTime }
 function isActive() { return activeProcess !== null && !activeProcess.killed }
 
-// Resolve a path inside the active session directory, rejecting
-// anything that escapes via traversal. Only playlist.m3u8, init.mp4,
-// and segment_N.m4s are permitted.
-function resolveAsset(assetName) {
-  if (!activeDir) return null
+// Whitelist of allowed asset names (prevents directory traversal).
+function isValidAssetName(assetName) {
   const safe = path.basename(assetName)
-  const allowed = safe === 'playlist.m3u8'
+  return safe === 'playlist.m3u8'
     || safe === 'init.mp4'
     || /^segment_\d+\.m4s$/.test(safe)
-  if (!allowed) return null
-  return path.join(activeDir, safe)
+}
+
+// Resolve a path inside the active session directory. Returns:
+//   { status: 'ok', path }          — asset is permitted; caller checks disk
+//   { status: 'bad_name' }           — rejected (invalid name, traversal, etc.)
+//   { status: 'no_session' }         — no transcoder session active (retryable)
+function resolveAsset(assetName) {
+  if (!isValidAssetName(assetName)) return { status: 'bad_name' }
+  if (!activeDir) return { status: 'no_session' }
+  return { status: 'ok', path: path.join(activeDir, path.basename(assetName)) }
 }
 
 module.exports = {
