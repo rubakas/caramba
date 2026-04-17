@@ -89,21 +89,45 @@ function stop() {
 }
 
 async function probe(filePath) {
+  // Open the file in main (which inherits any Files & Folders permission
+  // granted to Electron.app via the macOS GUI prompt) and hand the fd to
+  // ffprobe as stdin. ffprobe never opens the path itself, so its ad-hoc
+  // code signature doesn't fight TCC.
+  let fileHandle
+  try {
+    fileHandle = fs.openSync(filePath, 'r')
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      throw new Error(
+        `macOS blocked reading "${filePath}". ` +
+        `Grant Electron Files & Folders access (Desktop/Documents/Downloads) ` +
+        `in System Settings → Privacy & Security, or move the media out of those folders.`
+      )
+    }
+    throw err
+  }
+
   return new Promise((resolve, reject) => {
     const args = [
-      '-v', 'quiet',
+      '-v', 'error',
       '-print_format', 'json',
       '-show_format',
       '-show_streams',
-      filePath,
+      'pipe:0',
     ]
-    const proc = spawn(FFPROBE_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(FFPROBE_PATH, args, { stdio: [fileHandle, 'pipe', 'pipe'] })
+    // spawn dups the fd into the child; close our copy so ffprobe exiting
+    // is observable via EOF on the reader side.
+    try { fs.closeSync(fileHandle) } catch {}
     let stdout = ''
     let stderr = ''
     proc.stdout.on('data', d => { stdout += d })
     proc.stderr.on('data', d => { stderr += d })
     proc.on('close', code => {
-      if (code !== 0) return reject(new Error(`ffprobe exited with ${code}: ${stderr.trim() || 'no output'} (file: ${filePath})`))
+      if (code !== 0) {
+        const raw = stderr.trim() || 'no output'
+        return reject(new Error(`ffprobe exited with ${code}: ${raw} (file: ${filePath})`))
+      }
       try {
         const data = JSON.parse(stdout)
         const videoStream = data.streams?.find(s => s.codec_type === 'video' && s.codec_name !== 'mjpeg')
@@ -175,7 +199,13 @@ function fullTranscodeVideoArgs(probeResult) {
   ]
 }
 
-function buildArgs(filePath, seekTime, outputDir, strategy, probeResult, opts) {
+// The child reads the input via fd 3 (inherited stdio slot). The path
+// `/dev/fd/3` on macOS/Linux resolves to the already-open fd via a kernel
+// dup, so the child binary never invokes open() on the original path — the
+// TCC check that rejects ad-hoc signed children is skipped entirely.
+const INPUT_FD_PATH = '/dev/fd/3'
+
+function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
   const args = []
   const burnSub = opts.burnSubtitleIndex != null
 
@@ -190,7 +220,7 @@ function buildArgs(filePath, seekTime, outputDir, strategy, probeResult, opts) {
     args.push('-analyzeduration', '2000000', '-probesize', '2000000')
   }
 
-  args.push('-i', filePath)
+  args.push('-i', INPUT_FD_PATH)
 
   if (burnSub) {
     args.push('-filter_complex',
@@ -239,25 +269,46 @@ function buildArgs(filePath, seekTime, outputDir, strategy, probeResult, opts) {
   return args
 }
 
-// Start transcoding. Probes the file, spawns a new ffmpeg, then atomically
-// swaps over the active-session state and tears down the old process. Keeping
-// `activeDir` set across the whole operation means in-flight requests from a
-// previous hls.js instance never hit a null session and 400 out — they get
-// served from the new session's directory (usually 404 for not-yet-produced
-// segments, which hls.js retries cleanly).
+// Start transcoding. Probes the file (unless the caller already did),
+// spawns a new ffmpeg, then atomically swaps over the active-session state
+// and tears down the old process. Keeping `activeDir` set across the whole
+// operation means in-flight requests from a previous hls.js instance never
+// hit a null session and 400 out — they get served from the new session's
+// directory (usually 404 for not-yet-produced segments, which hls.js retries
+// cleanly).
 async function start(filePath, seekTime = 0, opts = {}) {
-  const probeResult = await probe(filePath)
+  const probeResult = opts.probeResult || await probe(filePath)
   const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex)
 
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   const newDir = sessionDir(sessionId)
   fs.mkdirSync(newDir, { recursive: true })
 
-  const args = buildArgs(filePath, seekTime, newDir, strategy, probeResult, opts)
+  // Open the input in main so we carry our own TCC authorization; the child
+  // reads it via /dev/fd/3 and never triggers the open-by-path TCC check.
+  let inputFd
+  try {
+    inputFd = fs.openSync(filePath, 'r')
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      throw new Error(
+        `macOS blocked reading "${filePath}". Electron itself doesn't have ` +
+        `Files & Folders access to this folder. Grant it in System Settings → ` +
+        `Privacy & Security → Files and Folders (or Full Disk Access), then relaunch.`
+      )
+    }
+    throw err
+  }
+
+  const args = buildArgs(seekTime, newDir, strategy, probeResult, opts)
 
   const proc = spawn(FFMPEG_PATH, args, {
-    stdio: ['ignore', 'ignore', 'pipe'],
+    // stdio slot 3 = the open input fd. ffmpeg sees it as fd 3 and reads
+    // from /dev/fd/3. Slot 0/1 are ignored, 2 is stderr for logging.
+    stdio: ['ignore', 'ignore', 'pipe', inputFd],
   })
+  // Child has its own dup of the fd; close ours so we don't leak descriptors.
+  try { fs.closeSync(inputFd) } catch {}
 
   proc.stderr.on('data', d => {
     const line = d.toString().trim()
@@ -298,16 +349,24 @@ async function start(filePath, seekTime = 0, opts = {}) {
 }
 
 async function extractSubtitles(filePath, streamIndex) {
+  let inputFd
+  try {
+    inputFd = fs.openSync(filePath, 'r')
+  } catch {
+    return null
+  }
+
   return new Promise((resolve) => {
     const args = [
-      '-v', 'quiet',
-      '-i', filePath,
+      '-v', 'error',
+      '-i', INPUT_FD_PATH,
       '-map', `0:${streamIndex}`,
       '-c:s', 'webvtt',
       '-f', 'webvtt',
       'pipe:1',
     ]
-    const proc = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe', inputFd] })
+    try { fs.closeSync(inputFd) } catch {}
     let stdout = ''
     let stderr = ''
     proc.stdout.on('data', d => { stdout += d })

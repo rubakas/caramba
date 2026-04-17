@@ -96,10 +96,13 @@ function register() {
         }
       }
 
-      // Start transcoding — burn bitmap subtitles into video if selected
+      // Start transcoding — burn bitmap subtitles into video if selected.
+      // Pass the probe result we already computed so transcoder.start()
+      // doesn't re-probe the file.
       await transcoder.start(filePath, startTime, {
         audioStreamIndex,
         burnSubtitleIndex: isBitmapSubtitle ? subtitleStreamIndex : undefined,
+        probeResult: info,
       })
       currentSeekBase = startTime
       currentDuration = info.duration

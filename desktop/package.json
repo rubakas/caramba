@@ -29,7 +29,14 @@
           "from": "vendor/ffmpeg-${arch}",
           "to": "ffmpeg"
         }
-      ]
+      ],
+      "extendInfo": {
+        "NSDesktopFolderUsageDescription": "Caramba reads media files you place on your Desktop so it can play and transcode them.",
+        "NSDocumentsFolderUsageDescription": "Caramba reads media files you place in Documents so it can play and transcode them.",
+        "NSDownloadsFolderUsageDescription": "Caramba reads media files you place in Downloads so it can play and transcode them.",
+        "NSRemovableVolumesUsageDescription": "Caramba reads media files from external drives so it can play and transcode them.",
+        "NSNetworkVolumesUsageDescription": "Caramba reads media files from network shares so it can play and transcode them."
+      }
     },
     "files": [
       "electron/**/*",

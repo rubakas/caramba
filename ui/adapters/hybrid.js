@@ -117,7 +117,15 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     return false
   }
 
-  /** Check if a file path is accessible on the local filesystem */
+  /** Check if a file path is accessible on the local filesystem.
+   *
+   * Must use `fs.existsSync` (access(F_OK) syscall), NOT `fs.statSync`.
+   * On macOS, TCC treats them differently: access(F_OK) often returns
+   * true for files the process can actually read via the binary
+   * (ffmpeg/ffprobe launched by Electron.app, which has Files & Folders
+   * access granted through the GUI prompt), while stat() fails with
+   * EPERM. Using stat() here caused playback to falsely route to the
+   * HTTP fallback for perfectly-readable local files. */
   async function fileExistsLocally(filePath) {
     if (!filePath) return false
     try {
@@ -245,9 +253,9 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     // === Playback: local if file accessible, else remote (HTTP streaming) ===
 
     startPlayback: async (filePath, startTime, prefs) => {
-      // When localPlayback is enabled, check if the media file is accessible
-      // on the local filesystem (e.g. via network mount, NAS share).
-      // When disabled, always stream from the server.
+      // When localPlayback is enabled, check whether the media file is
+      // accessible on the local filesystem (e.g. via network mount, NAS
+      // share). When disabled, always stream from the server.
       const locallyAccessible = localPlayback && await fileExistsLocally(filePath)
 
       if (locallyAccessible) {
@@ -255,7 +263,6 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
         return local.startPlayback(filePath, startTime, prefs)
       }
 
-      // File not accessible locally — use server-side transcoding (HTTP streaming)
       if (connected) {
         try {
           playbackMode = 'remote'
@@ -269,7 +276,6 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
         }
       }
 
-      // Neither local file nor server available
       playbackMode = null
       return { error: 'File is not accessible locally and the server is unreachable.' }
     },

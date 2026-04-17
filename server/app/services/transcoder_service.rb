@@ -28,11 +28,21 @@ class TranscoderService
     # ── Probe ─────────────────────────────────────────────────────────
 
     def probe(file_path)
-      args = %w[-v quiet -print_format json -show_format -show_streams]
+      args = %w[-v error -print_format json -show_format -show_streams]
       args << file_path
 
       stdout, stderr, status = run_command(ffprobe_path, args)
-      raise "ffprobe exited with #{status.exitstatus}: #{stderr[0..300]}" unless status.success?
+      unless status.success?
+        raw = stderr.to_s[0..300]
+        if raw =~ /Operation not permitted|Permission denied|EPERM|EACCES/i
+          raise "macOS blocked reading #{file_path}. " \
+                "The process running the Rails server needs Full Disk Access " \
+                "(or the terminal launching it does) in System Settings → " \
+                "Privacy & Security → Full Disk Access. Alternatively, move the " \
+                "media out of ~/Desktop, ~/Documents, or ~/Downloads."
+        end
+        raise "ffprobe exited with #{status.exitstatus}: #{raw}"
+      end
 
       data = JSON.parse(stdout)
       video_stream = (data["streams"] || []).find { |s| s["codec_type"] == "video" && s["codec_name"] != "mjpeg" }
