@@ -1,6 +1,6 @@
 {
   "private": true,
-  "version": "v1.2.7",
+  "version": "v1.3.0",
   "description": "Caramba — media center monorepo",
   "pnpm": {
     "onlyBuiltDependencies": [
