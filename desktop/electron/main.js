@@ -199,8 +199,10 @@ app.whenReady().then(() => {
 
     const isPlaylist = assetName === 'playlist.m3u8'
 
-    // ffmpeg writes the playlist and segments on its own schedule. Poll briefly.
-    const timeoutMs = isPlaylist ? 3000 : 1500
+    // ffmpeg writes the playlist and segments on its own schedule. Give
+    // segments up to 4s to appear — longer than the 2s segment duration so
+    // we respond successfully even when encoding briefly lags behind playback.
+    const timeoutMs = isPlaylist ? 3000 : 4000
     const pollEveryMs = 150
     const started = Date.now()
     while (!fs.existsSync(assetPath) && Date.now() - started < timeoutMs) {

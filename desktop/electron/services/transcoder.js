@@ -208,11 +208,14 @@ function buildArgs(filePath, seekTime, outputDir, strategy, opts) {
 
   args.push(
     '-f', 'hls',
-    '-hls_time', '4',
+    // 2s segments: keeps ffmpeg ahead of playback even under 1x realtime
+    // encode. temp_file flag means segments rename atomically so the protocol
+    // handler never reads a half-flushed file.
+    '-hls_time', '2',
     '-hls_list_size', '0',
     '-hls_playlist_type', 'event',
     '-hls_segment_type', 'fmp4',
-    '-hls_flags', 'independent_segments+append_list',
+    '-hls_flags', 'independent_segments+append_list+temp_file',
     '-start_number', '0',
     '-hls_fmp4_init_filename', 'init.mp4',
     '-hls_segment_filename', path.join(outputDir, 'segment_%d.m4s'),

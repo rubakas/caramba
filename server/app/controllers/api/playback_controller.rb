@@ -308,8 +308,10 @@ class Api::PlaybackController < Api::BaseController
     asset_path = TranscoderService.hls_asset_path(session_id, asset_name)
     return head :bad_request unless asset_path
 
-    # Wait briefly for the asset to be written
-    5.times do
+    # Wait up to 4s for ffmpeg to finish writing the segment. Longer than the
+    # segment duration, so we respond successfully even when encoding briefly
+    # lags behind wall-clock playback.
+    20.times do
       break if File.exist?(asset_path)
       sleep 0.2
     end

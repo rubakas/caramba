@@ -466,15 +466,20 @@ class TranscoderService
         args += %w[-c:a aac -b:a 192k -ac 2]
       end
 
-      # HLS output: CMAF (fMP4) segments. hls_flags independent_segments lets
-      # clients decode each segment in isolation.
+      # HLS output: CMAF (fMP4) segments.
+      #   hls_time 2       — 2-second segments so the playlist grows faster than
+      #                      playback consumes it, even under 1× realtime encode
+      #                      (avoids the "play 4s, stall for 1–3s, resume" pattern).
+      #   temp_file        — atomic write: ffmpeg writes *.tmp then renames, so
+      #                      the HTTP server never sees a half-flushed segment.
+      #   independent_segments — each segment decodes standalone.
       args += %w[
         -f hls
-        -hls_time 4
+        -hls_time 2
         -hls_list_size 0
         -hls_playlist_type event
         -hls_segment_type fmp4
-        -hls_flags independent_segments+append_list
+        -hls_flags independent_segments+append_list+temp_file
         -start_number 0
       ]
       args += [ "-hls_fmp4_init_filename", "init.mp4" ]

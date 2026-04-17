@@ -190,13 +190,14 @@ export default function VideoPlayer() {
         maxMaxBufferLength: 60,             // seconds hard cap
         maxBufferSize: 60 * 1024 * 1024,    // 60 MB
         backBufferLength: 15,               // seconds behind playhead
-        // Retry transient network errors before giving up
-        manifestLoadingMaxRetry: 5,
-        manifestLoadingRetryDelay: 1000,
-        levelLoadingMaxRetry: 5,
-        levelLoadingRetryDelay: 1000,
-        fragLoadingMaxRetry: 5,
-        fragLoadingRetryDelay: 1000,
+        // Transient retry — ffmpeg may lag one segment behind playback on
+        // slower encodes. Short delay + more retries beats a visible stall.
+        manifestLoadingMaxRetry: 6,
+        manifestLoadingRetryDelay: 500,
+        levelLoadingMaxRetry: 6,
+        levelLoadingRetryDelay: 500,
+        fragLoadingMaxRetry: 8,
+        fragLoadingRetryDelay: 500,
       })
       hlsRef.current = hls
       hls.loadSource(manifestUrl)
