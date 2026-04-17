@@ -333,12 +333,18 @@ class TranscoderService
 
     # ── Strategy selection (public for controller/tests) ──────────────
 
+    # Video codecs we can remux straight into HLS/fMP4 for Chromium-based
+    # clients (Electron ≥ 33, modern Chrome/Edge) and native-HLS Safari.
+    # HEVC (incl. 10-bit, incl. x265 BluRay rips) is hardware-decoded via
+    # VideoToolbox on macOS Apple Silicon. Anything else must be re-encoded.
+    DIRECT_PLAY_VIDEO_CODECS = %w[h264 hevc h265].freeze
+
     # Returns one of :direct_play, :audio_transcode, :full_transcode.
     def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index)
       return :full_transcode if burn_subtitle_index
 
       video_codec = probe_result.dig(:video, :codec)
-      return :full_transcode unless video_codec == "h264"
+      return :full_transcode unless DIRECT_PLAY_VIDEO_CODECS.include?(video_codec)
 
       audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
       audio_codec = audio_stream ? audio_stream[:codec] : nil
@@ -464,6 +470,12 @@ class TranscoderService
       args += %w[-analyzeduration 2000000 -probesize 2000000] if strategy == :full_transcode
 
       args += [ "-i", file_path ]
+
+      # After `-ss T -c copy`, the first output packet's PTS is ~T (source
+      # coordinates), not 0. The <video> element then reports currentTime = T,
+      # and the player doubles up by adding its own seekBase. Rebase to zero
+      # so the HLS stream always starts at 0 regardless of input seek.
+      args += %w[-copyts -start_at_zero]
 
       # Filters / stream mapping
       if burn_sub

@@ -168,11 +168,17 @@ async function probe(filePath) {
   })
 }
 
+// Browser-decodable video codecs we can remux straight into HLS/fMP4 on
+// Electron ≥ 33 (Chromium ≥ 130) on macOS. HEVC (incl. 10-bit, incl. x265
+// BluRay rips) is hardware-decoded via VideoToolbox. Anything outside this
+// list must be re-encoded to H.264.
+const DIRECT_PLAY_VIDEO_CODECS = new Set(['h264', 'hevc', 'h265'])
+
 // One of 'direct_play' | 'audio_transcode' | 'full_transcode'.
 function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex) {
   if (burnSubtitleIndex != null) return 'full_transcode'
   const videoCodec = probeResult.video?.codec
-  if (videoCodec !== 'h264') return 'full_transcode'
+  if (!DIRECT_PLAY_VIDEO_CODECS.has(videoCodec)) return 'full_transcode'
   const audio = probeResult.audioStreams.find(s => s.index === audioStreamIndex)
   const audioCodec = audio?.codec
   return audioCodec === 'aac' ? 'direct_play' : 'audio_transcode'
@@ -221,6 +227,12 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
   }
 
   args.push('-i', INPUT_FD_PATH)
+
+  // After `-ss T -c copy`, the first output packet's PTS is ~T (source
+  // coordinates), not 0. The <video> element then reports currentTime = T,
+  // and the player doubles up by adding its own seekBase. Rebase to zero
+  // so the HLS stream always starts at 0 regardless of input seek.
+  args.push('-copyts', '-start_at_zero')
 
   if (burnSub) {
     args.push('-filter_complex',
