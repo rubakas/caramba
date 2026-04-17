@@ -183,14 +183,13 @@ export default function VideoPlayer() {
 
     cleanupSource()
 
-    const useNativeHls = video.canPlayType('application/vnd.apple.mpegurl')
-
-    if (useNativeHls) {
-      console.log('[Player] Native HLS:', manifestUrl)
-      video.src = manifestUrl
-      video.load()
-      video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
-    } else if (Hls.isSupported()) {
+    // Prefer hls.js whenever MSE is available — covers every Chromium
+    // environment (Electron, Chrome, Android WebView). Fall back to native
+    // HLS only for Safari/iOS. Android WebView can return "maybe" for
+    // `application/vnd.apple.mpegurl` even though it cannot actually play
+    // HLS natively, so checking Hls.isSupported() first avoids the
+    // infinite-spinner trap.
+    if (Hls.isSupported()) {
       console.log('[Player] hls.js:', manifestUrl)
       const hls = new Hls({
         // Always start at the beginning of the new playlist, regardless of
@@ -244,6 +243,11 @@ export default function VideoPlayer() {
             cleanupSource()
         }
       })
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      console.log('[Player] Native HLS:', manifestUrl)
+      video.src = manifestUrl
+      video.load()
+      video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
     } else {
       console.warn('[Player] No HLS support; falling back to direct src')
       video.src = manifestUrl
