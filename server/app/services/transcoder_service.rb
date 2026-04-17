@@ -111,6 +111,7 @@ class TranscoderService
           subtitle_stream_index: subtitle_stream_index,
           subtitle_vtt: nil,
           hls_dir: File.join(TMP_ROOT, "hls", session_id),
+          codec_support: opts[:codec_support],
           started_at: Time.current
         }
 
@@ -333,18 +334,34 @@ class TranscoderService
 
     # ── Strategy selection (public for controller/tests) ──────────────
 
-    # Video codecs we can remux straight into HLS/fMP4 for Chromium-based
-    # clients (Electron ≥ 33, modern Chrome/Edge) and native-HLS Safari.
-    # HEVC (incl. 10-bit, incl. x265 BluRay rips) is hardware-decoded via
-    # VideoToolbox on macOS Apple Silicon. Anything else must be re-encoded.
-    DIRECT_PLAY_VIDEO_CODECS = %w[h264 hevc h265].freeze
+    # Client-supplied MSE codec capabilities trump our fixed list, because
+    # MSE HEVC support varies wildly: present on Chromium/macOS and Safari,
+    # but often missing in Android WebView (including Android TV WebView on
+    # many system images) even when the device can hardware-decode HEVC
+    # elsewhere. Fallback defaults assume a modern Chromium desktop — HEVC
+    # allowed — which covers Electron and desktop browsers.
+    DEFAULT_CLIENT_DIRECT_PLAY_CODECS = %w[h264 hevc h265].freeze
+
+    def allowed_direct_play_codecs(codec_support)
+      return DEFAULT_CLIENT_DIRECT_PLAY_CODECS if codec_support.nil?
+      allowed = []
+      allowed += %w[h264] if truthy?(codec_support[:h264]) || truthy?(codec_support["h264"])
+      allowed += %w[hevc h265] if truthy?(codec_support[:hevc]) || truthy?(codec_support["hevc"])
+      # If client reported nothing, assume baseline H.264 (universal).
+      allowed.empty? ? %w[h264] : allowed
+    end
+
+    def truthy?(v)
+      v == true || v == "true" || v == 1 || v == "1"
+    end
 
     # Returns one of :direct_play, :audio_transcode, :full_transcode.
-    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index)
+    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil)
       return :full_transcode if burn_subtitle_index
 
       video_codec = probe_result.dig(:video, :codec)
-      return :full_transcode unless DIRECT_PLAY_VIDEO_CODECS.include?(video_codec)
+      allowed = allowed_direct_play_codecs(codec_support)
+      return :full_transcode unless allowed.include?(video_codec)
 
       audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
       audio_codec = audio_stream ? audio_stream[:codec] : nil
@@ -402,7 +419,8 @@ class TranscoderService
       FileUtils.mkdir_p(hls_dir)
 
       probe_result = probe(file_path)
-      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index])
+      codec_support = @session && @session[:codec_support]
+      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support)
 
       args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result, opts)
 

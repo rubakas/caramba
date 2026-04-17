@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Start Rails API server + web (Vite) + Android TV app on an emulator
+# via Capacitor live-reload.
+#
+# Prereqs:
+#   - Android SDK installed at $HOME/Library/Android/sdk
+#     (override with ANDROID_SDK_ROOT if elsewhere)
+#   - An AVD named "Television_4K" (override with CARAMBA_AVD)
+#     Create one via Android Studio → Device Manager → "Android TV (1080p)"
+#     or "Television (4K)" system image.
+#   - `pnpm install` has been run in android-tv/
+exec bin/foreman start -f Procfile.android "$@"

@@ -58,12 +58,13 @@ class Api::PlaybackController < Api::BaseController
   # ── Streaming endpoints ─────────────────────────────────────────────
 
   # POST /api/playback/start
-  # Body: { filePath, startTime, prefs: { audioLanguage, subtitleLanguage, subtitleOff } }
+  # Body: { filePath, startTime, prefs, codecSupport: { h264, hevc } }
   # Returns: { hlsUrl, sessionId, duration, startTime, seekBase, ... }
   def start
     file_path = params[:filePath]
     start_time = (params[:startTime] || 0).to_f
     prefs = params[:prefs]
+    codec_support = params[:codecSupport] # { h264: bool, hevc: bool }
 
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
     return render(json: { error: "File not found: #{file_path}" }, status: :unprocessable_entity) unless File.exist?(file_path)
@@ -79,7 +80,8 @@ class Api::PlaybackController < Api::BaseController
       audio_stream_index: audio_stream_index,
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
       subtitle_stream_index: subtitle_stream_index,
-      duration: info[:duration])
+      duration: info[:duration],
+      codec_support: codec_support)
 
     session[:playback_session_id] = session_id
 
