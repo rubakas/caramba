@@ -77,7 +77,6 @@ export default function VideoPlayer() {
   const videoRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
-  const rafRef = useRef(null)
    const trackMenuRef = useRef(null)
    const clickTimerRef = useRef(null)
    const isTouchRef = useRef(false)
@@ -92,6 +91,15 @@ export default function VideoPlayer() {
   // ffmpeg starts from seekBase, so the video element's timeline resets to 0.
   // Absolute time = seekBase + video.currentTime.
   const seekBaseRef = useRef(0)
+
+  // Scrubber drag + seek-in-flight flags. Declared at the top of the
+  // component (not next to their handlers below) so the rAF/timeupdate
+  // `updateTime` closure below can reference them without relying on
+  // temporal-dead-zone gymnastics — Vite Fast Refresh has been known to
+  // leave closures pointing at stale ref bindings otherwise.
+  const seekingRef = useRef(false)
+  const seekBarDragging = useRef(false)
+  const seekBarTarget = useRef(null)
 
   const [paused, setPaused] = useState(false)
   const [currentTime, setCurrentTime] = useState(0) // absolute time for display
@@ -185,6 +193,14 @@ export default function VideoPlayer() {
     } else if (Hls.isSupported()) {
       console.log('[Player] hls.js:', manifestUrl)
       const hls = new Hls({
+        // Always start at the beginning of the new playlist, regardless of
+        // whatever stale currentTime the <video> element is carrying from
+        // a previous session. Without this, hls.js defaults to -1 which
+        // means "auto-pick based on playlist type" — and for EVENT playlists
+        // without ENDLIST (ours, while ffmpeg is still transcoding), it
+        // treats them as live and seeks near the live edge, honouring the
+        // video element's stale currentTime if non-zero.
+        startPosition: 0,
         // Conservative buffer caps — Android TV WebView has tight memory limits.
         maxBufferLength: 30,                // seconds forward
         maxMaxBufferLength: 60,             // seconds hard cap
@@ -204,6 +220,10 @@ export default function VideoPlayer() {
       hls.attachMedia(video)
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Belt-and-suspenders with startPosition: 0 above — explicitly snap
+        // to zero once the new manifest is parsed, in case the <video>
+        // element still holds an old session's currentTime.
+        try { video.currentTime = 0 } catch {}
         video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
       })
 
@@ -310,33 +330,35 @@ export default function VideoPlayer() {
   }, [subtitleSize, subtitleStyle])
 
   // --- requestAnimationFrame time polling ---
-  // Absolute time = seekBase + video.currentTime
-  const updateTime = useCallback(() => {
-    if (seekBarDragging.current) return
-    const video = videoRef.current
-    if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-      setCurrentTime(seekBaseRef.current + video.currentTime)
-    }
-  }, [])
-
+  // Absolute time = seekBase + video.currentTime.
+  // Skip while the user is dragging the scrubber OR a seek is in flight —
+  // in both cases seekBaseRef and video.currentTime belong to different
+  // sessions and would produce a bogus display time.
+  // Display time updates come ONLY from the video element's `timeupdate`
+  // event, which only fires while the video is actively playing. We used
+  // to run a requestAnimationFrame loop alongside this for smoother updates,
+  // but that loop kept firing during the ~500ms seek roundtrip and wrote
+  // `newSeekBase + oldVideoCurrentTime` into the scrubber — which
+  // manifested as "click at start, scrubber jumps forward by however long
+  // the old stream had been playing". Relying on `timeupdate` + natural
+  // pause semantics eliminates the race entirely.
   useEffect(() => {
     if (!playerState.open) return
-
-    const tick = () => {
-      updateTime()
-      rafRef.current = requestAnimationFrame(tick)
-    }
-
-    rafRef.current = requestAnimationFrame(tick)
-
     const video = videoRef.current
-    if (video) video.addEventListener('timeupdate', updateTime)
+    if (!video) return
 
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      if (video) video.removeEventListener('timeupdate', updateTime)
+    const onTimeUpdate = () => {
+      if (seekBarDragging.current) return
+      if (seekingRef.current) return
+      if (video.paused || !isFinite(video.currentTime) || video.currentTime <= 0) return
+      setCurrentTime(seekBaseRef.current + video.currentTime)
     }
-  }, [playerState.open, updateTime])
+
+    video.addEventListener('timeupdate', onTimeUpdate)
+    return () => {
+      video.removeEventListener('timeupdate', onTimeUpdate)
+    }
+  }, [playerState.open, playerState.sessionId])
 
   // Report progress periodically (absolute time)
   useEffect(() => {
@@ -449,11 +471,21 @@ export default function VideoPlayer() {
   }, [playerState.type, playNextEpisode, handleClose])
 
   // Seek: ask server to restart ffmpeg at target time, get new stream URL
-  const seekingRef = useRef(false)
-
   const doSeek = useCallback(async (absoluteTime) => {
     if (seekingRef.current) return
     seekingRef.current = true
+
+    // Pre-commit the intended display position and pause the old stream.
+    // Pausing stops the old video element from advancing its currentTime
+    // during the ~300-800ms server roundtrip — otherwise the rAF loop keeps
+    // computing display = oldSeekBase + oldCurrentTime and visually "chases"
+    // the old playback position instead of staying put at the seek target.
+    seekBaseRef.current = absoluteTime
+    setCurrentTime(absoluteTime)
+    const video = videoRef.current
+    if (video) {
+      try { video.pause() } catch {}
+    }
 
     try {
       setBuffering(true)
@@ -485,10 +517,8 @@ export default function VideoPlayer() {
     doSeek(newTime)
   }, [totalDuration, doSeek])
 
-  // Seek bar: drag updates visual position, commit triggers actual seek
-  const seekBarDragging = useRef(false)
-  const seekBarTarget = useRef(null)
-
+  // Seek bar: drag updates visual position, commit triggers actual seek.
+  // (Refs declared at the top of the component.)
   const handleSeekBarInput = useCallback((e) => {
     seekBarDragging.current = true
     seekBarTarget.current = parseFloat(e.target.value)

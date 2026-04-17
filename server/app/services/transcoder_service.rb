@@ -471,12 +471,6 @@ class TranscoderService
 
       args += [ "-i", file_path ]
 
-      # After `-ss T -c copy`, the first output packet's PTS is ~T (source
-      # coordinates), not 0. The <video> element then reports currentTime = T,
-      # and the player doubles up by adding its own seekBase. Rebase to zero
-      # so the HLS stream always starts at 0 regardless of input seek.
-      args += %w[-copyts -start_at_zero]
-
       # Filters / stream mapping
       if burn_sub
         args += [ "-filter_complex", "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1" ]
@@ -517,7 +511,7 @@ class TranscoderService
         -hls_list_size 0
         -hls_playlist_type event
         -hls_segment_type fmp4
-        -hls_flags independent_segments+append_list+temp_file
+        -hls_flags independent_segments+temp_file
         -start_number 0
       ]
       args += [ "-hls_fmp4_init_filename", "init.mp4" ]

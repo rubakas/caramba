@@ -318,7 +318,11 @@ class Api::PlaybackController < Api::BaseController
 
     return head :not_found unless File.exist?(asset_path)
 
-    response.headers["Cache-Control"] = "max-age=3600"
+    # Must not cache: segment filenames reset to segment_0 on every
+    # seek/session restart, so the same URL carries different content
+    # across sessions. Caching would hand back stale bytes and desync
+    # hls.js's PTS tracking.
+    response.headers["Cache-Control"] = "no-store"
     send_file asset_path,
       type: "video/mp4",
       disposition: "inline"

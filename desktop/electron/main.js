@@ -232,7 +232,7 @@ app.whenReady().then(() => {
       return new Response(text, {
         headers: {
           'Content-Type': 'application/vnd.apple.mpegurl',
-          'Cache-Control': 'no-cache',
+          'Cache-Control': 'no-store',
         },
       })
     }
@@ -241,7 +241,11 @@ app.whenReady().then(() => {
     return new Response(body, {
       headers: {
         'Content-Type': 'video/mp4',
-        'Cache-Control': 'max-age=3600',
+        // Must not cache: segment filenames reset to segment_0 on every
+        // seek/session restart, so the same URL carries different content
+        // across sessions. Caching would hand back stale bytes and desync
+        // hls.js's PTS tracking.
+        'Cache-Control': 'no-store',
       },
     })
   })

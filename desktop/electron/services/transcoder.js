@@ -228,12 +228,6 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
 
   args.push('-i', INPUT_FD_PATH)
 
-  // After `-ss T -c copy`, the first output packet's PTS is ~T (source
-  // coordinates), not 0. The <video> element then reports currentTime = T,
-  // and the player doubles up by adding its own seekBase. Rebase to zero
-  // so the HLS stream always starts at 0 regardless of input seek.
-  args.push('-copyts', '-start_at_zero')
-
   if (burnSub) {
     args.push('-filter_complex',
       `[0:v:0][0:${opts.burnSubtitleIndex}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1`)
@@ -270,7 +264,12 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
     '-hls_list_size', '0',
     '-hls_playlist_type', 'event',
     '-hls_segment_type', 'fmp4',
-    '-hls_flags', 'independent_segments+append_list+temp_file',
+    // independent_segments — each segment decodes standalone.
+    // temp_file — atomic .tmp + rename so the server never reads a partial file.
+    // NO append_list: it makes ffmpeg carry source-coordinate segment numbers
+    // and PTS into the output, which desyncs the scrubber from playback after
+    // seeks. Without it, each restart produces a clean zero-based playlist.
+    '-hls_flags', 'independent_segments+temp_file',
     '-start_number', '0',
     '-hls_fmp4_init_filename', 'init.mp4',
     '-hls_segment_filename', path.join(outputDir, 'segment_%d.m4s'),
