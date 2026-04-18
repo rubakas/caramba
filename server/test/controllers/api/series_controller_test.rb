@@ -27,6 +27,29 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "breaking-bad", data["slug"]
   end
 
+  test "poster_url points at the Rails proxy when an image is attached" do
+    series = series(:breaking_bad)
+    series.poster.attach(
+      io: StringIO.new("\xFF\xD8\xFFbytes".b),
+      filename: "bb.jpg",
+      content_type: "image/jpeg"
+    )
+
+    get "/api/series/breaking-bad"
+    data = JSON.parse(response.body)
+
+    assert_match(%r{/rails/active_storage/blobs/proxy/.+/bb\.jpg\z}, data["poster_url"])
+  end
+
+  test "poster_url falls back to the external URL when no image is attached" do
+    series(:breaking_bad).poster.detach
+
+    get "/api/series/breaking-bad"
+    data = JSON.parse(response.body)
+
+    assert_equal "https://example.com/bb.jpg", data["poster_url"]
+  end
+
   test "show returns 404 for unknown slug" do
     get "/api/series/nonexistent"
     assert_response :not_found

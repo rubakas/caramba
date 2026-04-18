@@ -1,4 +1,6 @@
 class Watchlist < ApplicationRecord
+  include Posterable
+
   self.table_name = "watchlist"
   self.inheritance_column = :_type_disabled # 'type' column is not STI
 

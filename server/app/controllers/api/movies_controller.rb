@@ -1,14 +1,19 @@
 class Api::MoviesController < Api::BaseController
   # GET /api/movies
   def index
-    render json: Movie.all.order(:title)
+    movies = Movie.with_attached_poster.order(:title)
+    render json: movies.map { |m| m.as_json.merge("poster_url" => poster_url_for(m)) }
   end
 
   # GET /api/movies/:slug
   def show
-    movie = Movie.find_by!(slug: params[:slug])
+    movie = Movie.with_attached_poster.find_by!(slug: params[:slug])
     dl = Download.find_by(movie_id: movie.id)
-    render json: movie.as_json.merge("download" => dl&.as_json)
+    payload = movie.as_json.merge(
+      "poster_url" => poster_url_for(movie),
+      "download" => dl&.as_json
+    )
+    render json: payload
   end
 
   # POST /api/movies

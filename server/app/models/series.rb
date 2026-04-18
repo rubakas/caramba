@@ -1,4 +1,6 @@
 class Series < ApplicationRecord
+  include Posterable
+
   has_many :episodes, dependent: :destroy
   has_many :watch_histories, through: :episodes
   has_many :playback_preferences, dependent: :destroy

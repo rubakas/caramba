@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { genresList, premiereYear, statusClass, progressPercent, runtimeDisplay, isInProgress } from '../utils'
 
@@ -17,7 +17,7 @@ const getTVPosterUrl = (url) => {
   return url
 }
 
-export default function PosterCard({ item, type = 'series', resumable = false, autoFocus = false }) {
+function PosterCard({ item, type = 'series', resumable = false, autoFocus = false }) {
   const navigate = useNavigate()
   const cardRef = useRef(null)
 
@@ -107,3 +107,15 @@ export default function PosterCard({ item, type = 'series', resumable = false, a
     </div>
   )
 }
+
+export default memo(PosterCard, (prev, next) => (
+  prev.type === next.type &&
+  prev.resumable === next.resumable &&
+  prev.autoFocus === next.autoFocus &&
+  prev.item?.slug === next.item?.slug &&
+  prev.item?.poster_url === next.item?.poster_url &&
+  prev.item?.watched_episodes === next.item?.watched_episodes &&
+  prev.item?.total_episodes === next.item?.total_episodes &&
+  prev.item?.progress_seconds === next.item?.progress_seconds &&
+  prev.item?.duration_seconds === next.item?.duration_seconds
+))

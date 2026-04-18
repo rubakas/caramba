@@ -66,7 +66,11 @@ class ImdbApiService
       attrs[:director] = data["directors"].filter_map { |d| d["displayName"] }.join(", ") if data["directors"].is_a?(Array) && data["directors"].any?
       attrs[:runtime] = (data["runtimeSeconds"].to_i / 60.0).round if data["runtimeSeconds"] && data["runtimeSeconds"].to_i > 0
 
-      movie.update!(attrs) if attrs.any?
+      if attrs.any?
+        poster_changed = attrs.key?(:poster_url) && movie.poster_url != attrs[:poster_url]
+        movie.update!(attrs)
+        movie.download_poster! if poster_changed && movie.poster_url.present?
+      end
 
       Rails.logger.info("ImdbApiService: updated '#{movie.title}' (IMDb: #{data["id"]})")
       true

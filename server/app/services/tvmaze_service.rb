@@ -65,6 +65,8 @@ class TvmazeService
       poster_url = data.dig("image", "original") || data.dig("image", "medium")
       summary = strip_html(data["summary"])
 
+      poster_changed = series.poster_url != poster_url
+
       series.update!(
         tvmaze_id: data["id"],
         poster_url: poster_url,
@@ -75,6 +77,8 @@ class TvmazeService
         status: data["status"],
         imdb_id: data.dig("externals", "imdb")
       )
+
+      series.download_poster! if poster_changed && poster_url.present?
 
       # Update episode metadata — match by S01E01 code
       api_episodes = data.dig("_embedded", "episodes") || []

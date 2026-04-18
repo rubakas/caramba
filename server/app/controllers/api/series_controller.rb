@@ -101,6 +101,7 @@ class Api::SeriesController < Api::BaseController
     watched = s.episodes.watched.count
     mode = continue_for(s)[:mode]
     s.as_json.merge(
+      "poster_url" => poster_url_for(s),
       "season_count" => s.season_count,
       "total_watch_time" => s.total_watch_time,
       "total_episodes" => total,

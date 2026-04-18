@@ -9,10 +9,11 @@ class Api::WatchlistController < Api::BaseController
     library_movies = Movie.where.not(imdb_id: nil).pluck(:imdb_id, :slug)
     slug_by_imdb = library_movies.to_h
 
-    render json: items.map { |item|
+    render json: items.with_attached_poster.map { |item|
       is_movie = item.type == "movie"
       item.as_json.merge(
         "_type" => item.type || "show",
+        "poster_url" => poster_url_for(item),
         "in_library" => is_movie ? slug_by_imdb.key?(item.imdb_id) : slug_by_tvmaze.key?(item.tvmaze_id),
         "library_slug" => is_movie ? slug_by_imdb[item.imdb_id] : slug_by_tvmaze[item.tvmaze_id],
         "in_watchlist" => true
@@ -55,6 +56,8 @@ class Api::WatchlistController < Api::BaseController
         imdb_id: params[:imdb_id]
       )
     end
+
+    item.download_poster! unless item.poster.attached?
 
     render json: { success: true }
   end

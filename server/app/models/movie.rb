@@ -1,5 +1,6 @@
 class Movie < ApplicationRecord
   include Watchable
+  include Posterable
 
   has_many :playback_preferences, dependent: :destroy
   has_many :downloads, dependent: :destroy
