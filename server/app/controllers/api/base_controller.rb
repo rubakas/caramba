@@ -16,17 +16,12 @@ class Api::BaseController < ActionController::API
   end
 
   # Returns the URL for an attached poster if present, otherwise falls back to
-  # the external URL stored on the record. Served via ActiveStorage's proxy
-  # controller as a resized variant — some IMDb originals are 8K × 12K / 10 MB,
-  # which slaughters initial-load time on TV even with caching.
+  # the external URL stored on the record. The blob itself is already resized
+  # at download time (see Posterable#download_poster!), so we can serve it
+  # directly without a variant hop.
   def poster_url_for(record)
-    variant = record.try(:poster_variant)
-    if variant
-      "#{request.base_url}#{rails_blob_representation_proxy_path(
-        signed_blob_id: variant.blob.signed_id,
-        variation_key: variant.variation.key,
-        filename: variant.blob.filename
-      )}"
+    if record.respond_to?(:poster) && record.poster.attached?
+      "#{request.base_url}#{rails_storage_proxy_path(record.poster)}"
     else
       record.try(:poster_url)
     end

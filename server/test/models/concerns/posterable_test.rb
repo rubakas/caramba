@@ -3,10 +3,10 @@ require "test_helper"
 class PosterableTest < ActiveSupport::TestCase
   IMAGE_URL = "https://static.tvmaze.com/uploads/images/original/poster.jpg".freeze
 
-  test "download_poster! attaches the fetched image" do
+  test "download_poster! attaches the resized image" do
     stub_request(:get, IMAGE_URL).to_return(
       status: 200,
-      body: "\xFF\xD8\xFFbytes".b,
+      body: FAKE_JPEG,
       headers: { "Content-Type" => "image/jpeg" }
     )
 

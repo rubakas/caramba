@@ -6,29 +6,29 @@ module Posterable
   extend ActiveSupport::Concern
   require "net/http"
   require "uri"
-  require "open-uri"
+  require "tempfile"
+  require "image_processing/vips"
 
   POSTER_FETCH_TIMEOUT = 15 # seconds
-  MAX_POSTER_BYTES = 15 * 1024 * 1024 # 15 MB ceiling — posters are ~500 KB
+  MAX_SOURCE_BYTES = 25 * 1024 * 1024 # 25 MB cap on what we'll download — some IMDb originals are 10 MB+
 
-  # Bounding box for the client-facing variant. 600×900 covers every card
-  # slot in the UI (TV ~200 px, desktop ~300 px) at 2× DPI and bounds each
-  # poster to ~50–150 KB regardless of the source resolution (some IMDb
-  # originals are 8K × 12K and 10 MB).
-  POSTER_VARIANT = { resize_to_limit: [ 600, 900 ], saver: { quality: 82 } }.freeze
+  # Target size for the stored blob. 600×900 covers every card slot in the UI
+  # (TV ~200 px, desktop ~300 px) at 2× DPI. We resize at download time rather
+  # than storing the 8K × 12K source and generating a variant on read, so the
+  # blob on disk is already the small version and the first request doesn't
+  # have to pipe a 10 MB file through libvips.
+  POSTER_MAX_WIDTH = 600
+  POSTER_MAX_HEIGHT = 900
+  POSTER_QUALITY = 82
 
   included do
     has_one_attached :poster
   end
 
-  def poster_variant
-    return nil unless poster.attached?
-    poster.variant(POSTER_VARIANT)
-  end
-
-  # Download the external poster_url and attach it as an ActiveStorage blob.
-  # Returns true on success, false otherwise. Safe to call repeatedly —
-  # ActiveStorage replaces any prior attachment on the record.
+  # Download the external poster_url, resize it to POSTER_MAX_WIDTH ×
+  # POSTER_MAX_HEIGHT via libvips, and attach the resulting JPEG as an
+  # ActiveStorage blob. Returns true on success, false otherwise. Safe to
+  # call repeatedly — ActiveStorage replaces any prior attachment.
   def download_poster!
     return false if poster_url.blank?
 
@@ -42,21 +42,44 @@ module Posterable
       end
 
       return false unless response.is_a?(Net::HTTPSuccess)
-      return false if response.body.bytesize > MAX_POSTER_BYTES
+      return false if response.body.bytesize > MAX_SOURCE_BYTES
 
-      filename = File.basename(uri.path).presence || "poster.jpg"
-      content_type = response["content-type"]&.split(";")&.first&.strip.presence ||
-                     "image/jpeg"
+      resized = resize_poster(response.body)
+      return false unless resized
 
       poster.attach(
-        io: StringIO.new(response.body),
-        filename: filename,
-        content_type: content_type
+        io: resized,
+        filename: "poster.jpg",
+        content_type: "image/jpeg"
       )
       true
     rescue => e
       Rails.logger.warn("Posterable: download failed for #{self.class}##{id} — #{e.message}")
       false
+    ensure
+      resized&.close!
     end
+  end
+
+  private
+
+  # Pipe the downloaded bytes through libvips. Returns a Tempfile of the
+  # resized JPEG, or nil on failure. Caller is responsible for closing it.
+  def resize_poster(bytes)
+    source = Tempfile.new([ "poster_src", ".bin" ], binmode: true)
+    source.write(bytes)
+    source.rewind
+
+    ImageProcessing::Vips
+      .source(source)
+      .resize_to_limit(POSTER_MAX_WIDTH, POSTER_MAX_HEIGHT)
+      .convert("jpg")
+      .saver(quality: POSTER_QUALITY, strip: true)
+      .call
+  rescue Vips::Error, StandardError => e
+    Rails.logger.warn("Posterable: resize failed for #{self.class}##{id} — #{e.message}")
+    nil
+  ensure
+    source&.close!
   end
 end

@@ -69,9 +69,9 @@ Rails.application.routes.draw do
   end
 
   # SPA catch-all: serve React index.html for all non-API routes.
-  # Must be LAST so /api/* and /up routes take priority.
+  # Must be LAST so /api/*, /up, /rails/* (ActiveStorage) and /assets/* routes take priority.
   get "*path", to: "spa#index", constraints: ->(req) {
-    !req.path.start_with?("/api/", "/up") && !req.path.start_with?("/assets/")
+    !req.path.start_with?("/api/", "/up", "/rails/", "/assets/")
   }
   root "spa#index"
 end
