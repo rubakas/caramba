@@ -142,7 +142,7 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
 
     // Series
     listSeries: withFallback(http.listSeries, local.listSeries),
-    getResumable: withFallback(http.getResumable, local.getResumable),
+    getContinue: withFallback(http.getContinue, local.getContinue),
     // Custom getSeriesShow that enriches server data with local download status
     getSeriesShow: async (slug) => {
       // Wait for initial connection check before deciding

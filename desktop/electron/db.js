@@ -426,14 +426,6 @@ const episodes = {
     `).run(progressSeconds, durationSeconds, id)
   },
 
-  resumable(seriesId) {
-    return get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ? AND progress_seconds > 0 AND duration_seconds > 0
-      AND CAST(progress_seconds AS REAL) / duration_seconds < 0.9
-      ORDER BY last_watched_at DESC LIMIT 1
-    `).get(seriesId)
-  },
-
   // Get the immediate next episode after the given episodeId (by season/episode order)
   // regardless of watched status — used for auto-play next
   getNext(episodeId) {
@@ -446,25 +438,50 @@ const episodes = {
     `).get(current.series_id, current.season_number, current.season_number, current.episode_number) || null
   },
 
-  nextUp(seriesId) {
-    // Find last watched, then get the next unwatched episode
-    const lastWatched = get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ? AND watched = 1 ORDER BY season_number DESC, episode_number DESC LIMIT 1
+  // Compute the single "continue watching" CTA for a series.
+  // Returns { mode, episode } where mode is one of:
+  //   'resume'  — last-played episode is unfinished
+  //   'next'    — last-played (or highest watched) episode is finished, next sequential exists
+  //   'start'   — nothing played or watched; first episode is offered
+  //   'done'    — last-played is the finale and finished
+  //   'empty'   — series has no episodes
+  continueFor(seriesId) {
+    const lastPlayed = get().prepare(`
+      SELECT * FROM episodes WHERE series_id = ? AND last_watched_at IS NOT NULL
+      ORDER BY last_watched_at DESC LIMIT 1
     `).get(seriesId)
 
-    if (lastWatched) {
-      const next = get().prepare(`
-        SELECT * FROM episodes WHERE series_id = ? AND watched = 0
-        AND (season_number > ? OR (season_number = ? AND episode_number > ?))
-        ORDER BY season_number, episode_number LIMIT 1
-      `).get(seriesId, lastWatched.season_number, lastWatched.season_number, lastWatched.episode_number)
-      if (next) return next
+    if (lastPlayed) {
+      if (!isEpisodeFinished(lastPlayed)) {
+        return { mode: 'resume', episode: lastPlayed }
+      }
+      const next = this.getNext(lastPlayed.id)
+      return next ? { mode: 'next', episode: next } : { mode: 'done', episode: null }
     }
-    // Fallback: first unwatched
-    return get().prepare(
-      'SELECT * FROM episodes WHERE series_id = ? AND watched = 0 ORDER BY season_number, episode_number LIMIT 1'
-    ).get(seriesId)
+
+    const highestWatched = get().prepare(`
+      SELECT * FROM episodes WHERE series_id = ? AND watched = 1
+      ORDER BY season_number DESC, episode_number DESC LIMIT 1
+    `).get(seriesId)
+
+    if (highestWatched) {
+      const next = this.getNext(highestWatched.id)
+      return next ? { mode: 'next', episode: next } : { mode: 'done', episode: null }
+    }
+
+    const first = get().prepare(`
+      SELECT * FROM episodes WHERE series_id = ?
+      ORDER BY season_number, episode_number LIMIT 1
+    `).get(seriesId)
+
+    return first ? { mode: 'start', episode: first } : { mode: 'empty', episode: null }
   },
+}
+
+function isEpisodeFinished(ep) {
+  if (ep.watched === 1) return true
+  if (!ep.duration_seconds || ep.duration_seconds <= 0) return false
+  return ep.progress_seconds / ep.duration_seconds >= 0.9
 }
 
 // -- Movies CRUD --

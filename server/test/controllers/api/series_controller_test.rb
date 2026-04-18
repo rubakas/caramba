@@ -15,6 +15,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert bb.key?("total_episodes")
     assert bb.key?("watched_episodes")
     assert bb.key?("season_count")
+    assert bb.key?("has_continue")
   end
 
   test "show returns series by slug" do
@@ -39,8 +40,9 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert data.key?("series")
     assert data.key?("episodes")
     assert data.key?("seasons")
-    assert data.key?("resumeEp")
-    assert data.key?("nextEp")
+    assert data.key?("continue")
+    assert data["continue"].key?("mode")
+    assert data["continue"].key?("episode")
 
     assert_equal "Breaking Bad", data["series"]["name"]
     assert_kind_of Array, data["episodes"]
@@ -65,24 +67,96 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert_includes data, 2
   end
 
-  test "resumable returns partially watched episode" do
-    get "/api/series/breaking-bad/resumable"
+  test "continue returns resume when last played is unfinished" do
+    # bb_s01e02 was last_played 1 day ago (more recent than bb_s01e01 at 2 days)
+    # and has progress 1200/2880 < 0.9 → unfinished
+    get "/api/series/breaking-bad/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
-    # bb_s01e02 has progress 1200/2880 < 0.9
-    assert_not_nil data
-    assert_equal "S01E02", data["code"]
+    assert_equal "resume", data["mode"]
+    assert_equal "S01E02", data["episode"]["code"]
   end
 
-  test "next_up returns next unwatched episode" do
-    get "/api/series/breaking-bad/next_up"
+  test "continue returns next when last played is finished and a later episode exists" do
+    # Move S01E02 to fully watched and more recently played than S01E01
+    ep = episodes(:bb_s01e02)
+    ep.update!(watched: 1, progress_seconds: 2880, duration_seconds: 2880, last_watched_at: Time.current)
+
+    get "/api/series/breaking-bad/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
-    assert_not_nil data
-    # After S01E01 (watched), next should be S01E02
-    assert_equal "S01E02", data["code"]
+    assert_equal "next", data["mode"]
+    # S02E01 is the only episode after S01E02
+    assert_equal "S02E01", data["episode"]["code"]
+  end
+
+  test "continue does not suggest older unfinished episode after a later one was played" do
+    # Recreate the bug scenario: S01E02 unfinished (touched 1 day ago),
+    # then user played S02E01 to completion just now.
+    ep = episodes(:bb_s02e01)
+    ep.update!(watched: 1, progress_seconds: 3000, duration_seconds: 3000, last_watched_at: Time.current)
+
+    get "/api/series/breaking-bad/continue"
+    assert_response :success
+
+    data = JSON.parse(response.body)
+    # Should NOT resume the stale S01E02; there's no episode after S02E01 so we're done.
+    assert_equal "done", data["mode"]
+    assert_nil data["episode"]
+  end
+
+  test "continue returns start when nothing has been played or watched" do
+    get "/api/series/the-office/continue"
+    assert_response :success
+
+    data = JSON.parse(response.body)
+    assert_equal "start", data["mode"]
+    assert_equal "S01E01", data["episode"]["code"]
+  end
+
+  test "continue returns empty for a series with no episodes" do
+    get "/api/series/new-show/continue"
+    assert_response :success
+
+    data = JSON.parse(response.body)
+    assert_equal "empty", data["mode"]
+    assert_nil data["episode"]
+  end
+
+  test "continue resumes an episode after only a few seconds of playback" do
+    # Regression: clicking play used to eagerly mark an episode watched,
+    # so after 3s of playback `continue` would suggest the NEXT episode
+    # instead of resuming the one still in progress.
+    ep = episodes(:bb_s02e01)
+    Tempfile.create([ "episode", ".mkv" ]) do |f|
+      ep.update!(file_path: f.path, watched: 0, progress_seconds: 0, duration_seconds: 0, last_watched_at: nil)
+
+      post "/api/episodes/#{ep.id}/play"
+      assert_response :success
+
+      # Simulate a report_progress after 3 seconds of a ~48min episode
+      post "/api/playback/report_progress", params: { episode_id: ep.id, time: 3, duration: 2880 }
+      assert_response :success
+
+      get "/api/series/breaking-bad/continue"
+      data = JSON.parse(response.body)
+      assert_equal "resume", data["mode"]
+      assert_equal "S02E01", data["episode"]["code"]
+    end
+  end
+
+  test "index marks has_continue for a started series and not for an untouched one" do
+    get "/api/series"
+    assert_response :success
+    data = JSON.parse(response.body)
+
+    bb = data.find { |s| s["slug"] == "breaking-bad" }
+    office = data.find { |s| s["slug"] == "the-office" }
+
+    assert_equal true, bb["has_continue"]     # S01E02 is mid-playback
+    assert_equal false, office["has_continue"] # nothing watched → start mode
   end
 
   test "create with folder_path creates series and scans" do

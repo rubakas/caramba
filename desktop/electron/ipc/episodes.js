@@ -13,11 +13,8 @@ function register() {
     const filePath = resolvePlaybackPath(episode.file_path, episodeId, null)
     if (!filePath) return { error: 'File not found: ' + (episode.file_path || '(no path)') }
 
-    // Mark all prior episodes as watched
+    // Mark all prior episodes as watched (implied when you skip ahead in a series)
     db.episodes.markPriorWatched(episode.series_id, episode.season_number, episode.episode_number)
-
-    // Mark current episode as watched
-    db.episodes.markWatched(episodeId)
 
     // Create watch history entry
     const wh = db.watchHistories.create({ episode_id: episodeId })

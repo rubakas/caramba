@@ -17,11 +17,8 @@ class Api::EpisodesController < Api::BaseController
     ep = Episode.find(params[:id])
     return render(json: { error: "File not found: #{ep.file_path}" }, status: :unprocessable_entity) unless ep.file_path.present? && File.exist?(ep.file_path)
 
-    # Mark all prior episodes as watched
+    # Mark all prior episodes as watched (implied when you skip ahead in a series)
     Episode.mark_prior_watched!(ep.series_id, ep.season_number, ep.episode_number)
-
-    # Mark current episode as watched
-    ep.mark_watched!
 
     # Create watch history entry
     wh = ep.watch_histories.create!

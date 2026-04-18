@@ -61,7 +61,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   return {
     // Series
     listSeries: () => get('/api/series'),
-    getResumable: (slug) => get(`/api/series/${slug}/resumable`),
+    getContinue: (slug) => get(`/api/series/${slug}/continue`),
     getSeriesShow: (slug) => get(`/api/series/${slug}/full`),
     addSeries: noopAsync,
     scanSeries: noopAsync,

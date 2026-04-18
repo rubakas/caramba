@@ -8,7 +8,7 @@ export function createLocalAdapter() {
   return {
     // Series
     listSeries: () => api.listSeries(),
-    getResumable: (slug) => api.getResumable(slug),
+    getContinue: (slug) => api.getContinue(slug),
     getSeriesShow: (slug) => api.getSeriesShow(slug),
     addSeries: (path) => api.addSeries(path),
     scanSeries: (slug) => api.scanSeries(slug),

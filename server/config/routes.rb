@@ -9,8 +9,7 @@ Rails.application.routes.draw do
         get :full           # combined show page data
         get :episodes
         get :seasons
-        get :resumable
-        get :next_up
+        get :continue
         post :scan
         post :refresh_metadata
       end

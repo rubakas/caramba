@@ -25,8 +25,7 @@ export default function SeriesShow() {
   const [series, setSeries] = useState(null)
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
-  const [resumeEp, setResumeEp] = useState(null)
-  const [nextEp, setNextEp] = useState(null)
+  const [continueCta, setContinueCta] = useState({ mode: 'empty', episode: null })
   const [activeSeason, setActiveSeason] = useState(null)
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
@@ -46,8 +45,7 @@ export default function SeriesShow() {
       setSeries(data.series)
       setEpisodes(data.episodes)
       setSeasons(data.seasons)
-      setResumeEp(data.resumeEp)
-      setNextEp(data.nextEp)
+      setContinueCta(data.continue || { mode: 'empty', episode: null })
       setVlcAvailable(hasVlc)
 
       // Determine active season: last watched episode's season, or first season
@@ -246,15 +244,22 @@ export default function SeriesShow() {
   const playCtaGlass = useGlassConfig('play-cta')
   const primaryBtnGlass = useGlassConfig('primary-btn')
 
-  // Determine last watched episode
+  // Determine last watched episode (used for episode-row highlighting only)
   const lastWatched = [...episodes].filter(e => e.watched).sort((a, b) => {
     if (a.season_number !== b.season_number) return b.season_number - a.season_number
     return b.episode_number - a.episode_number
   })[0]
 
-  // CTA logic
-  const showResumeCta = resumeEp && (!nextEp || resumeEp.id !== nextEp.id)
-  const allWatched = totalEps > 0 && watchedCount >= totalEps
+  const ctaMode = continueCta.mode
+  const ctaEp = continueCta.episode
+  const ctaLabel = ctaMode === 'resume' ? 'Resume Where You Left Off'
+                  : ctaMode === 'next'  ? 'Up Next'
+                  : ctaMode === 'start' ? 'Start Watching'
+                  : ctaMode === 'done'  ? 'All Caught Up'
+                  : null
+  const ctaButtonText = ctaMode === 'resume' ? 'Resume' : 'Play'
+  const ctaCardClass = ctaMode === 'resume' ? 'cta-card cta-resume' : 'cta-card'
+  const ctaButtonClass = ctaMode === 'resume' ? 'btn-play-cta btn-play-cta--resume' : 'btn-play-cta'
 
   return (
     <>
@@ -332,69 +337,8 @@ export default function SeriesShow() {
           </div>
         ) : (
           <>
-            {/* Resume CTA */}
-            {showResumeCta && (
-              <refractive.div className="cta-card cta-resume" refraction={ctaCardGlass}>
-                <div className="cta-content">
-                  <span className="cta-label">Resume Where You Left Off</span>
-                  <div className="cta-episode">
-                    <span className="cta-code">{resumeEp.code}</span>
-                    <span className="cta-ep-title">{resumeEp.title}</span>
-                  </div>
-                  <div className="cta-progress-row">
-                    <div className="cta-progress-track">
-                      <div className="cta-progress-fill" style={{ width: `${progressPercent(resumeEp.progress_seconds, resumeEp.duration_seconds)}%` }} />
-                    </div>
-                    <span className="cta-progress-text">
-                      {formatTime(resumeEp.progress_seconds)} / {formatTime(resumeEp.duration_seconds)} ({progressPercent(resumeEp.progress_seconds, resumeEp.duration_seconds)}%)
-                    </span>
-                  </div>
-                </div>
-                {canPlay && (
-                  <refractive.button ref={primaryCtaRef} className="btn-play-cta btn-play-cta--resume" disabled={launching} onClick={() => handlePlay(resumeEp.id)} refraction={playCtaGlass} tabIndex={0}>
-                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Resume</>}
-                  </refractive.button>
-                )}
-              </refractive.div>
-            )}
-
-            {/* Next Up / Start / All Caught Up */}
-            {nextEp ? (
-              <refractive.div className="cta-card" refraction={ctaCardGlass}>
-                <div className="cta-content">
-                  <span className="cta-label">Up Next</span>
-                  <div className="cta-episode">
-                    <span className="cta-code">{nextEp.code}</span>
-                    <span className="cta-ep-title">{nextEp.title}</span>
-                  </div>
-                  {nextEp.description && (
-                    <p className="cta-desc">{truncate(nextEp.description, 150)}</p>
-                  )}
-                </div>
-                {canPlay && (
-                  <refractive.button ref={showResumeCta ? undefined : primaryCtaRef} className="btn-play-cta" disabled={launching} onClick={() => handlePlay(nextEp.id)} refraction={playCtaGlass} tabIndex={0}>
-                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {nextEp.progress_seconds > 0 && nextEp.duration_seconds > 0 && (nextEp.progress_seconds / nextEp.duration_seconds) < 0.9 ? 'Resume' : 'Play'}</>}
-                  </refractive.button>
-                )}
-              </refractive.div>
-            ) : !lastWatched ? (
-              episodes.length > 0 && (
-                <refractive.div className="cta-card" refraction={ctaCardGlass}>
-                  <div className="cta-content">
-                    <span className="cta-label">Start Watching</span>
-                    <div className="cta-episode">
-                      <span className="cta-code">{episodes[0].code}</span>
-                      <span className="cta-ep-title">{episodes[0].title}</span>
-                    </div>
-                  </div>
-                  {canPlay && (
-                    <refractive.button ref={showResumeCta ? undefined : primaryCtaRef} className="btn-play-cta" disabled={launching} onClick={() => handlePlay(episodes[0].id)} refraction={playCtaGlass} tabIndex={0}>
-                      {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> Play</>}
-                    </refractive.button>
-                  )}
-                </refractive.div>
-              )
-            ) : allWatched ? (
+            {/* Continue Watching CTA — single source of truth */}
+            {ctaMode === 'done' ? (
               <refractive.div className="cta-card" refraction={ctaCardGlass}>
                 <div className="cta-content">
                   <span className="cta-label">All Caught Up</span>
@@ -403,7 +347,34 @@ export default function SeriesShow() {
                   </div>
                 </div>
               </refractive.div>
-            ) : null}
+            ) : ctaEp && (
+              <refractive.div className={ctaCardClass} refraction={ctaCardGlass}>
+                <div className="cta-content">
+                  <span className="cta-label">{ctaLabel}</span>
+                  <div className="cta-episode">
+                    <span className="cta-code">{ctaEp.code}</span>
+                    <span className="cta-ep-title">{ctaEp.title}</span>
+                  </div>
+                  {ctaMode === 'resume' ? (
+                    <div className="cta-progress-row">
+                      <div className="cta-progress-track">
+                        <div className="cta-progress-fill" style={{ width: `${progressPercent(ctaEp.progress_seconds, ctaEp.duration_seconds)}%` }} />
+                      </div>
+                      <span className="cta-progress-text">
+                        {formatTime(ctaEp.progress_seconds)} / {formatTime(ctaEp.duration_seconds)} ({progressPercent(ctaEp.progress_seconds, ctaEp.duration_seconds)}%)
+                      </span>
+                    </div>
+                  ) : ctaEp.description ? (
+                    <p className="cta-desc">{truncate(ctaEp.description, 150)}</p>
+                  ) : null}
+                </div>
+                {canPlay && (
+                  <refractive.button ref={primaryCtaRef} className={ctaButtonClass} disabled={launching} onClick={() => handlePlay(ctaEp.id)} refraction={playCtaGlass} tabIndex={0}>
+                    {launching ? <><span className="btn-spinner" /> Loading...</> : <><PlaySvg /> {ctaButtonText}</>}
+                  </refractive.button>
+                )}
+              </refractive.div>
+            )}
 
             {/* Stats */}
             <div className="stats-row">

@@ -10,7 +10,10 @@ const VLC_APP_PATH = '/Applications/VLC.app'
 
 function register() {
   ipcMain.handle('series:list', () => {
-    return db.series.all()
+    return db.series.all().map(s => {
+      const { mode } = db.episodes.continueFor(s.id)
+      return { ...s, has_continue: mode === 'resume' || mode === 'next' }
+    })
   })
 
   ipcMain.handle('series:get', (_e, slug) => {
@@ -32,8 +35,7 @@ function register() {
     const episodes = db.episodes.forSeries(s.id)
     const seasons = db.episodes.seasons(s.id)
     const totalWatchTime = db.series.totalWatchTime(s.id)
-    const resumeEp = db.episodes.resumable(s.id) || null
-    const nextEp = db.episodes.nextUp(s.id) || null
+    const continueCta = db.episodes.continueFor(s.id)
     const vlcAvailable = process.platform === 'darwin' ? fs.existsSync(VLC_APP_PATH) : false
 
     // Attach download status to each episode
@@ -54,8 +56,7 @@ function register() {
       },
       episodes: episodesWithDl,
       seasons,
-      resumeEp,
-      nextEp,
+      continue: continueCta,
       vlcAvailable,
     }
   })
@@ -72,16 +73,10 @@ function register() {
     return db.episodes.seasons(s.id)
   })
 
-  ipcMain.handle('series:getResumable', (_e, slug) => {
+  ipcMain.handle('series:getContinue', (_e, slug) => {
     const s = db.series.findBySlug(slug)
-    if (!s) return null
-    return db.episodes.resumable(s.id)
-  })
-
-  ipcMain.handle('series:getNextUp', (_e, slug) => {
-    const s = db.series.findBySlug(slug)
-    if (!s) return null
-    return db.episodes.nextUp(s.id)
+    if (!s) return { mode: 'empty', episode: null }
+    return db.episodes.continueFor(s.id)
   })
 
   ipcMain.handle('series:add', async (_e, folderPath) => {

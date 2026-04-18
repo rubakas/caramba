@@ -24,7 +24,6 @@ export default function Library() {
   const api = useApi()
   const { canAdd, hasNowPlaying } = useCapabilities()
   const [seriesList, setSeriesList] = useState([])
-  const [resumables, setResumables] = useState({})
   const [loading, setLoading] = useState(true)
   const navActionGlass = useGlassConfig('nav-action')
   const primaryBtnGlass = useGlassConfig('primary-btn')
@@ -33,13 +32,6 @@ export default function Library() {
     try {
       const all = await api.listSeries()
       setSeriesList(all)
-      // Check resumable for each series
-      const res = {}
-      for (const s of all) {
-        const ep = await api.getResumable(s.slug)
-        if (ep) res[s.slug] = true
-      }
-      setResumables(res)
     } catch (err) {
       console.error('Failed to load series:', err)
     } finally {
@@ -95,7 +87,7 @@ export default function Library() {
                 key={s.slug}
                 item={s}
                 type="series"
-                resumable={!!resumables[s.slug]}
+                resumable={!!s.has_continue}
                 autoFocus={isAndroidTV && idx === 0}
               />
             ))}
