@@ -3184,12 +3184,6 @@ body.tv-mode .cta-card::after {
   display: none;
 }
 
-body.tv-mode .cta-card:focus-within {
-  border-color: var(--accent);
-  box-shadow: none;
-  background: rgba(28, 28, 30, 0.5);
-}
-
 body.tv-mode .cta-card:hover {
   box-shadow: none;
   background: rgba(28, 28, 30, 0.4);
@@ -3231,10 +3225,6 @@ body.tv-mode .btn-play-cta {
   border: 2px solid transparent;
   outline: none;
   transition: none;
-}
-
-body.tv-mode .btn-play-cta:focus {
-  border-color: #fff;
 }
 
 body.tv-mode .btn-play-cta:hover {
