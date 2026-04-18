@@ -30,7 +30,7 @@ contextBridge.exposeInMainWorld('api', {
   relocateMovie: (slug, newPath) => ipcRenderer.invoke('movies:relocate', slug, newPath),
 
   // Playback (new transcoder-based)
-  startPlayback: (filePath, startTime, prefs) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs),
+  startPlayback: (filePath, startTime, prefs, options) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs, options),
   seekPlayback: (time) => ipcRenderer.invoke('playback:seek', time),
   stopPlayback: (finalTime, finalDuration) => ipcRenderer.invoke('playback:stop', finalTime, finalDuration),
   reportProgress: (time, duration) => ipcRenderer.invoke('playback:progress', time, duration),

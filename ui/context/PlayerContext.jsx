@@ -2,6 +2,14 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo } 
 import { useToast } from './ToastContext'
 import { useApi } from './ApiContext'
 
+function readForceTranscode() {
+  try {
+    return typeof window !== 'undefined' && window.localStorage?.getItem('caramba.forceTranscode') === 'true'
+  } catch {
+    return false
+  }
+}
+
 const PlayerContext = createContext(null)
 
 export function PlayerProvider({ children }) {
@@ -28,6 +36,7 @@ export function PlayerProvider({ children }) {
     activeAudioIndex: null,
     activeSubtitleIndex: null, // null = off
     isBitmapSubtitle: false, // true when active subtitle is burned into video
+    strategy: null,
     subtitleSize: 'medium',
     subtitleStyle: 'classic',
   })
@@ -57,7 +66,7 @@ export function PlayerProvider({ children }) {
 
       // Start the transcoder — pass preferences so the backend picks the right
       // audio/subtitle track from the start (no post-start switching needed)
-      const result = await api.startPlayback(filePath, startTime || 0, prefs)
+      const result = await api.startPlayback(filePath, startTime || 0, prefs, { forceTranscode: readForceTranscode() })
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
@@ -85,6 +94,7 @@ export function PlayerProvider({ children }) {
         activeAudioIndex: result.activeAudioIndex ?? null,
         activeSubtitleIndex: result.activeSubtitleIndex ?? null,
         isBitmapSubtitle: result.isBitmapSubtitle || false,
+        strategy: result.strategy || null,
         subtitleSize: prefs?.subtitleSize || 'medium',
         subtitleStyle: prefs?.subtitleStyle || 'classic',
       })
@@ -202,6 +212,7 @@ export function PlayerProvider({ children }) {
             seekBase: result.seekBase ?? absoluteTime,
             sessionId: Date.now(),
             subtitleUrl,
+            strategy: result.strategy ?? prev.strategy,
           }
         })
         return result
@@ -233,6 +244,7 @@ export function PlayerProvider({ children }) {
             activeAudioIndex: audioStreamIndex,
             sessionId: Date.now(),
             subtitleUrl,
+            strategy: result.strategy ?? prev.strategy,
           }
           savePreferences(next)
           return next
@@ -282,6 +294,7 @@ export function PlayerProvider({ children }) {
             isBitmapSubtitle: isBitmap,
             subtitleUrl: null, // bitmap subs are burned in — no VTT track
             sessionId: Date.now(),
+            strategy: result.strategy ?? prev.strategy,
           }
           savePreferences(next, { activeSubtitleIndex: subtitleStreamIndex })
           return next

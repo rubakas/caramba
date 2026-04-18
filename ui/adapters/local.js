@@ -32,7 +32,7 @@ export function createLocalAdapter() {
     playMovie: (slug) => api.playMovie(slug),
 
     // Playback
-    startPlayback: (filePath, startTime, prefs) => api.startPlayback(filePath, startTime, prefs),
+    startPlayback: (filePath, startTime, prefs, options) => api.startPlayback(filePath, startTime, prefs, options),
     stopPlayback: (finalTime, finalDuration, _context) => api.stopPlayback(finalTime, finalDuration),
     setPlaybackEpisode: (id, whId) => api.setPlaybackEpisode(id, whId),
     setPlaybackMovie: (id) => api.setPlaybackMovie(id),

@@ -56,6 +56,15 @@ function subtitleLabel(stream) {
   return info ? `${lang} — ${info}` : lang
 }
 
+function strategyLabel(strategy) {
+  switch (strategy) {
+    case 'direct_play':     return 'Direct Play'
+    case 'audio_transcode': return 'Transcoding audio'
+    case 'full_transcode':  return 'Transcoding'
+    default:                return null
+  }
+}
+
 // Subtitle size presets
 const SUB_SIZES = [
   { id: 'small',  label: 'S',  em: '0.7em' },
@@ -83,7 +92,7 @@ export default function VideoPlayer() {
    const playBtnRef = useRef(null)  // For TV auto-focus
 
   // Detect Android TV for different control scheme
-  const isAndroidTV = typeof window !== 'undefined' && 
+  const isAndroidTV = typeof window !== 'undefined' &&
     window.Capacitor?.isNativePlatform?.() === true
 
   // seekBase: the absolute time (in the source file) that corresponds to
@@ -624,11 +633,11 @@ export default function VideoPlayer() {
   // Handle Android TV back button via Capacitor App plugin
   useEffect(() => {
     if (!playerState.open || !isAndroidTV) return
-    
+
     const setupBackHandler = async () => {
       try {
         const { App } = await import('@capacitor/app')
-        
+
         const backHandler = App.addListener('backButton', () => {
           console.log('[Player] Android TV back button pressed, tvMode:', tvMode)
           if (tvMode === 'audio' || tvMode === 'subtitles') {
@@ -639,7 +648,7 @@ export default function VideoPlayer() {
             handleClose()
           }
         })
-        
+
         return () => {
           backHandler.then(h => h.remove())
         }
@@ -647,7 +656,7 @@ export default function VideoPlayer() {
         console.warn('[Player] Could not set up back handler:', err)
       }
     }
-    
+
     const cleanup = setupBackHandler()
     return () => {
       cleanup?.then(fn => fn?.())
@@ -664,7 +673,7 @@ export default function VideoPlayer() {
       // Android TV has two modes: 'seek' and 'settings'
       // In seek mode: Left/Right = seek, Enter = play/pause, Up = go to settings
       // In settings mode: D-pad navigates menu, Back = return to seek mode
-      
+
       if (isAndroidTV) {
         switch (e.key) {
           case 'Enter':
@@ -734,7 +743,7 @@ export default function VideoPlayer() {
         }
         return
       }
-      
+
       // Desktop controls (unchanged)
       switch (e.key) {
         case ' ':
@@ -816,7 +825,7 @@ export default function VideoPlayer() {
     // TV controls visibility state
     const tvControlsHidden = !controlsVisible && !paused && !buffering && tvMode === 'seek'
     const isSettingsMode = tvMode === 'audio' || tvMode === 'subtitles'
-    
+
     return (
       <div
         ref={containerRef}
@@ -1116,10 +1125,10 @@ export default function VideoPlayer() {
              isTouchRef.current = false
              return
            }
-           
+
            showControls()
            if (trackMenuOpen) { setTrackMenuOpen(false); return }
-           
+
            if (clickTimerRef.current) {
              clearTimeout(clickTimerRef.current)
              clickTimerRef.current = null

@@ -252,7 +252,7 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
 
     // === Playback: local if file accessible, else remote (HTTP streaming) ===
 
-    startPlayback: async (filePath, startTime, prefs) => {
+    startPlayback: async (filePath, startTime, prefs, options) => {
       // When localPlayback is enabled, check whether the media file is
       // accessible on the local filesystem (e.g. via network mount, NAS
       // share). When disabled, always stream from the server.
@@ -260,13 +260,13 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
 
       if (locallyAccessible) {
         playbackMode = 'local'
-        return local.startPlayback(filePath, startTime, prefs)
+        return local.startPlayback(filePath, startTime, prefs, options)
       }
 
       if (connected) {
         try {
           playbackMode = 'remote'
-          return await http.startPlayback(filePath, startTime, prefs)
+          return await http.startPlayback(filePath, startTime, prefs, options)
         } catch (err) {
           playbackMode = null
           if (isNetworkError(err)) {

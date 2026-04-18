@@ -58,13 +58,14 @@ class Api::PlaybackController < Api::BaseController
   # ── Streaming endpoints ─────────────────────────────────────────────
 
   # POST /api/playback/start
-  # Body: { filePath, startTime, prefs, codecSupport: { h264, hevc } }
-  # Returns: { hlsUrl, sessionId, duration, startTime, seekBase, ... }
+  # Body: { filePath, startTime, prefs, codecSupport: { h264, hevc }, forceTranscode }
+  # Returns: { hlsUrl, sessionId, duration, startTime, seekBase, strategy, ... }
   def start
     file_path = params[:filePath]
     start_time = (params[:startTime] || 0).to_f
     prefs = params[:prefs]
     codec_support = params[:codecSupport] # { h264: bool, hevc: bool }
+    force_transcode = ActiveModel::Type::Boolean.new.cast(params[:forceTranscode])
 
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
     return render(json: { error: "File not found: #{file_path}" }, status: :unprocessable_entity) unless File.exist?(file_path)
@@ -76,12 +77,13 @@ class Api::PlaybackController < Api::BaseController
 
     session_id = SecureRandom.hex(8)
 
-    TranscoderService.start_session(session_id, file_path, start_time,
+    result = TranscoderService.start_session(session_id, file_path, start_time,
       audio_stream_index: audio_stream_index,
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
       subtitle_stream_index: subtitle_stream_index,
       duration: info[:duration],
-      codec_support: codec_support)
+      codec_support: codec_support,
+      force_transcode: force_transcode)
 
     session[:playback_session_id] = session_id
 
@@ -100,7 +102,8 @@ class Api::PlaybackController < Api::BaseController
       subtitleStreams: info[:subtitleStreams],
       activeAudioIndex: audio_stream_index,
       activeSubtitleIndex: subtitle_stream_index,
-      isBitmapSubtitle: is_bitmap
+      isBitmapSubtitle: is_bitmap,
+      strategy: result[:strategy].to_s
     }
   rescue => e
     Rails.logger.error "[Playback] start error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
@@ -198,7 +201,8 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, info[:file_path], abs_time,
       audio_stream_index: audio_index,
       burn_subtitle_index: info[:burn_subtitle_index],
-      duration: info[:duration])
+      duration: info[:duration],
+      force_transcode: info[:force_transcode])
 
     if had_subtitle && active_sub_index
       vtt = TranscoderService.extract_subtitles(info[:file_path], active_sub_index)
@@ -259,7 +263,8 @@ class Api::PlaybackController < Api::BaseController
     TranscoderService.start_session(session_id, info[:file_path], abs_time,
       audio_stream_index: info[:audio_stream_index],
       burn_subtitle_index: burn_index,
-      duration: info[:duration])
+      duration: info[:duration],
+      force_transcode: info[:force_transcode])
 
     hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
     render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }

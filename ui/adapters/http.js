@@ -85,8 +85,14 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     playMovie: (slug) => post(`/api/movies/${slug}/play`),
 
     // Playback
-    startPlayback: async (filePath, startTime, prefs) => {
-      const result = await post('/api/playback/start', { filePath, startTime, prefs, codecSupport: codecSupport() })
+    startPlayback: async (filePath, startTime, prefs, options) => {
+      const result = await post('/api/playback/start', {
+        filePath,
+        startTime,
+        prefs,
+        codecSupport: codecSupport(),
+        forceTranscode: !!options?.forceTranscode,
+      })
       if (result && result.sessionId) {
         activeSessionId = result.sessionId
       }

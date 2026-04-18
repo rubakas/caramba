@@ -37,7 +37,7 @@ let currentBurnSubtitleIndex = null // bitmap subtitle being burned into video (
 
 function register() {
   // Start playback: probe file, start transcoder, extract subs
-  ipcMain.handle('playback:start', async (_e, filePath, startTime = 0, prefs = null) => {
+  ipcMain.handle('playback:start', async (_e, filePath, startTime = 0, prefs = null, options = null) => {
     try {
       if (!filePath || !fs.existsSync(filePath)) {
         return { error: 'File not found: ' + (filePath || '(no path)') }
@@ -99,10 +99,11 @@ function register() {
       // Start transcoding — burn bitmap subtitles into video if selected.
       // Pass the probe result we already computed so transcoder.start()
       // doesn't re-probe the file.
-      await transcoder.start(filePath, startTime, {
+      const startResult = await transcoder.start(filePath, startTime, {
         audioStreamIndex,
         burnSubtitleIndex: isBitmapSubtitle ? subtitleStreamIndex : undefined,
         probeResult: info,
+        forceTranscode: !!options?.forceTranscode,
       })
       currentSeekBase = startTime
       currentDuration = info.duration
@@ -143,6 +144,7 @@ function register() {
         activeAudioIndex: audioStreamIndex,
         activeSubtitleIndex: subtitleStreamIndex,
         isBitmapSubtitle,
+        strategy: startResult.strategy,
       }
     } catch (err) {
       console.error('playback:start error:', err)
@@ -155,15 +157,17 @@ function register() {
     const filePath = transcoder.getActiveFilePath()
     if (!filePath) return { error: 'No active playback' }
 
-    await transcoder.start(filePath, seekTime, {
+    const seekResult = await transcoder.start(filePath, seekTime, {
       audioStreamIndex: currentAudioStreamIndex,
       burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
+      forceTranscode: transcoder.getActiveForceTranscode(),
     })
     currentSeekBase = seekTime
 
     return {
       streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
+      strategy: seekResult.strategy,
     }
   })
 
@@ -176,15 +180,17 @@ function register() {
     const seekTime = currentSeekBase + (currentVideoTime || 0)
     currentAudioStreamIndex = audioStreamIndex
 
-    await transcoder.start(filePath, seekTime, {
+    const switchResult = await transcoder.start(filePath, seekTime, {
       audioStreamIndex,
       burnSubtitleIndex: currentBurnSubtitleIndex ?? undefined,
+      forceTranscode: transcoder.getActiveForceTranscode(),
     })
     currentSeekBase = seekTime
 
     return {
       streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
+      strategy: switchResult.strategy,
     }
   })
 
@@ -240,15 +246,17 @@ function register() {
     const seekTime = currentSeekBase + (currentVideoTime || 0)
     currentBurnSubtitleIndex = subtitleStreamIndex // null = off
 
-    await transcoder.start(filePath, seekTime, {
+    const bitmapResult = await transcoder.start(filePath, seekTime, {
       audioStreamIndex: currentAudioStreamIndex,
       burnSubtitleIndex: subtitleStreamIndex ?? undefined,
+      forceTranscode: transcoder.getActiveForceTranscode(),
     })
     currentSeekBase = seekTime
 
     return {
       streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
       seekTime,
+      strategy: bitmapResult.strategy,
     }
   })
 

@@ -61,6 +61,7 @@ let activeSessionId = null
 let activeDir = null
 let activeFilePath = null
 let activeStartTime = 0
+let activeForceTranscode = false
 
 function sessionDir(sessionId) {
   return path.join(SESSION_ROOT, sessionId)
@@ -80,6 +81,7 @@ function stop() {
   activeDir = null
   activeFilePath = null
   activeStartTime = 0
+  activeForceTranscode = false
 
   if (proc) {
     try { proc.kill('SIGKILL') } catch {}
@@ -175,8 +177,9 @@ async function probe(filePath) {
 const DIRECT_PLAY_VIDEO_CODECS = new Set(['h264', 'hevc', 'h265'])
 
 // One of 'direct_play' | 'audio_transcode' | 'full_transcode'.
-function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex) {
+function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex, forceTranscode) {
   if (burnSubtitleIndex != null) return 'full_transcode'
+  if (forceTranscode) return 'full_transcode'
   const videoCodec = probeResult.video?.codec
   if (!DIRECT_PLAY_VIDEO_CODECS.has(videoCodec)) return 'full_transcode'
   const audio = probeResult.audioStreams.find(s => s.index === audioStreamIndex)
@@ -289,7 +292,8 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
 // cleanly).
 async function start(filePath, seekTime = 0, opts = {}) {
   const probeResult = opts.probeResult || await probe(filePath)
-  const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex)
+  const forceTranscode = !!opts.forceTranscode
+  const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex, forceTranscode)
 
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   const newDir = sessionDir(sessionId)
@@ -347,6 +351,7 @@ async function start(filePath, seekTime = 0, opts = {}) {
   activeDir = newDir
   activeFilePath = filePath
   activeStartTime = seekTime
+  activeForceTranscode = forceTranscode
 
   if (oldProc) {
     try { oldProc.kill('SIGKILL') } catch {}
@@ -355,7 +360,7 @@ async function start(filePath, seekTime = 0, opts = {}) {
     wipeDir(oldDir)
   }
 
-  console.log(`Transcoder: started ${path.basename(filePath)} @ ${seekTime}s, strategy=${strategy}, dir=${newDir}`)
+  console.log(`Transcoder: started ${path.basename(filePath)} @ ${seekTime}s, strategy=${strategy}, forceTranscode=${forceTranscode}, dir=${newDir}`)
   return { sessionId, strategy }
 }
 
@@ -402,6 +407,7 @@ function getActiveSessionDir() { return activeDir }
 function getActiveSessionId() { return activeSessionId }
 function getActiveFilePath() { return activeFilePath }
 function getActiveStartTime() { return activeStartTime }
+function getActiveForceTranscode() { return activeForceTranscode }
 function isActive() { return activeProcess !== null && !activeProcess.killed }
 
 // Whitelist of allowed asset names (prevents directory traversal).
@@ -432,6 +438,7 @@ module.exports = {
   getActiveSessionId,
   getActiveFilePath,
   getActiveStartTime,
+  getActiveForceTranscode,
   isActive,
   resolveAsset,
 }

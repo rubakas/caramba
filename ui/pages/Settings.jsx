@@ -18,6 +18,11 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
   const [androidApiUrlInput, setAndroidApiUrlInput] = useState(apiUrl || 'http://localhost:3001')
   const [androidApiSaving, setAndroidApiSaving] = useState(false)
 
+  // Force transcode toggle (all modes) — per-device, persisted in localStorage
+  const [forceTranscode, setForceTranscode] = useState(() => {
+    try { return typeof window !== 'undefined' && window.localStorage?.getItem('caramba.forceTranscode') === 'true' } catch { return false }
+  })
+
   // Sync serverUrlInput when apiMode prop changes (e.g. initial load)
   useEffect(() => {
     if (apiMode?.server_url != null) {
@@ -218,11 +223,11 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     try {
       // Validate URL format
       new URL(trimmed)
-      
+
       console.log('[Settings] Calling onApiUrlChange callback...')
       const success = await onApiUrlChange?.(trimmed)
       console.log('[Settings] onApiUrlChange result:', success)
-      
+
       if (success) {
         showToast('Server URL saved. Reloading...')
         // App.jsx will handle the reload, but add fallback
@@ -239,6 +244,13 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     } finally {
       setAndroidApiSaving(false)
     }
+  }
+
+  const handleForceTranscodeToggle = () => {
+    const next = !forceTranscode
+    setForceTranscode(next)
+    try { window.localStorage.setItem('caramba.forceTranscode', next ? 'true' : 'false') } catch {}
+    showToast(next ? 'Always transcode enabled. Applies on next playback.' : 'Always transcode disabled. Applies on next playback.')
   }
 
   // Detect if this is Android TV mode
@@ -264,7 +276,32 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
         {message && <div className="alert alert--success">{message}</div>}
         {error && <div className="alert">{error}</div>}
 
-        {/* Android TV API URL Section */}
+        {/* Playback Section — all modes */}
+        <section className="settings-section">
+          <h2 className="settings-section-title">Playback</h2>
+          <p className="settings-help">
+            Force video to be re-encoded to H.264 for maximum compatibility.
+            Enable this if you see buffering or audio/video sync issues on some files.
+            Uses more CPU on the server.
+          </p>
+
+          <div className="settings-form">
+            <div className="api-mode-toggle" style={{ marginBottom: 0 }}>
+              <span className="api-mode-toggle-label">Always transcode video</span>
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={forceTranscode}
+                  onChange={handleForceTranscodeToggle}
+                />
+                <span className="toggle-switch-track" />
+                <span className="toggle-switch-thumb" />
+              </label>
+            </div>
+          </div>
+        </section>
+
+            {/* Android TV API URL Section */}
         {isAndroidTvMode && (
           <section className="settings-section">
             <h2 className="settings-section-title">Server Configuration</h2>
@@ -286,8 +323,8 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
                     disabled={androidApiSaving}
                     style={{ flex: 1 }}
                   />
-                  <button 
-                    type="button" 
+                  <button
+                    type="button"
                     className="btn-primary"
                     disabled={androidApiSaving}
                     onClick={() => handleAndroidApiUrlSubmit({ type: 'click' })}
@@ -309,6 +346,7 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
             )}
           </section>
         )}
+
 
         {/* API Mode Section — desktop only */}
         {hasApiMode && !isWebMode && (

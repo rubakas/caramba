@@ -112,6 +112,8 @@ class TranscoderService
           subtitle_vtt: nil,
           hls_dir: File.join(TMP_ROOT, "hls", session_id),
           codec_support: opts[:codec_support],
+          force_transcode: !!opts[:force_transcode],
+          strategy: nil,
           started_at: Time.current
         }
 
@@ -121,8 +123,8 @@ class TranscoderService
           extract_subtitles_async(session_id, file_path, subtitle_stream_index)
         end
 
-        Rails.logger.info "[Transcoder] session #{session_id}: #{File.basename(file_path)}, starting at #{start_time}s"
-        session_id
+        Rails.logger.info "[Transcoder] session #{session_id}: #{File.basename(file_path)}, starting at #{start_time}s, strategy=#{@session[:strategy]}"
+        { session_id: session_id, strategy: @session[:strategy] }
       end
     end
 
@@ -138,10 +140,11 @@ class TranscoderService
           @session[:file_path],
           seek_time.to_f,
           audio_stream_index: @session[:audio_stream_index],
-          burn_subtitle_index: @session[:burn_subtitle_index]
+          burn_subtitle_index: @session[:burn_subtitle_index],
+          force_transcode: @session[:force_transcode]
         )
 
-        Rails.logger.info "[Transcoder] seek session #{session_id} to #{seek_time}s"
+        Rails.logger.info "[Transcoder] seek session #{session_id} to #{seek_time}s, strategy=#{@session[:strategy]}"
         seek_time
       end
     end
@@ -356,8 +359,9 @@ class TranscoderService
     end
 
     # Returns one of :direct_play, :audio_transcode, :full_transcode.
-    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil)
+    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil, force_transcode = false)
       return :full_transcode if burn_subtitle_index
+      return :full_transcode if force_transcode
 
       video_codec = probe_result.dig(:video, :codec)
       allowed = allowed_direct_play_codecs(codec_support)
@@ -420,7 +424,10 @@ class TranscoderService
 
       probe_result = probe(file_path)
       codec_support = @session && @session[:codec_support]
-      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support)
+      force_transcode = (opts.key?(:force_transcode) ? opts[:force_transcode] : @session && @session[:force_transcode]) ? true : false
+      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support, force_transcode)
+
+      @session[:strategy] = strategy if @session
 
       args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result, opts)
 
