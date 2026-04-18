@@ -27,10 +27,10 @@ const androidTvCapabilities = {
   canOpenExternal: false,
 }
 
-// Web capabilities (no Settings in navbar)
+// Web capabilities
 const webCapabilities = {
   ...httpCapabilities,
-  hasSettings: false,
+  hasSettings: true,
 }
 
 export default function App() {
