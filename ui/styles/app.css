@@ -2856,127 +2856,131 @@ body {
 /* ================================================================
    Android TV Optimizations (1920x1080+ viewing distance ~10 feet)
    ================================================================ */
+/* Android-TV sizing tweaks. MUST be scoped to body.tv-mode — a bare
+   `@media (min-width: 1920px)` hit Chrome on 4K monitors and any
+   player fullscreened on a 1920+ display, which forced `min-height:
+   44px; padding: 10px 20px !important` onto every button (including
+   the 28×28 video-player-util-icon), breaking the player's utility
+   pill on normal desktops. */
 @media (min-width: 1920px) {
-  :root {
+  body.tv-mode {
     /* Keep base font size reasonable for TV */
     font-size: 16px;
+    line-height: 1.5;
     --radius: 12px;
     --radius-sm: 8px;
     --radius-lg: 16px;
     --nav-h: 56px;
   }
 
-  body {
-    font-size: 16px;
-    line-height: 1.5;
-  }
-
   /* Grid: show 6-8 items per row on TV */
-  .series-grid {
+  body.tv-mode .series-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)) !important;
     gap: 20px !important;
     padding: 0 32px !important;
   }
 
   /* Buttons - not too large */
-  button, [role="button"], input[type="button"], input[type="submit"] {
+  body.tv-mode button,
+  body.tv-mode [role="button"],
+  body.tv-mode input[type="button"],
+  body.tv-mode input[type="submit"] {
     min-height: 44px;
     padding: 10px 20px !important;
     font-size: 16px;
   }
 
   /* Inputs for TV */
-  input[type="text"],
-  input[type="url"],
-  input[type="search"],
-  textarea,
-  select {
+  body.tv-mode input[type="text"],
+  body.tv-mode input[type="url"],
+  body.tv-mode input[type="search"],
+  body.tv-mode textarea,
+  body.tv-mode select {
     min-height: 44px;
     padding: 10px 14px !important;
     font-size: 16px;
   }
 
   /* Text sizes - not too large */
-  h1 { font-size: 32px; }
-  h2 { font-size: 24px; }
-  h3 { font-size: 20px; }
-  h4 { font-size: 18px; }
-  
-  p, span, label { font-size: 16px; }
-  small { font-size: 14px; }
+  body.tv-mode h1 { font-size: 32px; }
+  body.tv-mode h2 { font-size: 24px; }
+  body.tv-mode h3 { font-size: 20px; }
+  body.tv-mode h4 { font-size: 18px; }
+
+  body.tv-mode p,
+  body.tv-mode span,
+  body.tv-mode label { font-size: 16px; }
+  body.tv-mode small { font-size: 14px; }
 
   /* Better spacing on TV */
-  main { padding: 24px; gap: 24px; }
-  
+  body.tv-mode main { padding: 24px; gap: 24px; }
+
   /* Card padding - not too large */
-  [role="article"],
-  .card,
-  .modal-body,
-  .panel {
+  body.tv-mode [role="article"],
+  body.tv-mode .card,
+  body.tv-mode .modal-body,
+  body.tv-mode .panel {
     padding: 20px !important;
   }
 
   /* D-pad navigation focus indicators - visible on TV */
-  button:focus,
-  [role="button"]:focus,
-  input:focus,
-  select:focus,
-  textarea:focus,
-  a:focus,
-  .series-card:focus {
+  body.tv-mode button:focus,
+  body.tv-mode [role="button"]:focus,
+  body.tv-mode input:focus,
+  body.tv-mode select:focus,
+  body.tv-mode textarea:focus,
+  body.tv-mode a:focus,
+  body.tv-mode .series-card:focus {
     outline: 3px solid var(--accent);
     outline-offset: 2px;
   }
 
   /* Make focus states more obvious for remote - but not hover since no mouse */
-  .series-card:focus {
+  body.tv-mode .series-card:focus {
     transform: scale(1.03);
     transition: transform 0.2s ease;
   }
 
-  /* Don't enlarge icons globally */
-  
   /* Navigation spacing */
-  nav { padding: 12px 24px; }
+  body.tv-mode nav { padding: 12px 24px; }
 
   /* Modal adjustments for TV */
-  .modal {
+  body.tv-mode .modal {
     max-width: 80vw;
     max-height: 80vh;
   }
 
   /* List items - reasonable size */
-  li, [role="listitem"] {
+  body.tv-mode li,
+  body.tv-mode [role="listitem"] {
     min-height: 48px;
     padding: 8px 12px;
   }
 
   /* Video player UI */
-  .video-controls button {
+  body.tv-mode .video-controls button {
     min-width: 40px;
     min-height: 40px;
     padding: 8px !important;
   }
 
   /* Dropdown/Select for TV */
-  select, [role="combobox"] {
+  body.tv-mode select,
+  body.tv-mode [role="combobox"] {
     min-height: 44px;
     font-size: 16px;
   }
 
   /* Tab navigation for D-pad */
-  [role="tablist"] {
+  body.tv-mode [role="tablist"] {
     gap: 12px;
   }
 
-  [role="tab"] {
+  body.tv-mode [role="tab"] {
     padding: 10px 20px !important;
     min-height: 44px;
     font-size: 16px;
   }
-
-  /* Better scroll behavior on TV */
-  scroll-behavior: smooth;
 }
 
 /* ================================================================
