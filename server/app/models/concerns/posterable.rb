@@ -11,8 +11,19 @@ module Posterable
   POSTER_FETCH_TIMEOUT = 15 # seconds
   MAX_POSTER_BYTES = 15 * 1024 * 1024 # 15 MB ceiling — posters are ~500 KB
 
+  # Bounding box for the client-facing variant. 600×900 covers every card
+  # slot in the UI (TV ~200 px, desktop ~300 px) at 2× DPI and bounds each
+  # poster to ~50–150 KB regardless of the source resolution (some IMDb
+  # originals are 8K × 12K and 10 MB).
+  POSTER_VARIANT = { resize_to_limit: [ 600, 900 ], saver: { quality: 82 } }.freeze
+
   included do
     has_one_attached :poster
+  end
+
+  def poster_variant
+    return nil unless poster.attached?
+    poster.variant(POSTER_VARIANT)
   end
 
   # Download the external poster_url and attach it as an ActiveStorage blob.

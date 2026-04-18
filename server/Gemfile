@@ -6,6 +6,7 @@ gem "sqlite3", ">= 2.1"
 gem "puma", ">= 5.0"
 gem "rack-cors"
 gem "bootsnap", require: false
+gem "image_processing", "~> 1.13" # ActiveStorage variants — requires libvips
 gem "capistrano", "~> 3.19", require: false
 gem "capistrano-rails", "~> 1.6", require: false
 gem "capistrano-bundler", "~> 2.1", require: false

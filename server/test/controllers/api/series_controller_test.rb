@@ -38,7 +38,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     get "/api/series/breaking-bad"
     data = JSON.parse(response.body)
 
-    assert_match(%r{/rails/active_storage/blobs/proxy/.+/bb\.jpg\z}, data["poster_url"])
+    assert_match(%r{/rails/active_storage/representations/proxy/.+/bb\.jpg\z}, data["poster_url"])
   end
 
   test "poster_url falls back to the external URL when no image is attached" do
