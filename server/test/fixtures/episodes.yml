@@ -1,6 +1,6 @@
 # Episode fixtures
 bb_s01e01:
-  series: breaking_bad
+  show: breaking_bad
   code: S01E01
   title: Pilot
   season_number: 1
@@ -15,7 +15,7 @@ bb_s01e01:
   runtime: 58
 
 bb_s01e02:
-  series: breaking_bad
+  show: breaking_bad
   code: S01E02
   title: "Cat's in the Bag..."
   season_number: 1
@@ -27,7 +27,7 @@ bb_s01e02:
   last_watched_at: <%= 1.day.ago.to_fs(:db) %>
 
 bb_s02e01:
-  series: breaking_bad
+  show: breaking_bad
   code: S02E01
   title: Seven Thirty-Seven
   season_number: 2
@@ -38,7 +38,7 @@ bb_s02e01:
   duration_seconds: 0
 
 office_s01e01:
-  series: the_office
+  show: the_office
   code: S01E01
   title: Pilot
   season_number: 1

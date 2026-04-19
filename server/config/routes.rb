@@ -4,7 +4,7 @@ Rails.application.routes.draw do
   namespace :api do
     get "health", to: "health#show"
 
-    resources :series, param: :slug do
+    resources :shows, param: :slug do
       member do
         get :full           # combined show page data
         get :episodes

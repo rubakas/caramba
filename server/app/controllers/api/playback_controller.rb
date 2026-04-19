@@ -28,7 +28,7 @@ class Api::PlaybackController < Api::BaseController
     render json: { absoluteTime: time, duration: duration }
   end
 
-  # GET /api/playback/preferences?type=episode&series_id=1 or ?type=movie&movie_id=1
+  # GET /api/playback/preferences?type=episode&show_id=1 or ?type=movie&movie_id=1
   def preferences
     pref = find_preference
     return render(json: nil) unless pref
@@ -44,8 +44,8 @@ class Api::PlaybackController < Api::BaseController
 
   # POST /api/playback/preferences
   def save_preferences
-    if params[:type] == "episode" && params[:seriesId].present?
-      pref = PlaybackPreference.find_or_initialize_by(series_id: params[:seriesId])
+    if params[:type] == "episode" && params[:showId].present?
+      pref = PlaybackPreference.find_or_initialize_by(show_id: params[:showId])
       pref.update!(preference_attrs)
     elsif params[:type] == "movie" && params[:movieId].present?
       pref = PlaybackPreference.find_or_initialize_by(movie_id: params[:movieId])
@@ -338,8 +338,8 @@ class Api::PlaybackController < Api::BaseController
   private
 
   def find_preference
-    if params[:type] == "episode" && params[:series_id].present?
-      PlaybackPreference.find_by(series_id: params[:series_id])
+    if params[:type] == "episode" && params[:show_id].present?
+      PlaybackPreference.find_by(show_id: params[:show_id])
     elsif params[:type] == "movie" && params[:movie_id].present?
       PlaybackPreference.find_by(movie_id: params[:movie_id])
     end

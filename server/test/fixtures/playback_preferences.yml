@@ -1,6 +1,6 @@
 # PlaybackPreference fixtures
 bb_prefs:
-  series: breaking_bad
+  show: breaking_bad
   audio_language: eng
   subtitle_language: eng
   subtitle_off: 0

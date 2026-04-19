@@ -28,7 +28,7 @@ class Api::EpisodesControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
-  test "next returns next episode with series_name" do
+  test "next returns next episode with show_name" do
     ep = episodes(:bb_s01e01)
 
     get "/api/episodes/#{ep.id}/next"
@@ -36,7 +36,7 @@ class Api::EpisodesControllerTest < ActionDispatch::IntegrationTest
 
     data = JSON.parse(response.body)
     assert_equal "S01E02", data["code"]
-    assert_equal "Breaking Bad", data["series_name"]
+    assert_equal "Breaking Bad", data["show_name"]
   end
 
   test "next returns null for last episode" do

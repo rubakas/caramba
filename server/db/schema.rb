@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_19_100003) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_19_100004) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -64,13 +64,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100003) do
     t.integer "progress_seconds", default: 0, null: false
     t.integer "runtime"
     t.integer "season_number"
-    t.integer "series_id", null: false
+    t.integer "show_id", null: false
     t.string "title"
     t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
     t.integer "watched", default: 0, null: false
-    t.index ["series_id", "code"], name: "index_episodes_on_series_id_and_code", unique: true
-    t.index ["series_id"], name: "index_episodes_on_series_id"
+    t.index ["show_id", "code"], name: "index_episodes_on_show_id_and_code", unique: true
+    t.index ["show_id"], name: "index_episodes_on_show_id"
   end
 
   create_table "media_folders", force: :cascade do |t|
@@ -126,17 +126,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100003) do
     t.string "audio_language"
     t.datetime "created_at", null: false
     t.integer "movie_id"
-    t.integer "series_id"
+    t.integer "show_id"
     t.string "subtitle_language"
     t.integer "subtitle_off", default: 0, null: false
     t.string "subtitle_size", default: "medium", null: false
     t.string "subtitle_style", default: "classic", null: false
     t.datetime "updated_at", null: false
     t.index ["movie_id"], name: "index_playback_preferences_on_movie_id", unique: true
-    t.index ["series_id"], name: "index_playback_preferences_on_series_id", unique: true
+    t.index ["show_id"], name: "index_playback_preferences_on_show_id", unique: true
   end
 
-  create_table "series", force: :cascade do |t|
+  create_table "shows", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.text "description"
     t.string "genres"
@@ -150,7 +150,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100003) do
     t.string "status"
     t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
-    t.index ["slug"], name: "index_series_on_slug", unique: true
+    t.index ["slug"], name: "index_shows_on_slug", unique: true
   end
 
   create_table "solid_queue_blocked_executions", force: :cascade do |t|
@@ -310,10 +310,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100003) do
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "downloads", "episodes", on_delete: :cascade
   add_foreign_key "downloads", "movies", on_delete: :cascade
-  add_foreign_key "episodes", "series", on_delete: :cascade
+  add_foreign_key "episodes", "shows", on_delete: :cascade
   add_foreign_key "pending_imports", "media_folders", on_delete: :cascade
   add_foreign_key "playback_preferences", "movies", on_delete: :cascade
-  add_foreign_key "playback_preferences", "series", on_delete: :cascade
+  add_foreign_key "playback_preferences", "shows", on_delete: :cascade
   add_foreign_key "solid_queue_blocked_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_claimed_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade
   add_foreign_key "solid_queue_failed_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade

@@ -7,8 +7,8 @@ class LibraryScanJobTest < ActiveJob::TestCase
     Dir.mkdir(File.join(enabled_dir, "Some Show"))
     Dir.mkdir(File.join(disabled_dir, "Another Show"))
 
-    MediaFolder.create!(path: enabled_dir, kind: "series", enabled: true)
-    MediaFolder.create!(path: disabled_dir, kind: "series", enabled: false)
+    MediaFolder.create!(path: enabled_dir, kind: "shows", enabled: true)
+    MediaFolder.create!(path: disabled_dir, kind: "shows", enabled: false)
 
     stub_request(:get, %r{api\.tvmaze\.com/search/shows}).to_return(
       status: 200, body: "[]", headers: { "Content-Type" => "application/json" }

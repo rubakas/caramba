@@ -3,7 +3,7 @@ require "test_helper"
 class PendingImportConfirmerTest < ActiveSupport::TestCase
   setup do
     @root = Dir.mktmpdir
-    @folder = MediaFolder.create!(path: @root, kind: "series")
+    @folder = MediaFolder.create!(path: @root, kind: "shows")
 
     stub_request(:get, %r{api\.tvmaze\.com/shows/169}).to_return(
       status: 200,
@@ -42,24 +42,24 @@ class PendingImportConfirmerTest < ActiveSupport::TestCase
     FileUtils.remove_entry(@root) if @root
   end
 
-  test "confirm series creates Series and marks pending_import confirmed" do
+  test "confirm shows creates Show and marks pending_import confirmed" do
     show_dir = File.join(@root, "Breaking Bad (2008)")
     Dir.mkdir(show_dir)
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: show_dir,
-      kind: "series",
+      kind: "shows",
       parsed_name: "Breaking Bad",
       candidates: [ { "externalId" => 169, "name" => "Breaking Bad", "source" => "tvmaze" } ]
     )
 
-    series = PendingImportConfirmer.confirm(pi, 169)
+    show = PendingImportConfirmer.confirm(pi, 169)
 
-    assert series.is_a?(Series)
-    assert_equal "Breaking Bad", series.name
-    assert_equal show_dir, series.media_path
-    assert_equal 169, series.tvmaze_id
-    assert_equal "tt0903747", series.imdb_id
+    assert show.is_a?(Show)
+    assert_equal "Breaking Bad", show.name
+    assert_equal show_dir, show.media_path
+    assert_equal 169, show.tvmaze_id
+    assert_equal "tt0903747", show.imdb_id
 
     pi.reload
     assert_equal "confirmed", pi.status
@@ -96,7 +96,7 @@ class PendingImportConfirmerTest < ActiveSupport::TestCase
     FileUtils.remove_entry(movies_root) if movies_root
   end
 
-  test "confirm series scans episodes from the folder" do
+  test "confirm shows scans episodes from the folder" do
     show_dir = File.join(@root, "Breaking Bad (2008)")
     Dir.mkdir(show_dir)
     File.write(File.join(show_dir, "Breaking.Bad.S01E01.mkv"), "")
@@ -105,20 +105,20 @@ class PendingImportConfirmerTest < ActiveSupport::TestCase
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: show_dir,
-      kind: "series",
+      kind: "shows",
       parsed_name: "Breaking Bad",
       candidates: [ { "externalId" => 169 } ]
     )
 
-    series = PendingImportConfirmer.confirm(pi, 169)
-    assert_equal 2, series.episodes.count
+    show = PendingImportConfirmer.confirm(pi, 169)
+    assert_equal 2, show.episodes.count
   end
 
   test "confirm raises on blank external_id" do
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: File.join(@root, "Something"),
-      kind: "series"
+      kind: "shows"
     )
     assert_raises(ArgumentError) { PendingImportConfirmer.confirm(pi, "") }
     # status stays pending — blank id is a user-input error caught before
@@ -132,27 +132,21 @@ class PendingImportConfirmerTest < ActiveSupport::TestCase
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: show_dir,
-      kind: "series",
+      kind: "shows",
       parsed_name: "Breaking Bad",
       candidates: [ { "externalId" => 169, "name" => "Breaking Bad" } ]
     )
 
-    # Any Series created with this path would succeed. Force failure by
-    # creating one first — uniqueness on media_path isn't enforced, so we
-    # instead rely on slug uniqueness by pre-seeding the expected slug and
-    # saturating the -1..-N counters beyond reach (the generator appends
-    # -#{counter}).
-    # Simpler: stub Series.new to raise.
-    fake_series = Series.new(name: "x")
-    fake_series.errors.add(:base, "forced failure")
+    fake_show = Show.new(name: "x")
+    fake_show.errors.add(:base, "forced failure")
 
-    original = Series.method(:new)
-    Series.define_singleton_method(:new) { |*_args| raise ActiveRecord::RecordInvalid.new(fake_series) }
+    original = Show.method(:new)
+    Show.define_singleton_method(:new) { |*_args| raise ActiveRecord::RecordInvalid.new(fake_show) }
 
     begin
       assert_raises(ActiveRecord::RecordInvalid) { PendingImportConfirmer.confirm(pi, 169) }
     ensure
-      Series.define_singleton_method(:new, original)
+      Show.define_singleton_method(:new, original)
     end
 
     pi.reload

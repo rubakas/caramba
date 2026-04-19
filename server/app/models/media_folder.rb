@@ -1,5 +1,5 @@
 class MediaFolder < ApplicationRecord
-  KINDS = %w[series movies].freeze
+  KINDS = %w[shows movies].freeze
 
   has_many :pending_imports, dependent: :destroy
 

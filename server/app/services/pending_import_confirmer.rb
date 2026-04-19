@@ -1,9 +1,9 @@
-# Turns a PendingImport into a real Series or Movie using the external id
+# Turns a PendingImport into a real Show or Movie using the external id
 # chosen by an admin. Called by Api::Admin::PendingImportsController#confirm.
 #
 # The external id comes from one of the PendingImport#candidates entries.
 # The name/year displayed on the picked candidate is used to seed the
-# Series/Movie record before the TVMaze/IMDb fetch enriches it — this keeps
+# Show/Movie record before the TVMaze/IMDb fetch enriches it — this keeps
 # the user's choice authoritative even if the API lookup later returns
 # slightly different data.
 
@@ -14,8 +14,8 @@ class PendingImportConfirmer
       raise ArgumentError, "externalId is required" if external_id.blank?
 
       case pending_import.kind
-      when "series"
-        confirm_series(pending_import, external_id)
+      when "shows"
+        confirm_show(pending_import, external_id)
       when "movies"
         confirm_movie(pending_import, external_id)
       else
@@ -25,22 +25,22 @@ class PendingImportConfirmer
 
     private
 
-    def confirm_series(pending_import, external_id)
+    def confirm_show(pending_import, external_id)
       candidate = find_candidate(pending_import, external_id)
       name = candidate&.dig("name").presence || pending_import.parsed_name.presence || File.basename(pending_import.folder_path)
 
-      series = Series.new(
+      show = Show.new(
         name: name,
         media_path: pending_import.folder_path,
         tvmaze_id: external_id.to_i
       )
-      series.save!
+      show.save!
 
-      MediaScannerService.scan(series)
-      TvmazeService.fetch_by_tvmaze_id(series, external_id)
+      MediaScannerService.scan(show)
+      TvmazeService.fetch_by_tvmaze_id(show, external_id)
 
       pending_import.update!(status: "confirmed", chosen_external_id: external_id, error: nil)
-      series.reload
+      show.reload
     rescue => e
       pending_import.update(status: "failed", error: e.message)
       raise

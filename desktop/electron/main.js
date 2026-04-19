@@ -6,7 +6,7 @@ const dbSync = require('./services/db-sync')
 const transcoder = require('./services/transcoder')
 
 // IPC modules
-const seriesIpc = require('./ipc/series')
+const showsIpc = require('./ipc/shows')
 const episodesIpc = require('./ipc/episodes')
 const moviesIpc = require('./ipc/movies')
 const playbackIpc = require('./ipc/playback')
@@ -114,7 +114,7 @@ function createWindow() {
   mainWindow = new BrowserWindow(windowOpts)
 
   // Register IPC handlers (dialogs needs the window reference)
-  seriesIpc.register()
+  showsIpc.register()
   episodesIpc.register()
   moviesIpc.register()
   playbackIpc.register()

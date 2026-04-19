@@ -1,4 +1,4 @@
-// Fetches TV series metadata from TVMaze API.
+// Fetches TV show metadata from TVMaze API.
 // No API key needed. Rate limit: 20 calls/10s.
 
 const db = require('../db')
@@ -42,18 +42,18 @@ async function search(query) {
   }
 }
 
-async function fetchForSeries(seriesId) {
-  const s = db.series.findById(seriesId)
+async function fetchForShow(showId) {
+  const s = db.shows.findById(showId)
   if (!s) return false
 
   const data = await search(s.name)
   if (!data) return false
 
-  // Update series metadata
+  // Update show metadata
   const posterUrl = data.image?.original || data.image?.medium || null
   const summary = stripHtml(data.summary)
 
-  db.series.update(seriesId, {
+  db.shows.update(showId, {
     tvmaze_id: data.id,
     poster_url: posterUrl,
     description: summary,
@@ -74,7 +74,7 @@ async function fetchForSeries(seriesId) {
       apiLookup[code] = ep
     }
 
-    const localEpisodes = db.episodes.forSeries(seriesId)
+    const localEpisodes = db.episodes.forShow(showId)
     let matched = 0
     for (const episode of localEpisodes) {
       const apiEp = apiLookup[episode.code]
@@ -95,8 +95,8 @@ async function fetchForSeries(seriesId) {
     console.log(`MetadataFetcher: matched ${matched}/${localEpisodes.length} episodes with TVMaze data`)
   }
 
-  console.log(`MetadataFetcher: updated series '${s.name}' (TVMaze ID: ${data.id})`)
+  console.log(`MetadataFetcher: updated show '${s.name}' (TVMaze ID: ${data.id})`)
   return true
 }
 
-module.exports = { fetchForSeries, search }
+module.exports = { fetchForShow, search }

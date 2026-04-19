@@ -58,15 +58,15 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   const noopUnsub = () => noop
 
   return {
-    // Series
-    listSeries: () => get('/api/series'),
-    getContinue: (slug) => get(`/api/series/${slug}/continue`),
-    getSeriesShow: (slug) => get(`/api/series/${slug}/full`),
-    addSeries: noopAsync,
-    scanSeries: noopAsync,
-    refreshSeriesMetadata: noopAsync,
-    destroySeries: noopAsync,
-    relocateSeries: noopAsync,
+    // Shows
+    listShows: () => get('/api/shows'),
+    getContinue: (slug) => get(`/api/shows/${slug}/continue`),
+    getShow: (slug) => get(`/api/shows/${slug}/full`),
+    addShow: noopAsync,
+    scanShow: noopAsync,
+    refreshShowMetadata: noopAsync,
+    destroyShow: noopAsync,
+    relocateShow: noopAsync,
 
     // Episodes
     toggleEpisode: (id) => post(`/api/episodes/${id}/toggle`),
@@ -127,7 +127,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     getPlaybackPreferences: (opts) => {
       const qs = new URLSearchParams()
       if (opts?.type) qs.set('type', opts.type)
-      if (opts?.seriesId) qs.set('series_id', opts.seriesId)
+      if (opts?.showId) qs.set('show_id', opts.showId)
       if (opts?.movieId) qs.set('movie_id', opts.movieId)
       return get(`/api/playback/preferences?${qs}`)
     },

@@ -309,28 +309,28 @@ function register() {
   })
 
   // Download all episodes in a season
-  // Accepts either (seriesId, seasonNumber) or ({ seriesId, seriesSlug, seasonNumber }) for hybrid mode
+  // Accepts either (showId, seasonNumber) or ({ showId, showSlug, seasonNumber }) for hybrid mode
   ipcMain.handle('downloads:season', async (_e, arg1, arg2) => {
-    let seriesId, seasonNumber
+    let showId, seasonNumber
 
     if (typeof arg1 === 'object') {
-      // New format: { seriesId, seriesSlug, seasonNumber }
-      seriesId = arg1.seriesId
+      // New format: { showId, showSlug, seasonNumber }
+      showId = arg1.showId
       seasonNumber = arg1.seasonNumber
-      // Try to find local series by ID first, then by slug
-      let localSeries = db.series.findById(seriesId)
-      if (!localSeries && arg1.seriesSlug) {
-        localSeries = db.series.findBySlug(arg1.seriesSlug)
+      // Try to find local show by ID first, then by slug
+      let localShow = db.shows.findById(showId)
+      if (!localShow && arg1.showSlug) {
+        localShow = db.shows.findBySlug(arg1.showSlug)
       }
-      if (!localSeries) return { error: 'Series not found locally' }
-      seriesId = localSeries.id
+      if (!localShow) return { error: 'Show not found locally' }
+      showId = localShow.id
     } else {
-      // Old format: (seriesId, seasonNumber)
-      seriesId = arg1
+      // Old format: (showId, seasonNumber)
+      showId = arg1
       seasonNumber = arg2
     }
 
-    const seasonEps = db.episodes.forSeason(seriesId, seasonNumber)
+    const seasonEps = db.episodes.forSeason(showId, seasonNumber)
     if (seasonEps.length === 0) return { error: 'No episodes found for this season' }
 
     const results = []
@@ -483,26 +483,26 @@ function register() {
   })
 
   // Delete all downloaded episodes for a season
-  // Accepts either (seriesId, seasonNumber) or ({ seriesId, seriesSlug, seasonNumber }) for hybrid mode
+  // Accepts either (showId, seasonNumber) or ({ showId, showSlug, seasonNumber }) for hybrid mode
   ipcMain.handle('downloads:deleteSeason', (_e, arg1, arg2) => {
-    let seriesId, seasonNumber
+    let showId, seasonNumber
 
     if (typeof arg1 === 'object') {
-      seriesId = arg1.seriesId
+      showId = arg1.showId
       seasonNumber = arg1.seasonNumber
-      // Try to find local series by ID first, then by slug
-      let localSeries = db.series.findById(seriesId)
-      if (!localSeries && arg1.seriesSlug) {
-        localSeries = db.series.findBySlug(arg1.seriesSlug)
+      // Try to find local show by ID first, then by slug
+      let localShow = db.shows.findById(showId)
+      if (!localShow && arg1.showSlug) {
+        localShow = db.shows.findBySlug(arg1.showSlug)
       }
-      if (!localSeries) return { ok: true, deleted: 0 }
-      seriesId = localSeries.id
+      if (!localShow) return { ok: true, deleted: 0 }
+      showId = localShow.id
     } else {
-      seriesId = arg1
+      showId = arg1
       seasonNumber = arg2
     }
 
-    const seasonDls = db.downloads.forSeason(seriesId, seasonNumber)
+    const seasonDls = db.downloads.forSeason(showId, seasonNumber)
     for (const dl of seasonDls) {
       const ac = activeCopies.get(dl.id)
       if (ac) ac.abort()

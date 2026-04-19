@@ -72,10 +72,10 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     assert_equal 2000, wh.progress_seconds
   end
 
-  test "preferences returns playback prefs for series" do
+  test "preferences returns playback prefs for show" do
     get "/api/playback/preferences", params: {
       type: "episode",
-      series_id: series(:breaking_bad).id
+      show_id: shows(:breaking_bad).id
     }
     assert_response :success
 
@@ -99,16 +99,16 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
   test "preferences returns null when not found" do
     get "/api/playback/preferences", params: {
       type: "episode",
-      series_id: series(:no_metadata).id
+      show_id: shows(:no_metadata).id
     }
     assert_response :success
     assert_equal "null", response.body.strip
   end
 
-  test "save_preferences creates/updates prefs for series" do
+  test "save_preferences creates/updates prefs for show" do
     post "/api/playback/preferences", params: {
       type: "episode",
-      seriesId: series(:the_office).id,
+      showId: shows(:the_office).id,
       audioLanguage: "jpn",
       subtitleLanguage: "eng",
       subtitleOff: false,
@@ -117,7 +117,7 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     }
     assert_response :success
 
-    pref = PlaybackPreference.find_by(series_id: series(:the_office).id)
+    pref = PlaybackPreference.find_by(show_id: shows(:the_office).id)
     assert_not_nil pref
     assert_equal "jpn", pref.audio_language
     assert_equal "small", pref.subtitle_size

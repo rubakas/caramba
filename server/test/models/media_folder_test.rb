@@ -10,24 +10,24 @@ class MediaFolderTest < ActiveSupport::TestCase
   end
 
   test "valid with absolute existing path and allowed kind" do
-    folder = MediaFolder.new(path: @existing_dir, kind: "series")
+    folder = MediaFolder.new(path: @existing_dir, kind: "shows")
     assert folder.valid?
   end
 
   test "requires path" do
-    folder = MediaFolder.new(kind: "series")
+    folder = MediaFolder.new(kind: "shows")
     refute folder.valid?
     assert_includes folder.errors[:path], "can't be blank"
   end
 
   test "requires absolute path" do
-    folder = MediaFolder.new(path: "relative/path", kind: "series")
+    folder = MediaFolder.new(path: "relative/path", kind: "shows")
     refute folder.valid?
     assert_match(/absolute/, folder.errors[:path].join)
   end
 
   test "requires path to exist on disk" do
-    folder = MediaFolder.new(path: "/nonexistent/caramba/#{SecureRandom.hex}", kind: "series")
+    folder = MediaFolder.new(path: "/nonexistent/caramba/#{SecureRandom.hex}", kind: "shows")
     refute folder.valid?
     assert_match(/does not exist/, folder.errors[:path].join)
   end
@@ -39,24 +39,24 @@ class MediaFolderTest < ActiveSupport::TestCase
   end
 
   test "path must be unique" do
-    MediaFolder.create!(path: @existing_dir, kind: "series")
+    MediaFolder.create!(path: @existing_dir, kind: "shows")
     dup = MediaFolder.new(path: @existing_dir, kind: "movies")
     refute dup.valid?
     assert_match(/taken/, dup.errors[:path].join)
   end
 
   test "enabled defaults to true" do
-    folder = MediaFolder.create!(path: @existing_dir, kind: "series")
+    folder = MediaFolder.create!(path: @existing_dir, kind: "shows")
     assert_equal true, folder.enabled
   end
 
   test "normalizes trailing slash" do
-    folder = MediaFolder.create!(path: "#{@existing_dir}/", kind: "series")
+    folder = MediaFolder.create!(path: "#{@existing_dir}/", kind: "shows")
     assert_equal @existing_dir, folder.path
   end
 
   test "enabled scope excludes disabled folders" do
-    enabled = MediaFolder.create!(path: @existing_dir, kind: "series")
+    enabled = MediaFolder.create!(path: @existing_dir, kind: "shows")
     disabled_dir = Dir.mktmpdir
     disabled = MediaFolder.create!(path: disabled_dir, kind: "movies", enabled: false)
     assert_includes MediaFolder.enabled, enabled

@@ -10,7 +10,7 @@ const ApiContext = createContext(null)
  * @param {Object} props.capabilities - Platform capabilities flags
  * @param {boolean} props.capabilities.canPlay - Can play media (local ffmpeg/VLC)
  * @param {boolean} props.capabilities.canDownload - Can download media files
- * @param {boolean} props.capabilities.canAdd - Can add new series/movies (folder/file picker)
+ * @param {boolean} props.capabilities.canAdd - Can add new shows/movies (folder/file picker)
  * @param {boolean} props.capabilities.canManage - Can scan/refresh/remove/relocate
  * @param {boolean} props.capabilities.canOpenExternal - Can open in VLC/default player
  * @param {boolean} props.capabilities.hasNowPlaying - Show NowPlaying bar

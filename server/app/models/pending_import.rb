@@ -1,6 +1,6 @@
 class PendingImport < ApplicationRecord
   STATUSES = %w[pending confirmed ignored failed].freeze
-  KINDS = %w[series movies].freeze
+  KINDS = %w[shows movies].freeze
 
   belongs_to :media_folder
 

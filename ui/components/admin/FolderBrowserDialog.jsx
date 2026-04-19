@@ -4,7 +4,7 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
   const [listing, setListing] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [kind, setKind] = useState('series')
+  const [kind, setKind] = useState('shows')
 
   const load = async (path) => {
     setLoading(true)
@@ -106,7 +106,7 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
           <label style={{ fontSize: 13 }}>Kind:</label>
           <select value={kind} onChange={(e) => setKind(e.target.value)} style={{ padding: '4px 8px' }}>
-            <option value="series">Series</option>
+            <option value="shows">Shows</option>
             <option value="movies">Movies</option>
           </select>
           <div style={{ flex: 1 }} />

@@ -24,7 +24,7 @@ export default function FoldersManager({ api, folders, onChange, onError }) {
   }
 
   const handleRemove = async (folder) => {
-    if (!window.confirm(`Stop tracking ${folder.path}? Existing series/movies are kept.`)) return
+    if (!window.confirm(`Stop tracking ${folder.path}? Existing shows/movies are kept.`)) return
     try {
       await api.removeMediaFolder(folder.id)
       onChange()

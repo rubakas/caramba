@@ -84,11 +84,41 @@ function safeWrite(fn) {
 // -- Schema migration --
 
 function migrate() {
+  // Rename legacy `series` table to `shows` for users coming from older versions.
+  // Must run BEFORE schema.sql is loaded, so the schema's CREATE TABLE IF NOT
+  // EXISTS shows (...) doesn't conflict.
+  migrateSeriesToShows()
+
   const schemaPath = path.join(__dirname, 'schema.sql')
   const schema = fs.readFileSync(schemaPath, 'utf-8')
   db.exec(schema)
   migrateWatchlist()
   migratePlaybackPreferences()
+}
+
+function tableExists(name) {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name)
+  return !!row
+}
+
+function columnExists(table, column) {
+  if (!tableExists(table)) return false
+  return db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column)
+}
+
+function migrateSeriesToShows() {
+  if (!tableExists('series') || tableExists('shows')) return
+
+  const tx = db.transaction(() => {
+    db.exec("ALTER TABLE series RENAME TO shows")
+    if (columnExists('episodes', 'series_id')) {
+      db.exec("ALTER TABLE episodes RENAME COLUMN series_id TO show_id")
+    }
+    if (columnExists('playback_preferences', 'series_id')) {
+      db.exec("ALTER TABLE playback_preferences RENAME COLUMN series_id TO show_id")
+    }
+  })
+  tx()
 }
 
 function migrateWatchlist() {
@@ -179,7 +209,7 @@ function slugify(text) {
 // -- Security: validate a file path belongs to a registered media directory --
 
 /**
- * Check if a file path is within any registered series media_path or matches
+ * Check if a file path is within any registered show media_path or matches
  * a known movie file_path. Returns true if the path is safe to operate on.
  */
 function isKnownMediaPath(filePath) {
@@ -190,9 +220,9 @@ function isKnownMediaPath(filePath) {
   const downloadsDir = getDownloadsPath()
   if (normalized.startsWith(downloadsDir + path.sep)) return true
 
-  // Check against all series media directories
-  const allSeries = get().prepare('SELECT media_path FROM series').all()
-  for (const s of allSeries) {
+  // Check against all show media directories
+  const allShows = get().prepare('SELECT media_path FROM shows').all()
+  for (const s of allShows) {
     if (s.media_path && normalized.startsWith(path.resolve(s.media_path) + path.sep)) return true
     if (s.media_path && normalized === path.resolve(s.media_path)) return true
   }
@@ -210,7 +240,7 @@ function isKnownMediaPath(filePath) {
 
 // -- Allowed column names for dynamic update functions (prevents SQL injection) --
 
-const SERIES_UPDATE_COLS = new Set([
+const SHOWS_UPDATE_COLS = new Set([
   'name', 'slug', 'media_path', 'poster_url', 'banner_url', 'description',
   'genres', 'rating', 'premiered', 'status', 'network', 'tvmaze_id', 'imdb_id',
 ])
@@ -227,28 +257,28 @@ const EPISODES_UPDATE_COLS = new Set([
   'watched', 'progress_seconds', 'duration_seconds',
 ])
 
-// -- Series CRUD --
+// -- Shows CRUD --
 
-const series = {
+const shows = {
   all() {
     return get().prepare(`
       SELECT s.*,
-        (SELECT COUNT(*) FROM episodes WHERE series_id = s.id) AS total_episodes,
-        (SELECT COUNT(*) FROM episodes WHERE series_id = s.id AND watched = 1) AS watched_episodes
-      FROM series s ORDER BY s.name
+        (SELECT COUNT(*) FROM episodes WHERE show_id = s.id) AS total_episodes,
+        (SELECT COUNT(*) FROM episodes WHERE show_id = s.id AND watched = 1) AS watched_episodes
+      FROM shows s ORDER BY s.name
     `).all()
   },
 
   findBySlug(slug) {
-    return get().prepare('SELECT * FROM series WHERE slug = ?').get(slug)
+    return get().prepare('SELECT * FROM shows WHERE slug = ?').get(slug)
   },
 
   findById(id) {
-    return get().prepare('SELECT * FROM series WHERE id = ?').get(id)
+    return get().prepare('SELECT * FROM shows WHERE id = ?').get(id)
   },
 
   findByMediaPath(mediaPath) {
-    return get().prepare('SELECT * FROM series WHERE media_path = ?').get(mediaPath)
+    return get().prepare('SELECT * FROM shows WHERE media_path = ?').get(mediaPath)
   },
 
   create({ name, slug, media_path }) {
@@ -256,62 +286,62 @@ const series = {
     // Handle slug collision (same pattern as movies.create)
     let finalSlug = s
     let counter = 1
-    while (get().prepare('SELECT id FROM series WHERE slug = ?').get(finalSlug)) {
+    while (get().prepare('SELECT id FROM shows WHERE slug = ?').get(finalSlug)) {
       finalSlug = `${s}-${counter++}`
     }
     const stmt = get().prepare(
-      'INSERT INTO series (name, slug, media_path) VALUES (?, ?, ?)'
+      'INSERT INTO shows (name, slug, media_path) VALUES (?, ?, ?)'
     )
     const result = stmt.run(name, finalSlug, media_path)
     return this.findById(result.lastInsertRowid)
   },
 
   update(id, fields) {
-    const keys = Object.keys(fields).filter(k => SERIES_UPDATE_COLS.has(k))
+    const keys = Object.keys(fields).filter(k => SHOWS_UPDATE_COLS.has(k))
     if (keys.length === 0) return
     const sets = keys.map(k => `${k} = ?`).join(', ')
     const vals = keys.map(k => fields[k])
-    get().prepare(`UPDATE series SET ${sets}, updated_at = datetime('now') WHERE id = ?`).run(...vals, id)
+    get().prepare(`UPDATE shows SET ${sets}, updated_at = datetime('now') WHERE id = ?`).run(...vals, id)
   },
 
   destroy(id) {
-    get().prepare('DELETE FROM series WHERE id = ?').run(id)
+    get().prepare('DELETE FROM shows WHERE id = ?').run(id)
   },
 
   seasonCount(id) {
     const row = get().prepare(
-      'SELECT COUNT(DISTINCT season_number) AS c FROM episodes WHERE series_id = ?'
+      'SELECT COUNT(DISTINCT season_number) AS c FROM episodes WHERE show_id = ?'
     ).get(id)
     return row ? row.c : 0
   },
 
   totalWatchTime(id) {
     const row = get().prepare(
-      'SELECT SUM(wh.progress_seconds) AS total FROM watch_histories wh JOIN episodes e ON wh.episode_id = e.id WHERE e.series_id = ?'
+      'SELECT SUM(wh.progress_seconds) AS total FROM watch_histories wh JOIN episodes e ON wh.episode_id = e.id WHERE e.show_id = ?'
     ).get(id)
     return row ? row.total || 0 : 0
   },
 
   /**
-   * Relocate a series to a new folder path.
-   * Updates the series media_path and rebases every episode file_path
+   * Relocate a show to a new folder path.
+   * Updates the show media_path and rebases every episode file_path
    * from the old root to the new root. All progress/metadata is preserved.
    * Runs in a transaction so it's all-or-nothing.
    */
   relocate(id, newMediaPath) {
     const s = this.findById(id)
-    if (!s) throw new Error('Series not found')
+    if (!s) throw new Error('Show not found')
 
     const oldRoot = path.resolve(s.media_path)
     const newRoot = path.resolve(newMediaPath)
 
     const relocateTx = get().transaction(() => {
-      // Update series media_path
-      get().prepare(`UPDATE series SET media_path = ?, updated_at = datetime('now') WHERE id = ?`)
+      // Update show media_path
+      get().prepare(`UPDATE shows SET media_path = ?, updated_at = datetime('now') WHERE id = ?`)
         .run(newRoot, id)
 
       // Rebase all episode file_paths
-      const eps = get().prepare('SELECT id, file_path FROM episodes WHERE series_id = ?').all(id)
+      const eps = get().prepare('SELECT id, file_path FROM episodes WHERE show_id = ?').all(id)
       const updateEp = get().prepare(`UPDATE episodes SET file_path = ?, updated_at = datetime('now') WHERE id = ?`)
       for (const ep of eps) {
         if (!ep.file_path) continue
@@ -334,50 +364,50 @@ const series = {
 // -- Episodes CRUD --
 
 const episodes = {
-  forSeries(seriesId) {
+  forShow(showId) {
     return get().prepare(
-      'SELECT * FROM episodes WHERE series_id = ? ORDER BY season_number, episode_number'
-    ).all(seriesId)
+      'SELECT * FROM episodes WHERE show_id = ? ORDER BY season_number, episode_number'
+    ).all(showId)
   },
 
-  countForSeries(seriesId) {
-    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE series_id = ?').get(seriesId)
+  countForShow(showId) {
+    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE show_id = ?').get(showId)
     return row ? row.c : 0
   },
 
-  countWatchedForSeries(seriesId) {
-    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE series_id = ? AND watched = 1').get(seriesId)
+  countWatchedForShow(showId) {
+    const row = get().prepare('SELECT COUNT(*) AS c FROM episodes WHERE show_id = ? AND watched = 1').get(showId)
     return row ? row.c : 0
   },
 
-  forSeason(seriesId, seasonNum) {
+  forSeason(showId, seasonNum) {
     return get().prepare(
-      'SELECT * FROM episodes WHERE series_id = ? AND season_number = ? ORDER BY episode_number'
-    ).all(seriesId, seasonNum)
+      'SELECT * FROM episodes WHERE show_id = ? AND season_number = ? ORDER BY episode_number'
+    ).all(showId, seasonNum)
   },
 
-  seasons(seriesId) {
+  seasons(showId) {
     return get().prepare(
-      'SELECT DISTINCT season_number FROM episodes WHERE series_id = ? ORDER BY season_number'
-    ).all(seriesId).map(r => r.season_number)
+      'SELECT DISTINCT season_number FROM episodes WHERE show_id = ? ORDER BY season_number'
+    ).all(showId).map(r => r.season_number)
   },
 
   findById(id) {
     return get().prepare('SELECT * FROM episodes WHERE id = ?').get(id)
   },
 
-  findByCode(seriesId, code) {
+  findByCode(showId, code) {
     return get().prepare(
-      'SELECT * FROM episodes WHERE series_id = ? AND code = ?'
-    ).get(seriesId, code)
+      'SELECT * FROM episodes WHERE show_id = ? AND code = ?'
+    ).get(showId, code)
   },
 
   findByFilePath(filePath) {
     return get().prepare('SELECT * FROM episodes WHERE file_path = ?').get(filePath)
   },
 
-  upsert({ series_id, code, title, season_number, episode_number, file_path }) {
-    const existing = this.findByCode(series_id, code)
+  upsert({ show_id, code, title, season_number, episode_number, file_path }) {
+    const existing = this.findByCode(show_id, code)
     if (existing) {
       get().prepare(`
         UPDATE episodes SET title = ?, season_number = ?, episode_number = ?, file_path = ?, updated_at = datetime('now')
@@ -386,9 +416,9 @@ const episodes = {
       return this.findById(existing.id)
     }
     const result = get().prepare(`
-      INSERT INTO episodes (series_id, code, title, season_number, episode_number, file_path)
+      INSERT INTO episodes (show_id, code, title, season_number, episode_number, file_path)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(series_id, code, title, season_number, episode_number, file_path)
+    `).run(show_id, code, title, season_number, episode_number, file_path)
     return this.findById(result.lastInsertRowid)
   },
 
@@ -412,11 +442,11 @@ const episodes = {
     `).run(id)
   },
 
-  markPriorWatched(seriesId, seasonNumber, episodeNumber) {
+  markPriorWatched(showId, seasonNumber, episodeNumber) {
     get().prepare(`
       UPDATE episodes SET watched = 1, last_watched_at = datetime('now'), updated_at = datetime('now')
-      WHERE series_id = ? AND (season_number < ? OR (season_number = ? AND episode_number < ?)) AND watched = 0
-    `).run(seriesId, seasonNumber, seasonNumber, episodeNumber)
+      WHERE show_id = ? AND (season_number < ? OR (season_number = ? AND episode_number < ?)) AND watched = 0
+    `).run(showId, seasonNumber, seasonNumber, episodeNumber)
   },
 
   updateProgress(id, progressSeconds, durationSeconds) {
@@ -432,24 +462,24 @@ const episodes = {
     const current = this.findById(episodeId)
     if (!current) return null
     return get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ?
+      SELECT * FROM episodes WHERE show_id = ?
       AND (season_number > ? OR (season_number = ? AND episode_number > ?))
       ORDER BY season_number, episode_number LIMIT 1
-    `).get(current.series_id, current.season_number, current.season_number, current.episode_number) || null
+    `).get(current.show_id, current.season_number, current.season_number, current.episode_number) || null
   },
 
-  // Compute the single "continue watching" CTA for a series.
+  // Compute the single "continue watching" CTA for a show.
   // Returns { mode, episode } where mode is one of:
   //   'resume'  — last-played episode is unfinished
   //   'next'    — last-played (or highest watched) episode is finished, next sequential exists
   //   'start'   — nothing played or watched; first episode is offered
   //   'done'    — last-played is the finale and finished
-  //   'empty'   — series has no episodes
-  continueFor(seriesId) {
+  //   'empty'   — show has no episodes
+  continueFor(showId) {
     const lastPlayed = get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ? AND last_watched_at IS NOT NULL
+      SELECT * FROM episodes WHERE show_id = ? AND last_watched_at IS NOT NULL
       ORDER BY last_watched_at DESC LIMIT 1
-    `).get(seriesId)
+    `).get(showId)
 
     if (lastPlayed) {
       if (!isEpisodeFinished(lastPlayed)) {
@@ -460,9 +490,9 @@ const episodes = {
     }
 
     const highestWatched = get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ? AND watched = 1
+      SELECT * FROM episodes WHERE show_id = ? AND watched = 1
       ORDER BY season_number DESC, episode_number DESC LIMIT 1
-    `).get(seriesId)
+    `).get(showId)
 
     if (highestWatched) {
       const next = this.getNext(highestWatched.id)
@@ -470,9 +500,9 @@ const episodes = {
     }
 
     const first = get().prepare(`
-      SELECT * FROM episodes WHERE series_id = ?
+      SELECT * FROM episodes WHERE show_id = ?
       ORDER BY season_number, episode_number LIMIT 1
-    `).get(seriesId)
+    `).get(showId)
 
     return first ? { mode: 'start', episode: first } : { mode: 'empty', episode: null }
   },
@@ -587,10 +617,10 @@ const watchHistories = {
   recent(limit = 100) {
     return get().prepare(`
       SELECT wh.*, e.code, e.title AS episode_title, e.season_number, e.episode_number,
-             s.name AS series_name, s.slug AS series_slug, s.poster_url AS series_poster
+             s.name AS show_name, s.slug AS show_slug, s.poster_url AS show_poster
       FROM watch_histories wh
       JOIN episodes e ON wh.episode_id = e.id
-      JOIN series s ON e.series_id = s.id
+      JOIN shows s ON e.show_id = s.id
       ORDER BY wh.started_at DESC
       LIMIT ?
     `).all(limit)
@@ -599,14 +629,14 @@ const watchHistories = {
   stats() {
     const totalTime = get().prepare('SELECT SUM(progress_seconds) AS t FROM watch_histories').get()
     const totalEpisodes = get().prepare('SELECT COUNT(DISTINCT episode_id) AS c FROM watch_histories').get()
-    const totalSeries = get().prepare(`
+    const totalShows = get().prepare(`
       SELECT COUNT(DISTINCT s.id) AS c FROM watch_histories wh
-      JOIN episodes e ON wh.episode_id = e.id JOIN series s ON e.series_id = s.id
+      JOIN episodes e ON wh.episode_id = e.id JOIN shows s ON e.show_id = s.id
     `).get()
     return {
       total_time: totalTime?.t || 0,
       total_episodes: totalEpisodes?.c || 0,
-      total_series: totalSeries?.c || 0,
+      total_shows: totalShows?.c || 0,
     }
   },
 }
@@ -666,29 +696,29 @@ const watchlist = {
   },
 }
 
-// -- Playback Preferences (per-series / per-movie) --
+// -- Playback Preferences (per-show / per-movie) --
 
 const playbackPreferences = {
-  forSeries(seriesId) {
-    return get().prepare('SELECT * FROM playback_preferences WHERE series_id = ?').get(seriesId)
+  forShow(showId) {
+    return get().prepare('SELECT * FROM playback_preferences WHERE show_id = ?').get(showId)
   },
 
   forMovie(movieId) {
     return get().prepare('SELECT * FROM playback_preferences WHERE movie_id = ?').get(movieId)
   },
 
-  saveSeries(seriesId, { audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style }) {
+  saveShow(showId, { audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style }) {
     get().prepare(`
-      INSERT INTO playback_preferences (series_id, audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style)
+      INSERT INTO playback_preferences (show_id, audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style)
       VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(series_id) DO UPDATE SET
+      ON CONFLICT(show_id) DO UPDATE SET
         audio_language = excluded.audio_language,
         subtitle_language = excluded.subtitle_language,
         subtitle_off = excluded.subtitle_off,
         subtitle_size = excluded.subtitle_size,
         subtitle_style = excluded.subtitle_style,
         updated_at = datetime('now')
-    `).run(seriesId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0, subtitle_size || 'medium', subtitle_style || 'classic')
+    `).run(showId, audio_language || null, subtitle_language || null, subtitle_off ? 1 : 0, subtitle_size || 'medium', subtitle_style || 'classic')
   },
 
   saveMovie(movieId, { audio_language, subtitle_language, subtitle_off, subtitle_size, subtitle_style }) {
@@ -717,20 +747,20 @@ const downloads = {
     return get().prepare('SELECT * FROM downloads WHERE movie_id = ?').get(movieId) || null
   },
 
-  forSeason(seriesId, seasonNumber) {
+  forSeason(showId, seasonNumber) {
     return get().prepare(`
       SELECT d.* FROM downloads d
       JOIN episodes e ON d.episode_id = e.id
-      WHERE e.series_id = ? AND e.season_number = ?
-    `).all(seriesId, seasonNumber)
+      WHERE e.show_id = ? AND e.season_number = ?
+    `).all(showId, seasonNumber)
   },
 
-  forSeries(seriesId) {
+  forShow(showId) {
     return get().prepare(`
       SELECT d.* FROM downloads d
       JOIN episodes e ON d.episode_id = e.id
-      WHERE e.series_id = ?
-    `).all(seriesId)
+      WHERE e.show_id = ?
+    `).all(showId)
   },
 
   all() {
@@ -779,4 +809,4 @@ const downloads = {
   },
 }
 
-module.exports = { open, close, get, getDbPath, getStoragePath, getDownloadsPath, slugify, isKnownMediaPath, safeWrite, series, episodes, movies, watchHistories, watchlist, playbackPreferences, downloads }
+module.exports = { open, close, get, getDbPath, getStoragePath, getDownloadsPath, slugify, isKnownMediaPath, safeWrite, shows, episodes, movies, watchHistories, watchlist, playbackPreferences, downloads }

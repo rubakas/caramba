@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS series (
+CREATE TABLE IF NOT EXISTS shows (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
@@ -15,11 +15,11 @@ CREATE TABLE IF NOT EXISTS series (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_series_slug ON series(slug);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shows_slug ON shows(slug);
 
 CREATE TABLE IF NOT EXISTS episodes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  series_id INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+  show_id INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
   code TEXT NOT NULL,
   title TEXT,
   season_number INTEGER,
@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS episodes (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_series_code ON episodes(series_id, code);
-CREATE INDEX IF NOT EXISTS idx_episodes_series ON episodes(series_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_show_code ON episodes(show_id, code);
+CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show_id);
 
 CREATE TABLE IF NOT EXISTS movies (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_wh_episode ON watch_histories(episode_id);
 
 CREATE TABLE IF NOT EXISTS playback_preferences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  series_id INTEGER UNIQUE REFERENCES series(id) ON DELETE CASCADE,
+  show_id INTEGER UNIQUE REFERENCES shows(id) ON DELETE CASCADE,
   movie_id INTEGER UNIQUE REFERENCES movies(id) ON DELETE CASCADE,
   audio_language TEXT,
   subtitle_language TEXT,

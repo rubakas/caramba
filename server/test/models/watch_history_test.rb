@@ -12,9 +12,9 @@ class WatchHistoryTest < ActiveSupport::TestCase
     assert_equal "S01E01", wh.episode.code
   end
 
-  test "has_one series through episode" do
+  test "has_one show through episode" do
     wh = watch_histories(:history_one)
-    assert_equal series(:breaking_bad), wh.series
+    assert_equal shows(:breaking_bad), wh.show
   end
 
   test "update_progress! sets fields and ended_at" do

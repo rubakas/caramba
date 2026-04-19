@@ -50,7 +50,7 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
   end
 
   test "scan creates episodes from filesystem" do
-    s = series(:no_metadata)
+    s = shows(:no_metadata)
 
     # Create a temp dir structure
     Dir.mktmpdir do |dir|
@@ -70,7 +70,7 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
   end
 
   test "scan handles flat structure" do
-    s = series(:no_metadata)
+    s = shows(:no_metadata)
 
     Dir.mktmpdir do |dir|
       s.update!(media_path: dir)
@@ -83,13 +83,13 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
   end
 
   test "scan returns 0 when media_path missing" do
-    s = series(:no_metadata)
+    s = shows(:no_metadata)
     s.update_columns(media_path: "/nonexistent/path")
     assert_equal 0, MediaScannerService.scan(s)
   end
 
   test "scan upserts existing episodes" do
-    s = series(:no_metadata)
+    s = shows(:no_metadata)
 
     Dir.mktmpdir do |dir|
       s.update!(media_path: dir)

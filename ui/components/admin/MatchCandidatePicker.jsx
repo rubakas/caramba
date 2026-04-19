@@ -12,9 +12,9 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
     try {
       const result = await api.confirmPendingImport(pendingImport.id, externalId)
       onChange()
-      const slug = result?.series?.slug || result?.movie?.slug
+      const slug = result?.show?.slug || result?.movie?.slug
       if (slug) {
-        navigate(pendingImport.kind === 'movies' ? `/movies/${slug}` : `/series/${slug}`)
+        navigate(pendingImport.kind === 'movies' ? `/movies/${slug}` : `/shows/${slug}`)
       }
     } catch (err) {
       onError(err.message || 'Failed to confirm match')

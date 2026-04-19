@@ -3,7 +3,7 @@ require "test_helper"
 class PendingImportTest < ActiveSupport::TestCase
   setup do
     @existing_dir = Dir.mktmpdir
-    @folder = MediaFolder.create!(path: @existing_dir, kind: "series")
+    @folder = MediaFolder.create!(path: @existing_dir, kind: "shows")
   end
 
   teardown do
@@ -14,7 +14,7 @@ class PendingImportTest < ActiveSupport::TestCase
     pi = PendingImport.new(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/Breaking Bad",
-      kind: "series"
+      kind: "shows"
     )
     assert pi.valid?
   end
@@ -23,7 +23,7 @@ class PendingImportTest < ActiveSupport::TestCase
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series"
+      kind: "shows"
     )
     assert_equal "pending", pi.status
   end
@@ -32,7 +32,7 @@ class PendingImportTest < ActiveSupport::TestCase
     pi = PendingImport.new(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series",
+      kind: "shows",
       status: "bogus"
     )
     refute pi.valid?
@@ -51,12 +51,12 @@ class PendingImportTest < ActiveSupport::TestCase
     PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series"
+      kind: "shows"
     )
     dup = PendingImport.new(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series"
+      kind: "shows"
     )
     refute dup.valid?
   end
@@ -65,7 +65,7 @@ class PendingImportTest < ActiveSupport::TestCase
     pi = PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series",
+      kind: "shows",
       candidates: [ { "externalId" => 169, "name" => "Breaking Bad" } ]
     )
     pi.reload
@@ -77,7 +77,7 @@ class PendingImportTest < ActiveSupport::TestCase
     PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series"
+      kind: "shows"
     )
     assert_difference("PendingImport.count", -1) do
       @folder.destroy
@@ -88,12 +88,12 @@ class PendingImportTest < ActiveSupport::TestCase
     p1 = PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show1",
-      kind: "series"
+      kind: "shows"
     )
     confirmed = PendingImport.create!(
       media_folder: @folder,
       folder_path: "#{@existing_dir}/show2",
-      kind: "series",
+      kind: "shows",
       status: "confirmed"
     )
     assert_includes PendingImport.pending, p1

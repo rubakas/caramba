@@ -3,7 +3,7 @@ require "test_helper"
 class LibraryWatcherServiceTest < ActiveSupport::TestCase
   setup do
     @root = Dir.mktmpdir
-    @series_folder = MediaFolder.create!(path: @root, kind: "series")
+    @shows_folder = MediaFolder.create!(path: @root, kind: "shows")
   end
 
   teardown do
@@ -15,7 +15,7 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     Dir.mkdir(File.join(@root, "The.Office.S01"))
     stub_tvmaze_empty
 
-    created = LibraryWatcherService.scan_folder(@series_folder)
+    created = LibraryWatcherService.scan_folder(@shows_folder)
     assert_equal 2, created
     paths = PendingImport.pluck(:folder_path)
     assert_includes paths, File.join(@root, "Breaking Bad (2008)")
@@ -26,7 +26,7 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     Dir.mkdir(File.join(@root, "Breaking Bad (2008) Complete"))
     stub_tvmaze_empty
 
-    LibraryWatcherService.scan_folder(@series_folder)
+    LibraryWatcherService.scan_folder(@shows_folder)
     pi = PendingImport.find_by(folder_path: File.join(@root, "Breaking Bad (2008) Complete"))
     assert_equal "Breaking Bad", pi.parsed_name
   end
@@ -35,7 +35,7 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     Dir.mkdir(File.join(@root, "Breaking Bad"))
     stub_tvmaze_search("Breaking Bad", build_tvmaze_results(7))
 
-    LibraryWatcherService.scan_folder(@series_folder)
+    LibraryWatcherService.scan_folder(@shows_folder)
     pi = PendingImport.find_by(folder_path: File.join(@root, "Breaking Bad"))
     assert_equal 5, pi.candidates.size
     first = pi.candidates.first
@@ -43,25 +43,25 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     assert_equal "tvmaze", first["source"]
   end
 
-  test "skips existing Series with same media_path" do
+  test "skips existing Show with same media_path" do
     show_path = File.join(@root, "Existing Show")
     Dir.mkdir(show_path)
-    Series.create!(name: "Existing Show", media_path: show_path)
+    Show.create!(name: "Existing Show", media_path: show_path)
     stub_tvmaze_empty
 
-    LibraryWatcherService.scan_folder(@series_folder)
+    LibraryWatcherService.scan_folder(@shows_folder)
     assert_equal 0, PendingImport.where(folder_path: show_path).count
   end
 
   test "skips existing PendingImport with same folder_path" do
     show_path = File.join(@root, "Already Pending")
     Dir.mkdir(show_path)
-    PendingImport.create!(media_folder: @series_folder, folder_path: show_path, kind: "series")
+    PendingImport.create!(media_folder: @shows_folder, folder_path: show_path, kind: "shows")
     stub_tvmaze_empty
 
     # Also create a second show to ensure scan is active but the existing entry is skipped
     Dir.mkdir(File.join(@root, "Another Show"))
-    LibraryWatcherService.scan_folder(@series_folder)
+    LibraryWatcherService.scan_folder(@shows_folder)
     assert_equal 1, PendingImport.where(folder_path: show_path).count
   end
 
@@ -71,25 +71,25 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     end
     stub_tvmaze_empty
 
-    created = LibraryWatcherService.scan_folder(@series_folder)
+    created = LibraryWatcherService.scan_folder(@shows_folder)
     assert_equal LibraryWatcherService::NEW_IMPORTS_PER_RUN, created
   end
 
   test "updates last_scanned_at" do
-    @series_folder.update!(last_scanned_at: nil)
+    @shows_folder.update!(last_scanned_at: nil)
     stub_tvmaze_empty
 
-    LibraryWatcherService.scan_folder(@series_folder)
-    assert_not_nil @series_folder.reload.last_scanned_at
+    LibraryWatcherService.scan_folder(@shows_folder)
+    assert_not_nil @shows_folder.reload.last_scanned_at
   end
 
-  test "ignores files and dotfiles under series root" do
+  test "ignores files and dotfiles under shows root" do
     Dir.mkdir(File.join(@root, ".hidden"))
     File.write(File.join(@root, "loose.mkv"), "")
     Dir.mkdir(File.join(@root, "Actual Show"))
     stub_tvmaze_empty
 
-    created = LibraryWatcherService.scan_folder(@series_folder)
+    created = LibraryWatcherService.scan_folder(@shows_folder)
     assert_equal 1, created
   end
 
@@ -125,7 +125,7 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
   end
 
   test "returns 0 when folder path does not exist" do
-    ghost = MediaFolder.new(path: "/does/not/exist/#{SecureRandom.hex}", kind: "series")
+    ghost = MediaFolder.new(path: "/does/not/exist/#{SecureRandom.hex}", kind: "shows")
     ghost.save(validate: false)
     assert_equal 0, LibraryWatcherService.scan_folder(ghost)
   end

@@ -1,20 +1,20 @@
-class Api::SeriesController < Api::BaseController
-  # GET /api/series
+class Api::ShowsController < Api::BaseController
+  # GET /api/shows
   def index
-    series = Series.all.order(:name)
-    render json: series.map { |s| series_with_counts(s) }
+    shows = Show.all.order(:name)
+    render json: shows.map { |s| show_with_counts(s) }
   end
 
-  # GET /api/series/:slug
+  # GET /api/shows/:slug
   def show
-    s = Series.find_by!(slug: params[:slug])
-    render json: series_with_counts(s)
+    s = Show.find_by!(slug: params[:slug])
+    render json: show_with_counts(s)
   end
 
-  # GET /api/series/:slug/full
-  # Combined handler: returns everything SeriesShow page needs in one request.
+  # GET /api/shows/:slug/full
+  # Combined handler: returns everything Show page needs in one request.
   def full
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     eps = s.episodes.ordered
     seasons = s.episodes.distinct.pluck(:season_number).compact.sort
 
@@ -27,63 +27,63 @@ class Api::SeriesController < Api::BaseController
     end
 
     render json: {
-      series: series_with_counts(s),
+      show: show_with_counts(s),
       episodes: episodes_json,
       seasons: seasons,
       continue: continue_for(s)
     }
   end
 
-  # GET /api/series/:slug/episodes
+  # GET /api/shows/:slug/episodes
   def episodes
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     render json: s.episodes.ordered
   end
 
-  # GET /api/series/:slug/seasons
+  # GET /api/shows/:slug/seasons
   def seasons
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     render json: s.episodes.distinct.pluck(:season_number).compact.sort
   end
 
-  # GET /api/series/:slug/continue
+  # GET /api/shows/:slug/continue
   def continue
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     render json: continue_for(s)
   end
 
-  # POST /api/series
-  # Server-side equivalent of addSeries — scans folder, fetches metadata
+  # POST /api/shows
+  # Server-side equivalent of addShow — scans folder, fetches metadata
   def create
     folder_path = params[:folder_path]&.strip
     return render(json: { error: "folder_path required" }, status: :unprocessable_entity) unless folder_path.present?
 
     name = MediaScannerService.name_from_path(folder_path)
-    s = Series.find_by(media_path: folder_path) || Series.create!(name: name, media_path: folder_path)
+    s = Show.find_by(media_path: folder_path) || Show.create!(name: name, media_path: folder_path)
 
     MediaScannerService.scan(s)
-    TvmazeService.fetch_for_series(s)
+    TvmazeService.fetch_for_show(s)
 
-    render json: series_with_counts(s.reload), status: :created
+    render json: show_with_counts(s.reload), status: :created
   end
 
-  # POST /api/series/:slug/scan
+  # POST /api/shows/:slug/scan
   def scan
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     count = MediaScannerService.scan(s)
     render json: { scanned: count }
   end
 
-  # POST /api/series/:slug/refresh_metadata
+  # POST /api/shows/:slug/refresh_metadata
   def refresh_metadata
-    s = Series.find_by!(slug: params[:slug])
-    result = TvmazeService.fetch_for_series(s)
+    s = Show.find_by!(slug: params[:slug])
+    result = TvmazeService.fetch_for_show(s)
     render json: { success: result }
   end
 
-  # DELETE /api/series/:slug
+  # DELETE /api/shows/:slug
   def destroy
-    s = Series.find_by!(slug: params[:slug])
+    s = Show.find_by!(slug: params[:slug])
     # Clean up downloaded files
     s.downloads.each do |dl|
       File.delete(dl.file_path) if dl.file_path && File.exist?(dl.file_path)
@@ -96,7 +96,7 @@ class Api::SeriesController < Api::BaseController
 
   private
 
-  def series_with_counts(s)
+  def show_with_counts(s)
     total = s.episodes.count
     watched = s.episodes.watched.count
     mode = continue_for(s)[:mode]
@@ -134,7 +134,7 @@ class Api::SeriesController < Api::BaseController
   end
 
   def episode_after(ep)
-    ep.series.episodes
+    ep.show.episodes
       .where("season_number > ? OR (season_number = ? AND episode_number > ?)",
              ep.season_number, ep.season_number, ep.episode_number)
       .order(:season_number, :episode_number)

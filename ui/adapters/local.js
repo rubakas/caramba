@@ -6,15 +6,15 @@ export function createLocalAdapter() {
   const api = window.api
 
   return {
-    // Series
-    listSeries: () => api.listSeries(),
+    // Shows
+    listShows: () => api.listShows(),
     getContinue: (slug) => api.getContinue(slug),
-    getSeriesShow: (slug) => api.getSeriesShow(slug),
-    addSeries: (path) => api.addSeries(path),
-    scanSeries: (slug) => api.scanSeries(slug),
-    refreshSeriesMetadata: (slug) => api.refreshSeriesMetadata(slug),
-    destroySeries: (slug) => api.destroySeries(slug),
-    relocateSeries: (slug, newPath) => api.relocateSeries(slug, newPath),
+    getShow: (slug) => api.getShow(slug),
+    addShow: (path) => api.addShow(path),
+    scanShow: (slug) => api.scanShow(slug),
+    refreshShowMetadata: (slug) => api.refreshShowMetadata(slug),
+    destroyShow: (slug) => api.destroyShow(slug),
+    relocateShow: (slug, newPath) => api.relocateShow(slug, newPath),
 
     // Episodes
     toggleEpisode: (id) => api.toggleEpisode(id),

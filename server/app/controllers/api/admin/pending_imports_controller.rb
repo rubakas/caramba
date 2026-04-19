@@ -12,8 +12,8 @@ class Api::Admin::PendingImportsController < Api::Admin::BaseController
     record = PendingImportConfirmer.confirm(@pending_import, external_id)
 
     case @pending_import.kind
-    when "series"
-      render json: { series: record.as_json.merge("poster_url" => poster_url_for(record)) }, status: :created
+    when "shows"
+      render json: { show: record.as_json.merge("poster_url" => poster_url_for(record)) }, status: :created
     when "movies"
       render json: { movie: record.as_json.merge("poster_url" => poster_url_for(record)) }, status: :created
     end

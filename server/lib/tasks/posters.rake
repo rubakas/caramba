@@ -1,7 +1,7 @@
 namespace :posters do
-  desc "Download and attach posters for all Series, Movies and Watchlist items that have a poster_url but no attached image yet"
+  desc "Download and attach posters for all Shows, Movies and Watchlist items that have a poster_url but no attached image yet"
   task backfill: :environment do
-    [ Series, Movie, Watchlist ].each do |klass|
+    [ Show, Movie, Watchlist ].each do |klass|
       records = klass.where.not(poster_url: [ nil, "" ]).includes(:poster_attachment)
       total = records.count
       done = 0
