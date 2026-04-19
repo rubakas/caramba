@@ -49,20 +49,6 @@ Rails.application.routes.draw do
     get "playback/hls/:session_id/:asset", to: "playback#hls_asset", as: :playback_hls_asset,
         constraints: { asset: /(?:init\.mp4|segment_\d+\.m4s)/ }
 
-    resources :history, only: [ :index ], controller: :history do
-      collection do
-        get :stats
-      end
-    end
-
-    resources :watchlist, only: [ :index, :create, :destroy ]
-
-    resource :discover, only: [], controller: :discover do
-      get :search
-      get :show_details
-      get :movie_details
-    end
-
     # Media file streaming
     get "media/episodes/:id", to: "media#episode", as: :media_episode
     get "media/movies/:id", to: "media#movie", as: :media_movie

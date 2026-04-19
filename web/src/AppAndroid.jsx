@@ -10,8 +10,6 @@ import Library from '@caramba/ui/pages/Library'
 import SeriesShow from '@caramba/ui/pages/SeriesShow'
 import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
-import Discover from '@caramba/ui/pages/Discover'
-import History from '@caramba/ui/pages/History'
 import Settings from '@caramba/ui/pages/Settings'
 import { Capacitor } from '@capacitor/core'
 
@@ -122,8 +120,6 @@ export default function App() {
               <Route path="/series/:slug" element={<SeriesShow />} />
               <Route path="/movies" element={<Movies />} />
               <Route path="/movies/:slug" element={<MovieShow />} />
-              <Route path="/discover" element={<Discover />} />
-              <Route path="/history" element={<History />} />
               <Route path="/settings" element={
                 <Settings 
                   isWebMode={!isAndroidTV}

@@ -19,8 +19,6 @@ export default function Navbar({ active, actions, rightContent }) {
   const links = [
     { label: 'Library', path: '/' },
     { label: 'Movies', path: '/movies' },
-    { label: 'Discover', path: '/discover' },
-    { label: 'History', path: '/history' },
     ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
     ...(import.meta.env.DEV && hasPlayground ? [{ label: 'Playground', path: '/playground' }] : []),
   ]

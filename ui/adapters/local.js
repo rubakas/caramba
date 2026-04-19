@@ -60,20 +60,6 @@ export function createLocalAdapter() {
     getDownloadStatusByFilePaths: (filePaths) => api.getDownloadStatusByFilePaths(filePaths),
     getMovieDownloadStatusByFilePath: (filePath) => api.getMovieDownloadStatusByFilePath(filePath),
 
-    // Discover
-    searchShows: (query, type) => api.searchShows(query, type),
-    getShowDetails: (tvmazeId) => api.getShowDetails(tvmazeId),
-    getMovieDetails: (imdbId) => api.getMovieDetails(imdbId),
-
-    // Watchlist
-    listWatchlist: () => api.listWatchlist(),
-    addToWatchlist: (item) => api.addToWatchlist(item),
-    removeFromWatchlist: (identifier) => api.removeFromWatchlist(identifier),
-
-    // History
-    listHistory: (limit) => api.listHistory(limit),
-    getHistoryStats: () => api.getHistoryStats(),
-
     // Settings
     getSettings: () => api.getSettings(),
     setSyncFolder: (path) => api.setSyncFolder(path),

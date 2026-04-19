@@ -2,8 +2,8 @@
  * Hybrid adapter — tries HTTP (Rails API) first, falls back to local (Electron IPC).
  *
  * Design:
- * - Data operations (series, movies, episodes, history, watchlist, discover)
- *   prefer HTTP when connected, fallback to local when not.
+ * - Data operations (series, movies, episodes) prefer HTTP when connected,
+ *   fallback to local when not.
  * - Playback: if the media file is accessible locally (e.g. network mount),
  *   use the local transcoder (stream:// protocol). Otherwise use HTTP streaming
  *   from the server (MSE path, same as web app).
@@ -361,20 +361,6 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     deleteDownloadMovie: local.deleteDownloadMovie,
     getDownloadStatusByFilePaths: local.getDownloadStatusByFilePaths,
     getMovieDownloadStatusByFilePath: local.getMovieDownloadStatusByFilePath,
-
-    // === Discover: HTTP preferred, local fallback ===
-    searchShows: withFallback(http.searchShows, local.searchShows),
-    getShowDetails: withFallback(http.getShowDetails, local.getShowDetails),
-    getMovieDetails: withFallback(http.getMovieDetails, local.getMovieDetails),
-
-    // === Watchlist: HTTP preferred, local fallback ===
-    listWatchlist: withFallback(http.listWatchlist, local.listWatchlist),
-    addToWatchlist: withFallback(http.addToWatchlist, local.addToWatchlist),
-    removeFromWatchlist: withFallback(http.removeFromWatchlist, local.removeFromWatchlist),
-
-    // === History: HTTP preferred, local fallback ===
-    listHistory: withFallback(http.listHistory, local.listHistory),
-    getHistoryStats: withFallback(http.getHistoryStats, local.getHistoryStats),
 
     // === Settings: ALWAYS local ===
     getSettings: local.getSettings,

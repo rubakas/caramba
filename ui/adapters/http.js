@@ -52,7 +52,6 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
 
   function get(path) { return request(path) }
   function post(path, body) { return request(path, { method: 'POST', body }) }
-  function del(path) { return request(path, { method: 'DELETE' }) }
 
   const noop = () => {}
   const noopAsync = async () => null
@@ -169,26 +168,6 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     deleteDownloadSeason: noopAsync,
     downloadMovie: noopAsync,
     deleteDownloadMovie: noopAsync,
-
-    // Discover
-    searchShows: (query, type) => get(`/api/discover/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(type || 'all')}`),
-    getShowDetails: (tvmazeId) => get(`/api/discover/show_details?tvmaze_id=${encodeURIComponent(tvmazeId)}`),
-    getMovieDetails: (imdbId) => get(`/api/discover/movie_details?imdb_id=${encodeURIComponent(imdbId)}`),
-
-    // Watchlist
-    listWatchlist: () => get('/api/watchlist'),
-    addToWatchlist: (item) => post('/api/watchlist', item),
-    removeFromWatchlist: (identifier) => {
-      // identifier can be a tvmaze_id (number) or { _type: 'movie', imdb_id }
-      if (typeof identifier === 'object' && identifier._type === 'movie') {
-        return del(`/api/watchlist/0?imdb_id=${encodeURIComponent(identifier.imdb_id)}`)
-      }
-      return del(`/api/watchlist/0?tvmaze_id=${encodeURIComponent(identifier)}`)
-    },
-
-    // History
-    listHistory: (limit) => get(`/api/history${limit ? `?limit=${limit}` : ''}`),
-    getHistoryStats: () => get('/api/history/stats'),
 
     // Settings — no-ops
     getSettings: noopAsync,

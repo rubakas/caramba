@@ -46,24 +46,12 @@
     "radius": 12,
     "blur": 8
   },
-  "discover-modal": {
-    "radius": 16,
-    "bezelHeightFn": "convex"
-  },
-  "dm-close": {
-    "radius": 18
-  },
   "cta-card": {
     "radius": 16
   },
   "stat-chip": {
     "radius": 12,
     "bezelHeightFn": "convex"
-  },
-  "watchlist-btn": {
-    "radius": 16,
-    "blur": 8,
-    "bezelHeightFn": "lip"
   },
   "nav-action": {
     "radius": 20
@@ -75,16 +63,6 @@
     "radius": 24
   },
   "play-cta": {
-    "radius": 24
-  },
-  "filter-btn": {
-    "radius": 20
-  },
-  "clear-btn": {
-    "radius": 12,
-    "bezelHeightFn": "lip"
-  },
-  "dm-action": {
     "radius": 24
   },
   "season-tab": {

@@ -18,7 +18,7 @@ const SPECIMENS = [
     description: 'Top navigation bar (full-width, sharp corners)',
     render: (props) => (
       <refractive.nav style={{ width: '100%', height: 48, display: 'flex', alignItems: 'center', padding: '0 16px', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 14, fontWeight: 600 }} refraction={props}>
-        Caramba &nbsp;&middot;&nbsp; Library &nbsp;&middot;&nbsp; Movies &nbsp;&middot;&nbsp; Discover
+        Caramba &nbsp;&middot;&nbsp; Library &nbsp;&middot;&nbsp; Movies
       </refractive.nav>
     ),
   },
@@ -155,30 +155,6 @@ const SPECIMENS = [
     ),
   },
   {
-    id: 'discover-modal',
-    label: 'Discover Modal',
-    element: 'div',
-    description: 'Large detail modal container (low refractiveIndex)',
-    render: (props) => (
-      <refractive.div style={{ width: 400, padding: 20, background: 'rgba(20,20,20,0.8)', border: '1px solid rgba(255,255,255,0.08)', color: '#fff' }} refraction={props}>
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Breaking Bad</div>
-        <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 12 }}>2008 &middot; 5 Seasons &middot; 62 Episodes</div>
-        <div style={{ fontSize: 13, lineHeight: 1.5, opacity: 0.8 }}>A high school chemistry teacher diagnosed with terminal lung cancer turns to manufacturing methamphetamine to secure his family's future.</div>
-      </refractive.div>
-    ),
-  },
-  {
-    id: 'dm-close',
-    label: 'Modal Close Button',
-    element: 'button',
-    description: 'Discover modal close button (lip)',
-    render: (props) => (
-      <refractive.button style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', cursor: 'pointer' }} refraction={props}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </refractive.button>
-    ),
-  },
-  {
     id: 'cta-card',
     label: 'CTA Card',
     element: 'div',
@@ -201,17 +177,6 @@ const SPECIMENS = [
         <span style={{ fontSize: 20, fontWeight: 700 }}>35</span>
         <span style={{ fontSize: 11, opacity: 0.5, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Seasons</span>
       </refractive.div>
-    ),
-  },
-  {
-    id: 'watchlist-btn',
-    label: 'Watchlist Button',
-    element: 'button',
-    description: 'Card bookmark toggle (32x32 circle, lip)',
-    render: (props) => (
-      <refractive.button style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.25)', border: 'none', color: '#fff', cursor: 'pointer' }} refraction={props}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 2h14a1 1 0 011 1v19.143a.5.5 0 01-.766.424L12 18.03l-7.234 4.536A.5.5 0 014 22.143V3a1 1 0 011-1z"/></svg>
-      </refractive.button>
     ),
   },
   {
@@ -255,40 +220,6 @@ const SPECIMENS = [
     render: (props) => (
       <refractive.button style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 28px', minWidth: 144, background: '#0A84FF', color: '#fff', border: 'none', fontSize: 15, fontWeight: 600, cursor: 'pointer' }} refraction={props}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> Play
-      </refractive.button>
-    ),
-  },
-  {
-    id: 'filter-btn',
-    label: 'Filter Button',
-    element: 'button',
-    description: 'Search type filter pill (All/TV Shows/Movies)',
-    render: (props) => (
-      <refractive.button style={{ display: 'inline-flex', alignItems: 'center', padding: '7px 16px', border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }} refraction={props}>
-        TV Shows
-      </refractive.button>
-    ),
-  },
-  {
-    id: 'clear-btn',
-    label: 'Clear Button',
-    element: 'button',
-    description: 'Search input clear X button (24x24 circle, lip)',
-    render: (props) => (
-      <refractive.button style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.12)', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer' }} refraction={props}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </refractive.button>
-    ),
-  },
-  {
-    id: 'dm-action',
-    label: 'Modal Action',
-    element: 'button',
-    description: 'Detail modal action pill (In Library/Watchlist)',
-    render: (props) => (
-      <refractive.button style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 20px', border: '1.5px solid rgba(255,255,255,0.12)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontSize: 14, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }} refraction={props}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 2h14a1 1 0 011 1v19.143a.5.5 0 01-.766.424L12 18.03l-7.234 4.536A.5.5 0 014 22.143V3a1 1 0 011-1z"/></svg>
-        <span>Add to Watchlist</span>
       </refractive.button>
     ),
   },

@@ -56,10 +56,6 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('playback:subtitles-ready', handler)
   },
 
-  // History
-  listHistory: (limit) => ipcRenderer.invoke('history:list', limit),
-  getHistoryStats: () => ipcRenderer.invoke('history:stats'),
-
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSyncFolder: (folder) => ipcRenderer.invoke('settings:setSyncFolder', folder),
@@ -72,14 +68,6 @@ contextBridge.exposeInMainWorld('api', {
   // Dialogs
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
-
-  // Discover
-  searchShows: (query, searchType) => ipcRenderer.invoke('discover:search', query, searchType),
-  getShowDetails: (tvmazeId) => ipcRenderer.invoke('discover:showDetails', tvmazeId),
-  getMovieDetails: (imdbId) => ipcRenderer.invoke('discover:movieDetails', imdbId),
-  addToWatchlist: (show) => ipcRenderer.invoke('discover:addToWatchlist', show),
-  removeFromWatchlist: (identifier) => ipcRenderer.invoke('discover:removeFromWatchlist', identifier),
-  listWatchlist: () => ipcRenderer.invoke('discover:listWatchlist'),
 
   // Updater
   checkForUpdate: () => ipcRenderer.invoke('updater:check'),
