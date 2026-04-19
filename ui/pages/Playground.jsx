@@ -18,7 +18,7 @@ const SPECIMENS = [
     description: 'Top navigation bar (full-width, sharp corners)',
     render: (props) => (
       <refractive.nav style={{ width: '100%', height: 48, display: 'flex', alignItems: 'center', padding: '0 16px', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 14, fontWeight: 600 }} refraction={props}>
-        Caramba &nbsp;&middot;&nbsp; Library &nbsp;&middot;&nbsp; Movies
+        Caramba &nbsp;&middot;&nbsp; Shows &nbsp;&middot;&nbsp; Movies
       </refractive.nav>
     ),
   },

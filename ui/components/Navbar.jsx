@@ -17,7 +17,7 @@ export default function Navbar({ active, actions, rightContent }) {
   const { hasSettings, hasPlayground } = useCapabilities()
 
   const links = [
-    { label: 'Library', path: '/' },
+    { label: 'Shows', path: '/' },
     { label: 'Movies', path: '/movies' },
     ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
     ...(import.meta.env.DEV && hasPlayground ? [{ label: 'Playground', path: '/playground' }] : []),

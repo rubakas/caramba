@@ -19,7 +19,7 @@ const FilmIcon = () => (
   </svg>
 )
 
-export default function Library() {
+export default function Shows() {
   const navigate = useNavigate()
   const api = useApi()
   const { canAdd, hasNowPlaying } = useCapabilities()
@@ -56,19 +56,19 @@ export default function Library() {
 
   if (loading) return (
     <>
-      <Navbar active="Library" rightContent={addButton} />
+      <Navbar active="Shows" rightContent={addButton} />
       <div style={{ padding: '120px 48px', textAlign: 'center', color: 'var(--text-tertiary)' }}>Loading...</div>
     </>
   )
 
   return (
     <>
-      <Navbar active="Library" rightContent={addButton} />
+      <Navbar active="Shows" rightContent={addButton} />
       {hasNowPlaying && <NowPlaying />}
       {seriesList.length === 0 ? (
         <main className="empty-hero">
           <div className="empty-icon"><FilmIcon /></div>
-          <h2>Your Library is Empty</h2>
+          <h2>No shows yet</h2>
           {canAdd ? (
             <>
               <p>Add a series by pointing to a media folder on your Mac.</p>
@@ -80,7 +80,7 @@ export default function Library() {
         </main>
       ) : (
         <main className="library">
-          <h2 className="section-title">My Library</h2>
+          <h2 className="section-title">My Shows</h2>
           <div className="series-grid">
             {seriesList.map((s, idx) => (
               <PosterCard
