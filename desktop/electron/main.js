@@ -14,6 +14,7 @@ const settingsIpc = require('./ipc/settings')
 const dialogsIpc = require('./ipc/dialogs')
 const updaterIpc = require('./ipc/updater')
 const downloadsIpc = require('./ipc/downloads')
+const discoveryIpc = require('./ipc/discovery')
 
 // Subtitle cache: stores the RAW VTT with original timestamps.
 // The subtitle:// protocol handler shifts timestamps by the current seek offset.
@@ -121,6 +122,7 @@ function createWindow() {
   dialogsIpc.register(mainWindow)
   updaterIpc.register(mainWindow)
   downloadsIpc.register()
+  discoveryIpc.register()
 
   // Dev-only: save glass config to src/config/glass.json for playground persistence
   if (!app.isPackaged) {

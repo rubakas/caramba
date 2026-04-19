@@ -49,7 +49,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
+
+    <!-- mDNS / Bonjour LAN discovery of the Caramba API server -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- Required for installing APK updates on Android 8+ -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     

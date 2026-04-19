@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld('api', {
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
 
+  // Server discovery
+  discoverServers: () => ipcRenderer.invoke('discovery:scan'),
+
   // Updater
   checkForUpdate: () => ipcRenderer.invoke('updater:check'),
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),

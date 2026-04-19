@@ -1,7 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Navbar from '../components/Navbar'
+import ServerDiscovery from '../components/ServerDiscovery'
+import { defaultDiscover } from '../lib/discovery'
 
-export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode, onApiUrlChange, apiUrl, hideNavbar = false }) {
+export default function Settings({ apiMode, apiConnected, onApiModeChange, isWebMode, onApiUrlChange, apiUrl, hideNavbar = false, discover }) {
+  const baseDiscover = useMemo(() => discover || defaultDiscover(), [discover])
+  const currentSavedUrl = apiUrl || apiMode?.server_url || null
+  const discoverFn = useCallback(
+    () => baseDiscover({ currentUrl: currentSavedUrl }),
+    [baseDiscover, currentSavedUrl]
+  )
   const [syncFolder, setSyncFolder] = useState('')
   const [pathInput, setPathInput] = useState('')
   const [status, setStatus] = useState(null)
@@ -184,10 +192,13 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
     }
   }
 
-  const handleServerUrlSubmit = async (e) => {
-    e.preventDefault()
+  const handleServerUrlSubmit = async (eventOrUrl) => {
+    if (eventOrUrl && typeof eventOrUrl.preventDefault === 'function') {
+      eventOrUrl.preventDefault()
+    }
     if (!window.api?.setApiMode) return
-    const trimmed = serverUrlInput.trim()
+    const explicit = typeof eventOrUrl === 'string' ? eventOrUrl : null
+    const trimmed = (explicit ?? serverUrlInput).trim()
     if (trimmed === (apiMode?.server_url || '')) return
     setApiSaving(true)
     try {
@@ -306,12 +317,16 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
           <section className="settings-section">
             <h2 className="settings-section-title">Server Configuration</h2>
             <p className="settings-help">
-              Configure the Caramba server URL that this TV will connect to.
-              Use http://IP:3000 format for local network servers.
+              Caramba scans the local network for servers advertising themselves.
+              If none are found you can enter a URL by hand.
             </p>
 
-            <div className="settings-form">
-              <div className="field">
+            <ServerDiscovery
+              discover={discoverFn}
+              onSelect={(url) => onApiUrlChange?.(url)}
+              currentUrl={apiUrl || null}
+              connected={null}
+              manualFallback={
                 <form onSubmit={handleAndroidApiUrlSubmit} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <input
                     type="url"
@@ -332,18 +347,8 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
                     {androidApiSaving ? 'Saving...' : 'Save Server URL'}
                   </button>
                 </form>
-              </div>
-            </div>
-
-            <p className="settings-hint" style={{ marginTop: '16px' }}>
-              Example: http://192.168.1.100:3000 or http://nas.local:3000
-            </p>
-
-            {apiUrl && (
-              <p className="settings-hint" style={{ marginTop: '8px', color: 'var(--text-secondary)' }}>
-                Current: {apiUrl}
-              </p>
-            )}
+              }
+            />
           </section>
         )}
 
@@ -373,26 +378,29 @@ export default function Settings({ apiMode, apiConnected, onApiModeChange, isWeb
               </div>
 
               <div className="field">
-                <div className="api-mode-url-row">
-                  {apiMode?.enabled && (
-                    <span className={`api-mode-status ${apiConnected ? 'api-mode-status--connected' : 'api-mode-status--disconnected'}`}>
-                      <span className="api-mode-status-dot" />
-                      {apiConnected ? 'Connected' : 'Disconnected'}
-                    </span>
-                  )}
-                  <form onSubmit={handleServerUrlSubmit} style={{ flex: 1 }}>
-                    <input
-                      type="text"
-                      className="api-mode-url-input"
-                      value={serverUrlInput}
-                      onChange={e => setServerUrlInput(e.target.value)}
-                      onBlur={handleServerUrlSubmit}
-                      placeholder="http://192.168.1.100:3000"
-                      spellCheck={false}
-                      disabled={apiSaving}
-                    />
-                  </form>
-                </div>
+                <ServerDiscovery
+                  discover={discoverFn}
+                  currentUrl={apiMode?.server_url || null}
+                  connected={apiMode?.enabled ? apiConnected : null}
+                  onSelect={async (url) => {
+                    setServerUrlInput(url)
+                    await handleServerUrlSubmit(url)
+                  }}
+                  manualFallback={
+                    <form onSubmit={handleServerUrlSubmit} style={{ flex: 1 }}>
+                      <input
+                        type="text"
+                        className="api-mode-url-input"
+                        value={serverUrlInput}
+                        onChange={e => setServerUrlInput(e.target.value)}
+                        onBlur={handleServerUrlSubmit}
+                        placeholder="http://192.168.1.100:3000"
+                        spellCheck={false}
+                        disabled={apiSaving}
+                      />
+                    </form>
+                  }
+                />
               </div>
 
               {apiMode?.enabled && (

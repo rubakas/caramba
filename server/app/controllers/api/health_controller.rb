@@ -1,3 +1,5 @@
+require "socket"
+
 class Api::HealthController < Api::BaseController
   BOOT_TIME = Time.current
 
@@ -6,7 +8,8 @@ class Api::HealthController < Api::BaseController
     render json: {
       status: "ok",
       version: version,
-      booted_at: BOOT_TIME.iso8601
+      booted_at: BOOT_TIME.iso8601,
+      server_name: Socket.gethostname.sub(/\.local\.?\z/, "")
     }
   end
 

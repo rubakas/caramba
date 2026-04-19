@@ -174,7 +174,7 @@ export default function App() {
       }}>
         <h1 style={{ fontSize: '32px', marginBottom: '16px' }}>Welcome to Caramba</h1>
         <p style={{ fontSize: '18px', color: '#aaa', marginBottom: '32px' }}>
-          Please configure your server URL to get started.
+          Looking for a Caramba server on your network…
         </p>
         <Settings 
           isWebMode={false}
