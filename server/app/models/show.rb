@@ -1,4 +1,4 @@
-class Series < ApplicationRecord
+class Show < ApplicationRecord
   include Posterable
 
   has_many :episodes, dependent: :destroy

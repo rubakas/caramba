@@ -1,7 +1,7 @@
 class WatchHistory < ApplicationRecord
   belongs_to :episode
 
-  has_one :series, through: :episode
+  has_one :show, through: :episode
 
   def update_progress!(progress, duration)
     update!(

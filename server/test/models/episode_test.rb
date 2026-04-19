@@ -9,25 +9,25 @@ class EpisodeTest < ActiveSupport::TestCase
     assert_equal 1, ep.episode_number
   end
 
-  test "belongs to series" do
+  test "belongs to show" do
     ep = episodes(:bb_s01e01)
-    assert_equal series(:breaking_bad), ep.series
+    assert_equal shows(:breaking_bad), ep.show
   end
 
   test "validates code presence" do
-    ep = Episode.new(series: series(:breaking_bad), code: nil)
+    ep = Episode.new(show: shows(:breaking_bad), code: nil)
     assert_not ep.valid?
     assert_includes ep.errors[:code], "can't be blank"
   end
 
-  test "validates code uniqueness scoped to series" do
-    ep = Episode.new(series: series(:breaking_bad), code: "S01E01")
+  test "validates code uniqueness scoped to show" do
+    ep = Episode.new(show: shows(:breaking_bad), code: "S01E01")
     assert_not ep.valid?
     assert_includes ep.errors[:code], "has already been taken"
   end
 
-  test "same code allowed on different series" do
-    ep = Episode.new(series: series(:the_office), code: "S01E02", title: "Diversity Day")
+  test "same code allowed on different shows" do
+    ep = Episode.new(show: shows(:the_office), code: "S01E02", title: "Diversity Day")
     assert ep.valid?
   end
 
@@ -59,7 +59,7 @@ class EpisodeTest < ActiveSupport::TestCase
     assert_not_nil ep.last_watched_at
   end
 
-  test "next_episode returns next in series order" do
+  test "next_episode returns next in show order" do
     ep = episodes(:bb_s01e01)
     nxt = ep.next_episode
     assert_equal episodes(:bb_s01e02), nxt
@@ -77,7 +77,7 @@ class EpisodeTest < ActiveSupport::TestCase
   end
 
   test "scopes work" do
-    bb = series(:breaking_bad)
+    bb = shows(:breaking_bad)
     assert_equal 1, bb.episodes.watched.count
     assert_equal 2, bb.episodes.unwatched.count
     assert_equal [ 1, 1, 2 ], bb.episodes.ordered.pluck(:season_number, :episode_number).map(&:first)

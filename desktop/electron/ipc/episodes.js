@@ -13,8 +13,8 @@ function register() {
     const filePath = resolvePlaybackPath(episode.file_path, episodeId, null)
     if (!filePath) return { error: 'File not found: ' + (episode.file_path || '(no path)') }
 
-    // Mark all prior episodes as watched (implied when you skip ahead in a series)
-    db.episodes.markPriorWatched(episode.series_id, episode.season_number, episode.episode_number)
+    // Mark all prior episodes as watched (implied when you skip ahead in a show)
+    db.episodes.markPriorWatched(episode.show_id, episode.season_number, episode.episode_number)
 
     // Create watch history entry
     const wh = db.watchHistories.create({ episode_id: episodeId })
@@ -28,7 +28,7 @@ function register() {
     // Return the info the renderer needs to start the stream
     return {
       episode_id: episodeId,
-      series_id: episode.series_id,
+      show_id: episode.show_id,
       watch_history_id: wh.id,
       file_path: filePath,
       start_time: startTime,
@@ -39,11 +39,11 @@ function register() {
   ipcMain.handle('episodes:getNext', (_e, episodeId) => {
     const next = db.episodes.getNext(episodeId)
     if (!next) return null
-    // Return the series info too so the frontend can build the title
-    const s = db.series.findById(next.series_id)
+    // Return the show info too so the frontend can build the title
+    const s = db.shows.findById(next.show_id)
     return {
       episode: next,
-      seriesName: s?.name || '',
+      show_name: s?.name || '',
     }
   })
 

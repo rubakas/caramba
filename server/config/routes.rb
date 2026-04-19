@@ -4,7 +4,7 @@ Rails.application.routes.draw do
   namespace :api do
     get "health", to: "health#show"
 
-    resources :series, param: :slug do
+    resources :shows, param: :slug do
       member do
         get :full           # combined show page data
         get :episodes
@@ -52,6 +52,19 @@ Rails.application.routes.draw do
     # Media file streaming
     get "media/episodes/:id", to: "media#episode", as: :media_episode
     get "media/movies/:id", to: "media#movie", as: :media_movie
+
+    namespace :admin do
+      resources :folders, only: [ :index, :create, :update, :destroy ]
+      get "browse", to: "browse#index"
+      resources :pending_imports, only: [ :index ] do
+        member do
+          post :confirm
+          post :ignore
+          post :research
+        end
+      end
+      post "scan", to: "scans#create"
+    end
   end
 
   # SPA catch-all: serve React index.html for all non-API routes.

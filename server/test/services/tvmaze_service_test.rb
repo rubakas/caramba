@@ -108,15 +108,15 @@ class TvmazeServiceTest < ActiveSupport::TestCase
     assert_nil TvmazeService.show_details(999)
   end
 
-  test "fetch_for_series updates series and episodes" do
+  test "fetch_for_show updates show and episodes" do
     stub_request(:get, /api\.tvmaze\.com\/singlesearch/)
       .to_return(status: 200, body: @singlesearch_response, headers: { "Content-Type" => "application/json" })
 
-    bb = series(:breaking_bad)
+    bb = shows(:breaking_bad)
     # Clear existing metadata to verify it gets set
     bb.update_columns(tvmaze_id: nil, poster_url: nil, description: nil)
 
-    result = TvmazeService.fetch_for_series(bb)
+    result = TvmazeService.fetch_for_show(bb)
     assert result
 
     bb.reload
@@ -132,11 +132,11 @@ class TvmazeServiceTest < ActiveSupport::TestCase
     assert_equal 58, ep1.runtime
   end
 
-  test "fetch_for_series returns false on API failure" do
+  test "fetch_for_show returns false on API failure" do
     stub_request(:get, /api\.tvmaze\.com\/singlesearch/)
       .to_return(status: 404)
 
-    assert_not TvmazeService.fetch_for_series(series(:breaking_bad))
+    assert_not TvmazeService.fetch_for_show(shows(:breaking_bad))
   end
 
   test "handles rate limiting with retry" do

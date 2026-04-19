@@ -1,0 +1,16 @@
+# Fixtures bypass validation on insert, so paths don't need to exist on disk
+# at load time. Tests that exercise filesystem behaviour use Dir.mktmpdir.
+shows_home:
+  path: /tmp/caramba-fixtures-shows
+  kind: shows
+  enabled: true
+
+movies_home:
+  path: /tmp/caramba-fixtures-movies
+  kind: movies
+  enabled: true
+
+disabled_folder:
+  path: /tmp/caramba-fixtures-disabled
+  kind: shows
+  enabled: false

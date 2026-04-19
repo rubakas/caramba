@@ -1,4 +1,4 @@
-// Scans a series' media directory for episode files.
+// Scans a show's media directory for episode files.
 // Supports dot-separated (scene), space+hyphen (Plex), and flat structures.
 // Also handles "release folder" nesting (one level deep).
 
@@ -8,7 +8,7 @@ const db = require('../db')
 
 const EPISODE_CODE_RE = /S(\d{1,3})E(\d{1,3})/i
 
-// Derive a clean series name from a folder path.
+// Derive a clean show name from a folder path.
 function nameFromPath(folderPath) {
   let folder = path.basename(folderPath)
   let clean = folder
@@ -140,9 +140,9 @@ function parseEpisode(filename) {
   return { season, episode, title: title || code, code }
 }
 
-// Scan a series folder and upsert episodes
-function scan(seriesId) {
-  const s = db.series.findById(seriesId)
+// Scan a show folder and upsert episodes
+function scan(showId) {
+  const s = db.shows.findById(showId)
   if (!s) return 0
 
   if (!fs.existsSync(s.media_path)) {
@@ -158,7 +158,7 @@ function scan(seriesId) {
     if (!ep) continue
 
     db.episodes.upsert({
-      series_id: seriesId,
+      show_id: showId,
       code: ep.code,
       title: ep.title,
       season_number: ep.season,
@@ -172,14 +172,14 @@ function scan(seriesId) {
   return count
 }
 
-// Add a series from a folder path: create/find series, scan, fetch metadata
+// Add a show from a folder path: create/find show, scan, fetch metadata
 async function addFromPath(folderPath, fetchMetadata) {
   folderPath = folderPath.trim()
   const name = nameFromPath(folderPath)
 
-  let s = db.series.findByMediaPath(folderPath)
+  let s = db.shows.findByMediaPath(folderPath)
   if (!s) {
-    s = db.series.create({ name, media_path: folderPath })
+    s = db.shows.create({ name, media_path: folderPath })
   }
 
   scan(s.id)
@@ -188,7 +188,7 @@ async function addFromPath(folderPath, fetchMetadata) {
     await fetchMetadata(s)
   }
 
-  return db.series.findById(s.id)
+  return db.shows.findById(s.id)
 }
 
 module.exports = { scan, addFromPath, nameFromPath, parseEpisode, collectMkvFiles }

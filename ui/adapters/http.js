@@ -58,15 +58,15 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   const noopUnsub = () => noop
 
   return {
-    // Series
-    listSeries: () => get('/api/series'),
-    getContinue: (slug) => get(`/api/series/${slug}/continue`),
-    getSeriesShow: (slug) => get(`/api/series/${slug}/full`),
-    addSeries: noopAsync,
-    scanSeries: noopAsync,
-    refreshSeriesMetadata: noopAsync,
-    destroySeries: noopAsync,
-    relocateSeries: noopAsync,
+    // Shows
+    listShows: () => get('/api/shows'),
+    getContinue: (slug) => get(`/api/shows/${slug}/continue`),
+    getShow: (slug) => get(`/api/shows/${slug}/full`),
+    addShow: noopAsync,
+    scanShow: noopAsync,
+    refreshShowMetadata: noopAsync,
+    destroyShow: noopAsync,
+    relocateShow: noopAsync,
 
     // Episodes
     toggleEpisode: (id) => post(`/api/episodes/${id}/toggle`),
@@ -127,7 +127,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     getPlaybackPreferences: (opts) => {
       const qs = new URLSearchParams()
       if (opts?.type) qs.set('type', opts.type)
-      if (opts?.seriesId) qs.set('series_id', opts.seriesId)
+      if (opts?.showId) qs.set('show_id', opts.showId)
       if (opts?.movieId) qs.set('movie_id', opts.movieId)
       return get(`/api/playback/preferences?${qs}`)
     },
@@ -220,6 +220,26 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
       }
       return { ok: false, error: 'Updates not available' }
     },
+
+    // Admin
+    listMediaFolders: () => get('/api/admin/folders'),
+    addMediaFolder: ({ path, kind }) => post('/api/admin/folders', { path, kind }),
+    updateMediaFolder: (id, attrs) => request(`/api/admin/folders/${id}`, { method: 'PATCH', body: attrs }),
+    removeMediaFolder: (id) => request(`/api/admin/folders/${id}`, { method: 'DELETE' }),
+    browseServerPath: (path) => {
+      const qs = new URLSearchParams()
+      if (path) qs.set('path', path)
+      return get(`/api/admin/browse${qs.toString() ? `?${qs}` : ''}`)
+    },
+    listPendingImports: (status) => {
+      const qs = new URLSearchParams()
+      if (status) qs.set('status', status)
+      return get(`/api/admin/pending_imports${qs.toString() ? `?${qs}` : ''}`)
+    },
+    confirmPendingImport: (id, externalId) => post(`/api/admin/pending_imports/${id}/confirm`, { externalId }),
+    ignorePendingImport: (id) => post(`/api/admin/pending_imports/${id}/ignore`),
+    researchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/research`),
+    triggerAdminScan: () => post('/api/admin/scan'),
   }
 }
 
@@ -232,4 +252,5 @@ export const httpCapabilities = {
   canOpenExternal: false,
   hasNowPlaying: false,
   hasSettings: false,
+  canAdmin: true,
 }

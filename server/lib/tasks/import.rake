@@ -20,7 +20,7 @@ namespace :db do
     src.results_as_hash = true
 
     # Order matters: foreign keys
-    tables = %w[series episodes movies watch_histories playback_preferences watchlist downloads]
+    tables = %w[shows episodes movies watch_histories playback_preferences watchlist downloads]
 
     ActiveRecord::Base.transaction do
       # Disable foreign key checks during import

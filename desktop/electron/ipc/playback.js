@@ -326,7 +326,7 @@ function register() {
     if (isTranscoding) {
       if (currentEpisodeId) {
         const ep = db.episodes.findById(currentEpisodeId)
-        const s = ep ? db.series.findById(ep.series_id) : null
+        const s = ep ? db.shows.findById(ep.show_id) : null
         return {
           playing: true,
           source: 'inapp',
@@ -334,8 +334,8 @@ function register() {
           episode_id: currentEpisodeId,
           episode_title: ep?.title,
           episode_code: ep?.code,
-          series_name: s?.name,
-          series_slug: s?.slug,
+          show_name: s?.name,
+          show_slug: s?.slug,
         }
       }
 
@@ -358,7 +358,7 @@ function register() {
     if (vlcPollTimer) {
       if (vlcEpisodeId) {
         const ep = db.episodes.findById(vlcEpisodeId)
-        const s = ep ? db.series.findById(ep.series_id) : null
+        const s = ep ? db.shows.findById(ep.show_id) : null
         return {
           playing: true,
           source: 'vlc',
@@ -366,8 +366,8 @@ function register() {
           episode_id: vlcEpisodeId,
           episode_title: ep?.title,
           episode_code: ep?.code,
-          series_name: s?.name,
-          series_slug: s?.slug,
+          show_name: s?.name,
+          show_slug: s?.slug,
           time: vlcLastTime,
           duration: vlcLastLength,
         }
@@ -393,10 +393,10 @@ function register() {
     return { playing: false }
   })
 
-  // Save playback preferences (audio/subtitle language) per series or movie
-  ipcMain.handle('playback:savePreferences', (_e, { type, seriesId, movieId, audioLanguage, subtitleLanguage, subtitleOff, subtitleSize, subtitleStyle }) => {
-    if (type === 'episode' && seriesId) {
-      db.playbackPreferences.saveSeries(seriesId, {
+  // Save playback preferences (audio/subtitle language) per show or movie
+  ipcMain.handle('playback:savePreferences', (_e, { type, showId, movieId, audioLanguage, subtitleLanguage, subtitleOff, subtitleSize, subtitleStyle }) => {
+    if (type === 'episode' && showId) {
+      db.playbackPreferences.saveShow(showId, {
         audio_language: audioLanguage,
         subtitle_language: subtitleLanguage,
         subtitle_off: subtitleOff,
@@ -415,11 +415,11 @@ function register() {
     return true
   })
 
-  // Load playback preferences for a series or movie
-  ipcMain.handle('playback:getPreferences', (_e, { type, seriesId, movieId }) => {
+  // Load playback preferences for a show or movie
+  ipcMain.handle('playback:getPreferences', (_e, { type, showId, movieId }) => {
     let pref = null
-    if (type === 'episode' && seriesId) {
-      pref = db.playbackPreferences.forSeries(seriesId)
+    if (type === 'episode' && showId) {
+      pref = db.playbackPreferences.forShow(showId)
     } else if (type === 'movie' && movieId) {
       pref = db.playbackPreferences.forMovie(movieId)
     }
@@ -470,7 +470,7 @@ function register() {
       const episode = db.episodes.findById(vlcEpisodeId)
       if (episode) {
         // Mark prior episodes as watched
-        db.episodes.markPriorWatched(episode.series_id, episode.season_number, episode.episode_number)
+        db.episodes.markPriorWatched(episode.show_id, episode.season_number, episode.episode_number)
         db.episodes.markWatched(vlcEpisodeId)
         const wh = db.watchHistories.create({ episode_id: vlcEpisodeId })
         vlcWatchHistoryId = wh.id

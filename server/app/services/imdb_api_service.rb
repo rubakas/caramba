@@ -3,9 +3,10 @@
 # Ported from desktop/electron/services/movie-metadata.js + ipc/discover.js
 #
 # Public API (all class methods):
-#   search_titles(query)       — discover search, returns array of mapped movie hashes
-#   title_details(imdb_id)     — discover detail, returns movie detail hash
-#   fetch_for_movie(movie)     — updates Movie record from IMDB data, returns true/false
+#   search_titles(query)           — discover search, returns array of mapped movie hashes
+#   title_details(imdb_id)         — discover detail, returns movie detail hash
+#   fetch_for_movie(movie)         — updates Movie record from IMDB data (searches by title)
+#   fetch_by_imdb_id(movie, id)    — updates Movie record from IMDB data (by imdb id)
 
 require "net/http"
 require "json"
@@ -47,7 +48,7 @@ class ImdbApiService
       }
     end
 
-    # Fetch metadata for a Movie record and update it in DB.
+    # Fetch metadata for a Movie record by searching its title.
     # Returns true on success, false otherwise.
     def fetch_for_movie(movie)
       result = search_title(movie.title)
@@ -55,7 +56,26 @@ class ImdbApiService
 
       data = get_title_details(result["id"])
       return false unless data
+      apply_movie_data(movie, data)
+    rescue => e
+      Rails.logger.warn("ImdbApiService: fetch_for_movie failed for '#{movie.title}' — #{e.message}")
+      false
+    end
 
+    # Same as fetch_for_movie but by explicit imdb_id — used by the admin
+    # match-confirmation flow where the user has already picked a candidate.
+    def fetch_by_imdb_id(movie, imdb_id)
+      data = get_title_details(imdb_id)
+      return false unless data
+      apply_movie_data(movie, data)
+    rescue => e
+      Rails.logger.warn("ImdbApiService: fetch_by_imdb_id failed for imdb_id=#{imdb_id} — #{e.message}")
+      false
+    end
+
+    private
+
+    def apply_movie_data(movie, data)
       attrs = {}
       attrs[:poster_url] = data.dig("primaryImage", "url") if data.dig("primaryImage", "url").present?
       attrs[:description] = data["plot"] if data["plot"].present?
@@ -74,12 +94,8 @@ class ImdbApiService
 
       Rails.logger.info("ImdbApiService: updated '#{movie.title}' (IMDb: #{data["id"]})")
       true
-    rescue => e
-      Rails.logger.warn("ImdbApiService: fetch_for_movie failed for '#{movie.title}' — #{e.message}")
-      false
     end
 
-    private
 
     # Map an imdbapi title to the shape expected by React UI (matches discover.js mapMovie)
     def map_movie(title)

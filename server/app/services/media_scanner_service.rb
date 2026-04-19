@@ -1,4 +1,4 @@
-# Scans a series' media directory for episode files (.mkv).
+# Scans a show's media directory for episode files (.mkv).
 # Supports season subdirs, flat structures, and one-level-deep release folders.
 # Ported from desktop/electron/services/media-scanner.js
 
@@ -9,7 +9,7 @@ class MediaScannerService
   RELEASE_MARKERS_RE = /\.(?:\d{3,4}p|WEB[-.]?DL|WEBRip|BluRay|BDRip|BDRemux|HDTV|DVDRip|AMZN|REPACK).*$/i
 
   class << self
-    # Derive a clean series name from a folder path
+    # Derive a clean show name from a folder path
     def name_from_path(folder_path)
       folder = File.basename(folder_path)
       clean = folder
@@ -34,21 +34,21 @@ class MediaScannerService
       result.presence || folder
     end
 
-    # Scan a series and upsert episodes. Returns count of scanned episodes.
-    def scan(series)
-      unless series.media_path.present? && Dir.exist?(series.media_path)
-        Rails.logger.warn("MediaScanner: media root not found: #{series.media_path}")
+    # Scan a show and upsert episodes. Returns count of scanned episodes.
+    def scan(show)
+      unless show.media_path.present? && Dir.exist?(show.media_path)
+        Rails.logger.warn("MediaScanner: media root not found: #{show.media_path}")
         return 0
       end
 
-      mkv_files = collect_mkv_files(series.media_path)
+      mkv_files = collect_mkv_files(show.media_path)
       count = 0
 
       mkv_files.each do |full_path, filename|
         ep = parse_episode(filename)
         next unless ep
 
-        episode = Episode.find_or_initialize_by(series_id: series.id, code: ep[:code])
+        episode = Episode.find_or_initialize_by(show_id: show.id, code: ep[:code])
         episode.assign_attributes(
           title: ep[:title],
           season_number: ep[:season],
@@ -59,7 +59,7 @@ class MediaScannerService
         count += 1
       end
 
-      Rails.logger.info("MediaScanner: scanned #{count} episodes for '#{series.name}'")
+      Rails.logger.info("MediaScanner: scanned #{count} episodes for '#{show.name}'")
       count
     end
 

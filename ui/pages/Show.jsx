@@ -15,14 +15,14 @@ const PlaySvg = ({ size = 20 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
 )
 
-export default function SeriesShow() {
+export default function Show() {
   const { slug } = useParams()
   const navigate = useNavigate()
   const api = useApi()
   const { canPlay, canManage, canDownload, hasNowPlaying } = useCapabilities()
   const { openPlayer, launching } = usePlayer()
   const { showToast } = useToast()
-  const [series, setSeries] = useState(null)
+  const [show, setShow] = useState(null)
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
   const [continueCta, setContinueCta] = useState({ mode: 'empty', episode: null })
@@ -30,7 +30,7 @@ export default function SeriesShow() {
   const [loading, setLoading] = useState(true)
   const [vlcAvailable, setVlcAvailable] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState({}) // episodeId -> progress (0-1)
-  
+
   // Ref for auto-focusing primary CTA on Android TV
   const primaryCtaRef = useRef(null)
   const isTV = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true
@@ -38,11 +38,11 @@ export default function SeriesShow() {
   const loadData = useCallback(async () => {
     try {
       const [data, hasVlc] = await Promise.all([
-        api.getSeriesShow(slug),
+        api.getShow(slug),
         api.checkVlc(),
       ])
       if (!data) { navigate('/'); return }
-      setSeries(data.series)
+      setShow(data.show)
       setEpisodes(data.episodes)
       setSeasons(data.seasons)
       setContinueCta(data.continue || { mode: 'empty', episode: null })
@@ -58,7 +58,7 @@ export default function SeriesShow() {
         return lastWatched?.season_number ?? data.seasons[0] ?? 1
       })
     } catch (err) {
-      console.error('Failed to load series:', err)
+      console.error('Failed to load show:', err)
     } finally {
       setLoading(false)
     }
@@ -96,7 +96,7 @@ export default function SeriesShow() {
 
   // Auto-focus primary CTA button on Android TV after data loads
   useEffect(() => {
-    if (isTV && !loading && series && primaryCtaRef.current) {
+    if (isTV && !loading && show && primaryCtaRef.current) {
       // Small delay to ensure DOM is ready
       const timer = setTimeout(() => {
         // Focus without scrolling, then scroll to top so hero stays visible
@@ -105,7 +105,7 @@ export default function SeriesShow() {
       }, 100)
       return () => clearTimeout(timer)
     }
-  }, [isTV, loading, series])
+  }, [isTV, loading, show])
 
   const handlePlay = async (episodeId) => {
     const result = await api.playEpisode(episodeId)
@@ -116,10 +116,10 @@ export default function SeriesShow() {
     await openPlayer({
       type: 'episode',
       episodeId: { id: result.episode_id, whId: result.watch_history_id },
-      seriesId: result.series_id,
+      showId: result.show_id,
       filePath: result.file_path,
       startTime: result.start_time,
-      title: series?.name || '',
+      title: show?.name || '',
       subtitle: episodes.find(e => e.id === episodeId)?.code + ' — ' + (episodes.find(e => e.id === episodeId)?.title || ''),
     })
     loadData()
@@ -167,10 +167,10 @@ export default function SeriesShow() {
   }
 
   const handleDownloadSeason = async (seasonNumber) => {
-    if (!series) return
+    if (!show) return
     showToast(`Downloading Season ${seasonNumber}...`, { type: 'info', duration: 3000 })
-    // Pass seriesSlug for hybrid mode where server IDs differ from local
-    const result = await api.downloadSeason({ seriesId: series.id, seriesSlug: series.slug, seasonNumber })
+    // Pass showSlug for hybrid mode where server IDs differ from local
+    const result = await api.downloadSeason({ showId: show.id, showSlug: show.slug, seasonNumber })
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else if (result?.results) {
@@ -186,37 +186,37 @@ export default function SeriesShow() {
   }
 
   const handleDeleteSeasonDownloads = async (seasonNumber) => {
-    if (!series) return
-    // Pass seriesSlug for hybrid mode where server IDs differ from local
-    await api.deleteDownloadSeason({ seriesId: series.id, seriesSlug: series.slug, seasonNumber })
+    if (!show) return
+    // Pass showSlug for hybrid mode where server IDs differ from local
+    await api.deleteDownloadSeason({ showId: show.id, showSlug: show.slug, seasonNumber })
     showToast(`Season ${seasonNumber} downloads deleted`, { type: 'info', duration: 2000 })
     loadData()
   }
 
   const handleScan = async () => {
-    await api.scanSeries(slug)
+    await api.scanShow(slug)
     loadData()
   }
 
   const handleRefresh = async () => {
-    await api.refreshSeriesMetadata(slug)
+    await api.refreshShowMetadata(slug)
     loadData()
   }
 
   const handleRemove = async () => {
-    if (!confirm(`Remove '${series.name}' and all its watch history?`)) return
-    await api.destroySeries(slug)
+    if (!confirm(`Remove '${show.name}' and all its watch history?`)) return
+    await api.destroyShow(slug)
     navigate('/')
   }
 
   const handleRelocate = async () => {
     const newPath = await api.selectFolder()
     if (!newPath) return
-    const result = await api.relocateSeries(slug, newPath)
+    const result = await api.relocateShow(slug, newPath)
     if (result?.error) {
       showToast(result.error, { type: 'error' })
     } else {
-      showToast('Series relocated successfully', { type: 'success' })
+      showToast('Show relocated successfully', { type: 'success' })
       loadData()
     }
   }
@@ -228,15 +228,15 @@ export default function SeriesShow() {
     </>
   )
 
-  if (!series) return null
+  if (!show) return null
 
-  const hasMeta = series.poster_url || series.description
-  const genres = genresList(series.genres)
-  const year = premiereYear(series.premiered)
-  const totalEps = series.total_episodes || 0
-  const watchedCount = series.watched_episodes || 0
+  const hasMeta = show.poster_url || show.description
+  const genres = genresList(show.genres)
+  const year = premiereYear(show.premiered)
+  const totalEps = show.total_episodes || 0
+  const watchedCount = show.watched_episodes || 0
   const completePct = totalEps > 0 ? Math.round((watchedCount / totalEps) * 100) : 0
-  const totalHours = series.total_watch_time > 0 ? (series.total_watch_time / 3600).toFixed(1) : null
+  const totalHours = show.total_watch_time > 0 ? (show.total_watch_time / 3600).toFixed(1) : null
 
   const ctaCardGlass = useGlassConfig('cta-card')
   const statChipGlass = useGlassConfig('stat-chip')
@@ -280,28 +280,28 @@ export default function SeriesShow() {
       {hasMeta && (
         <header
           className="show-hero"
-          style={series.poster_url ? { '--poster': `url(${series.poster_url})` } : undefined}
+          style={show.poster_url ? { '--poster': `url(${show.poster_url})` } : undefined}
         >
           <div className="show-hero-bg" />
           <div className="show-hero-content">
-            {series.poster_url && (
+            {show.poster_url && (
               <div className="show-poster">
-                <img src={series.poster_url} alt={series.name} />
+                <img src={show.poster_url} alt={show.name} />
               </div>
             )}
             <div className="show-info">
-              <h1 className="show-title">{series.name}</h1>
+              <h1 className="show-title">{show.name}</h1>
               <div className="show-meta-row">
                 {year && <span>{year}</span>}
-                {series.status && (
-                  <span className={`show-status show-status--${statusClass(series.status)}`}>
-                    {series.status}
+                {show.status && (
+                  <span className={`show-status show-status--${statusClass(show.status)}`}>
+                    {show.status}
                   </span>
                 )}
-                {series.rating && <span className="show-rating">{'\u2605'} {series.rating}</span>}
-                {series.imdb_id && (
+                {show.rating && <span className="show-rating">{'\u2605'} {show.rating}</span>}
+                {show.imdb_id && (
                   <a
-                    href={`https://www.imdb.com/title/${series.imdb_id}/`}
+                    href={`https://www.imdb.com/title/${show.imdb_id}/`}
                     target="_blank"
                     rel="noreferrer"
                     className="show-imdb"
@@ -314,8 +314,8 @@ export default function SeriesShow() {
               {genres.length > 0 && (
                 <div className="show-genres">{genres.join('  \u00B7  ')}</div>
               )}
-              {series.description && (
-                <p className="show-description">{series.description}</p>
+              {show.description && (
+                <p className="show-description">{show.description}</p>
               )}
             </div>
           </div>

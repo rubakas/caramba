@@ -1,8 +1,8 @@
 require "test_helper"
 
-class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
-  test "index returns all series with counts" do
-    get "/api/series"
+class Api::ShowsControllerTest < ActionDispatch::IntegrationTest
+  test "index returns all shows with counts" do
+    get "/api/shows"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -18,8 +18,8 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert bb.key?("has_continue")
   end
 
-  test "show returns series by slug" do
-    get "/api/series/breaking-bad"
+  test "show returns show by slug" do
+    get "/api/shows/breaking-bad"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -28,52 +28,52 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "poster_url points at the Rails proxy when an image is attached" do
-    series = series(:breaking_bad)
-    series.poster.attach(
+    show = shows(:breaking_bad)
+    show.poster.attach(
       io: StringIO.new("\xFF\xD8\xFFbytes".b),
       filename: "bb.jpg",
       content_type: "image/jpeg"
     )
 
-    get "/api/series/breaking-bad"
+    get "/api/shows/breaking-bad"
     data = JSON.parse(response.body)
 
     assert_match(%r{/rails/active_storage/blobs/proxy/.+/bb\.jpg\z}, data["poster_url"])
   end
 
   test "poster_url falls back to the external URL when no image is attached" do
-    series(:breaking_bad).poster.detach
+    shows(:breaking_bad).poster.detach
 
-    get "/api/series/breaking-bad"
+    get "/api/shows/breaking-bad"
     data = JSON.parse(response.body)
 
     assert_equal "https://example.com/bb.jpg", data["poster_url"]
   end
 
   test "show returns 404 for unknown slug" do
-    get "/api/series/nonexistent"
+    get "/api/shows/nonexistent"
     assert_response :not_found
   end
 
   test "full returns combined data" do
-    get "/api/series/breaking-bad/full"
+    get "/api/shows/breaking-bad/full"
     assert_response :success
 
     data = JSON.parse(response.body)
-    assert data.key?("series")
+    assert data.key?("show")
     assert data.key?("episodes")
     assert data.key?("seasons")
     assert data.key?("continue")
     assert data["continue"].key?("mode")
     assert data["continue"].key?("episode")
 
-    assert_equal "Breaking Bad", data["series"]["name"]
+    assert_equal "Breaking Bad", data["show"]["name"]
     assert_kind_of Array, data["episodes"]
     assert_kind_of Array, data["seasons"]
   end
 
-  test "episodes returns episodes for series" do
-    get "/api/series/breaking-bad/episodes"
+  test "episodes returns episodes for show" do
+    get "/api/shows/breaking-bad/episodes"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -82,7 +82,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "seasons returns season numbers" do
-    get "/api/series/breaking-bad/seasons"
+    get "/api/shows/breaking-bad/seasons"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -93,7 +93,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
   test "continue returns resume when last played is unfinished" do
     # bb_s01e02 was last_played 1 day ago (more recent than bb_s01e01 at 2 days)
     # and has progress 1200/2880 < 0.9 → unfinished
-    get "/api/series/breaking-bad/continue"
+    get "/api/shows/breaking-bad/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -106,7 +106,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     ep = episodes(:bb_s01e02)
     ep.update!(watched: 1, progress_seconds: 2880, duration_seconds: 2880, last_watched_at: Time.current)
 
-    get "/api/series/breaking-bad/continue"
+    get "/api/shows/breaking-bad/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -121,7 +121,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     ep = episodes(:bb_s02e01)
     ep.update!(watched: 1, progress_seconds: 3000, duration_seconds: 3000, last_watched_at: Time.current)
 
-    get "/api/series/breaking-bad/continue"
+    get "/api/shows/breaking-bad/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -131,7 +131,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "continue returns start when nothing has been played or watched" do
-    get "/api/series/the-office/continue"
+    get "/api/shows/the-office/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -139,8 +139,8 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "S01E01", data["episode"]["code"]
   end
 
-  test "continue returns empty for a series with no episodes" do
-    get "/api/series/new-show/continue"
+  test "continue returns empty for a show with no episodes" do
+    get "/api/shows/new-show/continue"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -163,15 +163,15 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
       post "/api/playback/report_progress", params: { episode_id: ep.id, time: 3, duration: 2880 }
       assert_response :success
 
-      get "/api/series/breaking-bad/continue"
+      get "/api/shows/breaking-bad/continue"
       data = JSON.parse(response.body)
       assert_equal "resume", data["mode"]
       assert_equal "S02E01", data["episode"]["code"]
     end
   end
 
-  test "index marks has_continue for a started series and not for an untouched one" do
-    get "/api/series"
+  test "index marks has_continue for a started show and not for an untouched one" do
+    get "/api/shows"
     assert_response :success
     data = JSON.parse(response.body)
 
@@ -182,7 +182,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     assert_equal false, office["has_continue"] # nothing watched → start mode
   end
 
-  test "create with folder_path creates series and scans" do
+  test "create with folder_path creates show and scans" do
     Dir.mktmpdir do |dir|
       season_dir = File.join(dir, "Season 1")
       FileUtils.mkdir_p(season_dir)
@@ -191,7 +191,7 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
       stub_request(:get, /api\.tvmaze\.com\/singlesearch/)
         .to_return(status: 404)
 
-      post "/api/series", params: { folder_path: dir }
+      post "/api/shows", params: { folder_path: dir }
       assert_response :created
 
       data = JSON.parse(response.body)
@@ -201,14 +201,14 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "create without folder_path returns 422" do
-    post "/api/series", params: {}
+    post "/api/shows", params: {}
     assert_response :unprocessable_entity
   end
 
-  test "scan rescans series" do
-    bb = series(:breaking_bad)
+  test "scan rescans show" do
+    bb = shows(:breaking_bad)
     # media_path doesn't exist on disk, so scan returns 0
-    post "/api/series/breaking-bad/scan"
+    post "/api/shows/breaking-bad/scan"
     assert_response :success
 
     data = JSON.parse(response.body)
@@ -219,17 +219,17 @@ class Api::SeriesControllerTest < ActionDispatch::IntegrationTest
     stub_request(:get, /api\.tvmaze\.com\/singlesearch/)
       .to_return(status: 404)
 
-    post "/api/series/breaking-bad/refresh_metadata"
+    post "/api/shows/breaking-bad/refresh_metadata"
     assert_response :success
 
     data = JSON.parse(response.body)
     assert data.key?("success")
   end
 
-  test "destroy removes series" do
-    s = Series.create!(name: "To Delete", media_path: "/tmp/del")
-    delete "/api/series/#{s.slug}"
+  test "destroy removes show" do
+    s = Show.create!(name: "To Delete", media_path: "/tmp/del")
+    delete "/api/shows/#{s.slug}"
     assert_response :no_content
-    assert_nil Series.find_by(slug: s.slug)
+    assert_nil Show.find_by(slug: s.slug)
   end
 end

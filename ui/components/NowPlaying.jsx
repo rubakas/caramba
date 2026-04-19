@@ -62,8 +62,8 @@ export default function NowPlaying() {
   if (vlcStatus) {
     let title = ''
     if (vlcStatus.type === 'episode') {
-      title = vlcStatus.series_name
-        ? `${vlcStatus.series_name} — ${vlcStatus.episode_code || ''} ${vlcStatus.episode_title || ''}`.trim()
+      title = vlcStatus.show_name
+        ? `${vlcStatus.show_name} — ${vlcStatus.episode_code || ''} ${vlcStatus.episode_title || ''}`.trim()
         : vlcStatus.episode_title || 'Playing in VLC'
     } else if (vlcStatus.type === 'movie') {
       title = vlcStatus.movie_title || 'Playing in VLC'

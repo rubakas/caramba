@@ -28,7 +28,7 @@ export function PlayerProvider({ children }) {
     subtitle: '',
     type: null, // 'episode' | 'movie'
     episodeId: null,
-    seriesId: null,
+    showId: null,
     movieId: null,
     sessionId: 0,
     audioStreams: [],
@@ -41,7 +41,7 @@ export function PlayerProvider({ children }) {
     subtitleStyle: 'classic',
   })
 
-  const openPlayer = useCallback(async ({ type, episodeId, seriesId, movieId, title, subtitle, filePath, startTime }) => {
+  const openPlayer = useCallback(async ({ type, episodeId, showId, movieId, title, subtitle, filePath, startTime }) => {
     setLaunching(true)
     try {
       // Tell main process what we're playing
@@ -51,12 +51,12 @@ export function PlayerProvider({ children }) {
         await api.setPlaybackMovie(movieId)
       }
 
-      // Load saved preferences for this series/movie (non-blocking — failure is OK)
+      // Load saved preferences for this show/movie (non-blocking — failure is OK)
       let prefs = null
       try {
         const prefPromise = api.getPlaybackPreferences({
           type,
-          seriesId: type === 'episode' ? (seriesId || null) : null,
+          showId: type === 'episode' ? (showId || null) : null,
           movieId: type === 'movie' ? movieId : null,
         })
         // Timeout after 1s — don't let prefs lookup block playback
@@ -86,7 +86,7 @@ export function PlayerProvider({ children }) {
         subtitle: subtitle || '',
         type,
         episodeId: type === 'episode' ? episodeId?.id : null,
-        seriesId: type === 'episode' ? (seriesId || null) : null,
+        showId: type === 'episode' ? (showId || null) : null,
         movieId: type === 'movie' ? movieId : null,
         sessionId: Date.now(),
         audioStreams: result.audioStreams || [],
@@ -123,7 +123,7 @@ export function PlayerProvider({ children }) {
     let currentSeriesId = null
     setPlayerState(prev => {
       currentEpisodeId = prev.episodeId
-      currentSeriesId = prev.seriesId
+      currentSeriesId = prev.showId
       return prev
     })
 
@@ -146,7 +146,7 @@ export function PlayerProvider({ children }) {
       // Stop current playback (ffmpeg cleanup) — fire and forget
       await api.stopPlayback().catch(() => {})
 
-      // Play the next episode (same flow as SeriesShow.handlePlay)
+      // Play the next episode (same flow as Show.handlePlay)
       const result = await api.playEpisode(nextEp.id)
       if (!result || result.error) {
         closePlayer()
@@ -157,10 +157,10 @@ export function PlayerProvider({ children }) {
       await openPlayer({
         type: 'episode',
         episodeId: { id: result.episode_id, whId: result.watch_history_id },
-        seriesId: result.series_id,
+        showId: result.show_id,
         filePath: result.file_path,
         startTime: result.start_time,
-        title: nextData.seriesName || '',
+        title: nextData.show_name || '',
         subtitle: nextEp.code + ' — ' + (nextEp.title || ''),
       })
     } catch (err) {
@@ -180,7 +180,7 @@ export function PlayerProvider({ children }) {
 
     api.savePlaybackPreferences({
       type: state.type,
-      seriesId: state.seriesId,
+      showId: state.showId,
       movieId: state.movieId,
       audioLanguage: audioStream?.language || null,
       subtitleLanguage: subtitleStream?.language || null,

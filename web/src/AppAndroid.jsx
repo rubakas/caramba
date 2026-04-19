@@ -7,7 +7,7 @@ import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
 import VideoPlayer from '@caramba/ui/components/VideoPlayer'
 import Shows from '@caramba/ui/pages/Shows'
-import SeriesShow from '@caramba/ui/pages/SeriesShow'
+import Show from '@caramba/ui/pages/Show'
 import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import Settings from '@caramba/ui/pages/Settings'
@@ -117,7 +117,7 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Shows />} />
-              <Route path="/series/:slug" element={<SeriesShow />} />
+              <Route path="/shows/:slug" element={<Show />} />
               <Route path="/movies" element={<Movies />} />
               <Route path="/movies/:slug" element={<MovieShow />} />
               <Route path="/settings" element={

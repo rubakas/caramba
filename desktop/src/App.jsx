@@ -8,12 +8,13 @@ import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
 import VideoPlayer from '@caramba/ui/components/VideoPlayer'
 import Shows from '@caramba/ui/pages/Shows'
-import SeriesShow from '@caramba/ui/pages/SeriesShow'
-import SeriesNew from '@caramba/ui/pages/SeriesNew'
+import Show from '@caramba/ui/pages/Show'
+import ShowNew from '@caramba/ui/pages/ShowNew'
 import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import MoviesNew from '@caramba/ui/pages/MoviesNew'
 import Settings from '@caramba/ui/pages/Settings'
+import Admin from '@caramba/ui/pages/Admin'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Dev-only: lazy-load playground so it's tree-shaken from production builds
@@ -79,8 +80,8 @@ export default function App() {
           <HashRouter>
             <Routes>
               <Route path="/" element={<Shows />} />
-              <Route path="/series/new" element={<SeriesNew />} />
-              <Route path="/series/:slug" element={<SeriesShow />} />
+              <Route path="/shows/new" element={<ShowNew />} />
+              <Route path="/shows/:slug" element={<Show />} />
               <Route path="/movies" element={<Movies />} />
               <Route path="/movies/new" element={<MoviesNew />} />
               <Route path="/movies/:slug" element={<MovieShow />} />
@@ -91,6 +92,7 @@ export default function App() {
                   onApiModeChange={handleApiModeChange}
                 />
               } />
+              <Route path="/admin" element={<Admin />} />
               {import.meta.env.DEV && Playground && (
                 <Route path="/playground" element={<Suspense fallback={null}><Playground /></Suspense>} />
               )}

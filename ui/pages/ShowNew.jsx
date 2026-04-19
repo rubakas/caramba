@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 
-export default function SeriesNew() {
+export default function ShowNew() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -13,14 +13,14 @@ export default function SeriesNew() {
     setLoading(true)
     setError(null)
     try {
-      const result = await window.api.addSeries(path)
+      const result = await window.api.addShow(path)
       if (result && result.slug) {
-        navigate(`/series/${result.slug}`)
+        navigate(`/shows/${result.slug}`)
       } else {
         navigate('/')
       }
     } catch (err) {
-      setError(err.message || 'Failed to add series')
+      setError(err.message || 'Failed to add show')
       setLoading(false)
     }
   }
@@ -30,10 +30,10 @@ export default function SeriesNew() {
       <Navbar active="" />
       <main className="add-main">
         <div className="add-container">
-          <h1 className="page-title">Add Series</h1>
+          <h1 className="page-title">Add Show</h1>
           <p className="add-help">
             Choose a folder that contains MKV files with SxxExx naming.<br />
-            The series name will be auto-detected from the folder name.
+            The show name will be auto-detected from the folder name.
           </p>
           {error && <div className="alert">{error}</div>}
           <div className="add-form">

@@ -1,18 +1,18 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
-  // Series
-  listSeries: () => ipcRenderer.invoke('series:list'),
-  getSeries: (slug) => ipcRenderer.invoke('series:get', slug),
-  getSeriesShow: (slug) => ipcRenderer.invoke('series:show', slug),
-  getSeriesEpisodes: (slug) => ipcRenderer.invoke('series:getEpisodes', slug),
-  getSeriesSeasons: (slug) => ipcRenderer.invoke('series:getSeasons', slug),
-  getContinue: (slug) => ipcRenderer.invoke('series:getContinue', slug),
-  addSeries: (folderPath) => ipcRenderer.invoke('series:add', folderPath),
-  scanSeries: (slug) => ipcRenderer.invoke('series:scan', slug),
-  refreshSeriesMetadata: (slug) => ipcRenderer.invoke('series:refreshMetadata', slug),
-  destroySeries: (slug) => ipcRenderer.invoke('series:destroy', slug),
-  relocateSeries: (slug, newPath) => ipcRenderer.invoke('series:relocate', slug, newPath),
+  // Shows
+  listShows: () => ipcRenderer.invoke('shows:list'),
+  getShowSummary: (slug) => ipcRenderer.invoke('shows:get', slug),
+  getShow: (slug) => ipcRenderer.invoke('shows:show', slug),
+  getShowEpisodes: (slug) => ipcRenderer.invoke('shows:getEpisodes', slug),
+  getShowSeasons: (slug) => ipcRenderer.invoke('shows:getSeasons', slug),
+  getContinue: (slug) => ipcRenderer.invoke('shows:getContinue', slug),
+  addShow: (folderPath) => ipcRenderer.invoke('shows:add', folderPath),
+  scanShow: (slug) => ipcRenderer.invoke('shows:scan', slug),
+  refreshShowMetadata: (slug) => ipcRenderer.invoke('shows:refreshMetadata', slug),
+  destroyShow: (slug) => ipcRenderer.invoke('shows:destroy', slug),
+  relocateShow: (slug, newPath) => ipcRenderer.invoke('shows:relocate', slug, newPath),
 
   // Episodes
   playEpisode: (episodeId) => ipcRenderer.invoke('episodes:play', episodeId),

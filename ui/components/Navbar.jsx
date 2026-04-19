@@ -14,11 +14,12 @@ export default function Navbar({ active, actions, rightContent }) {
   const navigate = useNavigate()
   const location = useLocation()
   const navbarGlass = useGlassConfig('navbar')
-  const { hasSettings, hasPlayground } = useCapabilities()
+  const { hasSettings, hasPlayground, canAdmin } = useCapabilities()
 
   const links = [
     { label: 'Shows', path: '/' },
     { label: 'Movies', path: '/movies' },
+    ...(canAdmin ? [{ label: 'Admin', path: '/admin' }] : []),
     ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
     ...(import.meta.env.DEV && hasPlayground ? [{ label: 'Playground', path: '/playground' }] : []),
   ]

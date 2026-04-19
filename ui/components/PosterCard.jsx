@@ -17,23 +17,23 @@ const getTVPosterUrl = (url) => {
   return url
 }
 
-function PosterCard({ item, type = 'series', resumable = false, autoFocus = false }) {
+function PosterCard({ item, type = 'show', resumable = false, autoFocus = false }) {
   const navigate = useNavigate()
   const cardRef = useRef(null)
 
-  const name = type === 'series' ? item.name : item.title
+  const name = type === 'show' ? item.name : item.title
   const poster = getTVPosterUrl(item.poster_url) // Use medium-sized images on TV
   const slug = item.slug
-  const href = type === 'series' ? `/series/${slug}` : `/movies/${slug}`
+  const href = type === 'show' ? `/shows/${slug}` : `/movies/${slug}`
 
   const genres = genresList(item.genres).slice(0, 3)
-  const year = type === 'series' ? premiereYear(item.premiered) : item.year
-  const status = type === 'series' ? item.status : null
+  const year = type === 'show' ? premiereYear(item.premiered) : item.year
+  const status = type === 'show' ? item.status : null
 
-  // Progress for series
+  // Progress for shows
   const totalEps = item.total_episodes || 0
   const watchedEps = item.watched_episodes || 0
-  const seriesProgress = totalEps > 0 ? Math.round((watchedEps / totalEps) * 100) : 0
+  const showProgress = totalEps > 0 ? Math.round((watchedEps / totalEps) * 100) : 0
 
   // Progress for movies
   const movieInProgress = type === 'movie' && isInProgress(item)
@@ -55,9 +55,9 @@ function PosterCard({ item, type = 'series', resumable = false, autoFocus = fals
   }, [autoFocus])
 
   return (
-    <div 
+    <div
       ref={cardRef}
-      className="series-card" 
+      className="series-card"
       onClick={() => navigate(href)}
       onKeyDown={handleKeyDown}
       tabIndex={0}
@@ -66,18 +66,18 @@ function PosterCard({ item, type = 'series', resumable = false, autoFocus = fals
     >
       <div className="card-poster">
         {poster ? (
-          <img 
-            src={poster} 
-            alt={name} 
+          <img
+            src={poster}
+            alt={name}
             loading="lazy"
             decoding="async"
           />
         ) : (
           <div className="card-poster-fallback">{name?.[0] || '?'}</div>
         )}
-        {type === 'series' && watchedEps > 0 && (
+        {type === 'show' && watchedEps > 0 && (
           <div className="card-progress-track">
-            <div className="card-progress-fill" style={{ width: `${seriesProgress}%` }} />
+            <div className="card-progress-fill" style={{ width: `${showProgress}%` }} />
           </div>
         )}
         {type === 'movie' && movieInProgress && (
@@ -100,7 +100,7 @@ function PosterCard({ item, type = 'series', resumable = false, autoFocus = fals
         {genres.length > 0 && (
           <div className="card-genres">{genres.join('  \u00B7  ')}</div>
         )}
-        {type === 'series' && watchedEps > 0 && (
+        {type === 'show' && watchedEps > 0 && (
           <p className="card-progress-label">{watchedEps}/{totalEps} episodes</p>
         )}
       </div>
