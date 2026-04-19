@@ -45,19 +45,55 @@ export function defaultDiscover() {
         electronDiscover(),
         subnetDiscover(opts),
       ])
-      return dedupeByUrl([...mdns, ...subnet])
+      return dedupeBestPerServer([...mdns, ...subnet])
     }
   }
-  return (opts) => subnetDiscover(opts)
+  return async (opts) => dedupeBestPerServer(await subnetDiscover(opts))
 }
 
-function dedupeByUrl(entries) {
-  const seen = new Set()
-  const out = []
+/**
+ * Collapse entries that refer to the same server. Keys by lowercase
+ * `server_name`; within each key, pick the "best" entry:
+ *   1. highest port wins — direct Rails (:3001) over Vite proxy (:3000).
+ *   2. on port ties, lowest IP wins — primary Wi-Fi interface (.108)
+ *      over Thunderbolt/VPN aliases (.109…).
+ *   3. hostnames (e.g. mDNS "nas.local") lose the IP comparison
+ *      gracefully and are only overwritten on strict port wins, so a
+ *      friendlier hostname beats an IP duplicate when ports match.
+ *
+ * Entries without a resolvable `name` key fall through as distinct
+ * results (hostname used as the dedup key in that case).
+ */
+function dedupeBestPerServer(entries) {
+  const best = new Map()
   for (const e of entries) {
-    if (!e?.url || seen.has(e.url)) continue
-    seen.add(e.url)
-    out.push(e)
+    if (!e?.url) continue
+    const key = (e.name || e.host || '').toLowerCase()
+    if (!key) { best.set(e.url, e); continue }
+    const prev = best.get(key)
+    if (!prev) { best.set(key, e); continue }
+    if (e.port > prev.port) { best.set(key, e); continue }
+    if (e.port === prev.port && compareIp(e.host, prev.host) < 0) {
+      best.set(key, e)
+    }
   }
-  return out
+  return Array.from(best.values())
+}
+
+function compareIp(a, b) {
+  const pa = parseIp(a)
+  const pb = parseIp(b)
+  // Hostnames (e.g. "nas.local") return NaN and always lose — so a
+  // friendly hostname, once in the map, stays there.
+  if (!pa) return 1
+  if (!pb) return -1
+  for (let i = 0; i < 4; i += 1) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  }
+  return 0
+}
+
+function parseIp(str) {
+  const m = typeof str === 'string' && str.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  return m ? [ +m[1], +m[2], +m[3], +m[4] ] : null
 }

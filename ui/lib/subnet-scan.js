@@ -85,7 +85,7 @@ export async function detectLocalSubnets({
 export async function subnetScan({
   subnets,
   ports = APP_PORTS,
-  timeoutMs = 800,
+  timeoutMs = 2000,
   concurrency = 128,
   fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
 } = {}) {
@@ -101,14 +101,22 @@ export async function subnetScan({
     }
   }
 
+  const started = Date.now()
+  const stats = { hit: 0, refused: 0, timeout: 0, badShape: 0, other: 0 }
+  console.log(`[subnet-scan] ${urls.length} probes across subnets=${JSON.stringify(subnets)} ports=${JSON.stringify(ports)}`)
+
   const results = []
   let cursor = 0
 
   async function worker() {
     while (cursor < urls.length) {
       const i = cursor++
-      const hit = await probeHealth(urls[i], { timeoutMs, fetchImpl })
-      if (hit) results.push(hit)
+      const { hit, reason } = await probeHealth(urls[i], { timeoutMs, fetchImpl })
+      stats[reason] = (stats[reason] || 0) + 1
+      if (hit) {
+        console.log(`[subnet-scan] hit ${hit.url} (${hit.name})`)
+        results.push(hit)
+      }
     }
   }
 
@@ -116,11 +124,16 @@ export async function subnetScan({
   await Promise.all(pool)
 
   const seen = new Set()
-  return results.filter((r) => {
+  const deduped = results.filter((r) => {
     if (seen.has(r.url)) return false
     seen.add(r.url)
     return true
   })
+  console.log(
+    `[subnet-scan] done in ${Date.now() - started}ms — ` +
+    `hits=${stats.hit} refused=${stats.refused} timeout=${stats.timeout} badShape=${stats.badShape} other=${stats.other}`
+  )
+  return deduped
 }
 
 async function probeHealth(healthUrl, { timeoutMs, fetchImpl }) {
@@ -128,25 +141,34 @@ async function probeHealth(healthUrl, { timeoutMs, fetchImpl }) {
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
   try {
     const res = await fetchImpl(healthUrl, controller ? { signal: controller.signal } : undefined)
-    if (!res || !res.ok) return null
+    if (!res) return { hit: null, reason: 'other' }
+    if (!res.ok) return { hit: null, reason: 'badShape' }
     const data = await (typeof res.json === 'function' ? res.json() : Promise.resolve(null))
-    if (!data || data.status !== 'ok') return null
+    if (!data || data.status !== 'ok') return { hit: null, reason: 'badShape' }
 
     const probed = safeUrl(healthUrl)
-    if (!probed) return null
+    if (!probed) return { hit: null, reason: 'other' }
     const port = parseInt(probed.port, 10)
-    if (!Number.isFinite(port) || port <= 0) return null
+    if (!Number.isFinite(port) || port <= 0) return { hit: null, reason: 'other' }
 
     const base = `http://${probed.hostname}:${port}`
     return {
-      name: data.server_name || probed.hostname,
-      host: probed.hostname,
-      port,
-      url: base,
-      version: data.version || null,
+      hit: {
+        name: data.server_name || probed.hostname,
+        host: probed.hostname,
+        port,
+        url: base,
+        version: data.version || null,
+      },
+      reason: 'hit',
     }
-  } catch {
-    return null
+  } catch (err) {
+    const msg = err?.message || ''
+    if (err?.name === 'AbortError') return { hit: null, reason: 'timeout' }
+    if (msg.includes('ERR_CONNECTION_REFUSED') || msg.includes('refused')) {
+      return { hit: null, reason: 'refused' }
+    }
+    return { hit: null, reason: 'other' }
   } finally {
     if (timer) clearTimeout(timer)
   }
