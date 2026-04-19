@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_18_122504) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_19_100002) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -73,6 +73,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_122504) do
     t.index ["series_id"], name: "index_episodes_on_series_id"
   end
 
+  create_table "media_folders", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.boolean "enabled", default: true, null: false
+    t.string "kind", null: false
+    t.datetime "last_scanned_at"
+    t.string "path", null: false
+    t.datetime "updated_at", null: false
+    t.index ["path"], name: "index_media_folders_on_path", unique: true
+  end
+
   create_table "movies", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.text "description"
@@ -93,6 +103,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_122504) do
     t.string "year"
     t.index ["file_path"], name: "index_movies_on_file_path", unique: true
     t.index ["slug"], name: "index_movies_on_slug", unique: true
+  end
+
+  create_table "pending_imports", force: :cascade do |t|
+    t.text "candidates"
+    t.string "chosen_external_id"
+    t.datetime "created_at", null: false
+    t.text "error"
+    t.string "folder_path", null: false
+    t.string "kind", null: false
+    t.integer "media_folder_id", null: false
+    t.string "parsed_name"
+    t.integer "parsed_year"
+    t.string "status", default: "pending", null: false
+    t.datetime "updated_at", null: false
+    t.index ["folder_path"], name: "index_pending_imports_on_folder_path", unique: true
+    t.index ["media_folder_id"], name: "index_pending_imports_on_media_folder_id"
+    t.index ["status"], name: "index_pending_imports_on_status"
   end
 
   create_table "playback_preferences", force: :cascade do |t|
@@ -163,6 +190,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_18_122504) do
   add_foreign_key "downloads", "episodes", on_delete: :cascade
   add_foreign_key "downloads", "movies", on_delete: :cascade
   add_foreign_key "episodes", "series", on_delete: :cascade
+  add_foreign_key "pending_imports", "media_folders", on_delete: :cascade
   add_foreign_key "playback_preferences", "movies", on_delete: :cascade
   add_foreign_key "playback_preferences", "series", on_delete: :cascade
   add_foreign_key "watch_histories", "episodes", on_delete: :cascade

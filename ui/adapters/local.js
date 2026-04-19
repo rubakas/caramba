@@ -81,6 +81,18 @@ export function createLocalAdapter() {
     onDownloadProgress: (cb) => api.onDownloadProgress(cb),
     downloadUpdate: () => api.downloadUpdate(),
     installUpdate: () => api.installUpdate(),
+
+    // Admin (server-only — pure local mode has no Rails server to admin)
+    listMediaFolders: async () => null,
+    addMediaFolder: async () => null,
+    updateMediaFolder: async () => null,
+    removeMediaFolder: async () => null,
+    browseServerPath: async () => null,
+    listPendingImports: async () => null,
+    confirmPendingImport: async () => null,
+    ignorePendingImport: async () => null,
+    researchPendingImport: async () => null,
+    triggerAdminScan: async () => null,
   }
 }
 
@@ -94,4 +106,5 @@ export const localCapabilities = {
   hasNowPlaying: true,
   hasSettings: true,
   hasPlayground: true,
+  canAdmin: false,
 }

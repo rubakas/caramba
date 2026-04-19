@@ -13,10 +13,16 @@ development:
   primary:
     <<: *default
     database: storage/development.sqlite3
+  queue:
+    <<: *default
+    database: storage/development_queue.sqlite3
+    migrations_paths: db/queue_migrate
 
 # Warning: The database defined as "test" will be erased and
 # re-generated from your development database when you run "rake".
 # Do not set this db to the same as development or production.
+# Test env uses the :test ActiveJob adapter (default in Rails test env),
+# so SolidQueue's DB is not needed here.
 test:
   primary:
     <<: *default

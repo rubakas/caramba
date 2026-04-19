@@ -11,6 +11,7 @@ import SeriesShow from '@caramba/ui/pages/SeriesShow'
 import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import Settings from '@caramba/ui/pages/Settings'
+import Admin from '@caramba/ui/pages/Admin'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Check if running in Capacitor (Android/iOS native app)
@@ -197,12 +198,13 @@ export default function App() {
               <Route path="/movies" element={<Movies />} />
               <Route path="/movies/:slug" element={<MovieShow />} />
               <Route path="/settings" element={
-                <Settings 
+                <Settings
                   isWebMode={!isNativeApp}
                   onApiUrlChange={isNativeApp ? handleApiUrlChange : undefined}
                   apiUrl={isNativeApp ? apiUrl : undefined}
                 />
               } />
+              <Route path="/admin" element={<Admin />} />
             </Routes>
           </BrowserRouter>
           <VideoPlayer />

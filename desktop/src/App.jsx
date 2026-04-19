@@ -14,6 +14,7 @@ import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import MoviesNew from '@caramba/ui/pages/MoviesNew'
 import Settings from '@caramba/ui/pages/Settings'
+import Admin from '@caramba/ui/pages/Admin'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Dev-only: lazy-load playground so it's tree-shaken from production builds
@@ -91,6 +92,7 @@ export default function App() {
                   onApiModeChange={handleApiModeChange}
                 />
               } />
+              <Route path="/admin" element={<Admin />} />
               {import.meta.env.DEV && Playground && (
                 <Route path="/playground" element={<Suspense fallback={null}><Playground /></Suspense>} />
               )}

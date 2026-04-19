@@ -220,6 +220,26 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
       }
       return { ok: false, error: 'Updates not available' }
     },
+
+    // Admin
+    listMediaFolders: () => get('/api/admin/folders'),
+    addMediaFolder: ({ path, kind }) => post('/api/admin/folders', { path, kind }),
+    updateMediaFolder: (id, attrs) => request(`/api/admin/folders/${id}`, { method: 'PATCH', body: attrs }),
+    removeMediaFolder: (id) => request(`/api/admin/folders/${id}`, { method: 'DELETE' }),
+    browseServerPath: (path) => {
+      const qs = new URLSearchParams()
+      if (path) qs.set('path', path)
+      return get(`/api/admin/browse${qs.toString() ? `?${qs}` : ''}`)
+    },
+    listPendingImports: (status) => {
+      const qs = new URLSearchParams()
+      if (status) qs.set('status', status)
+      return get(`/api/admin/pending_imports${qs.toString() ? `?${qs}` : ''}`)
+    },
+    confirmPendingImport: (id, externalId) => post(`/api/admin/pending_imports/${id}/confirm`, { externalId }),
+    ignorePendingImport: (id) => post(`/api/admin/pending_imports/${id}/ignore`),
+    researchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/research`),
+    triggerAdminScan: () => post('/api/admin/scan'),
   }
 }
 
@@ -232,4 +252,5 @@ export const httpCapabilities = {
   canOpenExternal: false,
   hasNowPlaying: false,
   hasSettings: false,
+  canAdmin: true,
 }

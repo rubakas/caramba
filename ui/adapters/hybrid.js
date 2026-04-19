@@ -383,16 +383,32 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     onDownloadProgress: local.onDownloadProgress,
     downloadUpdate: local.downloadUpdate,
     installUpdate: local.installUpdate,
+
+    // === Admin: ALWAYS http (server-only). No fallback — if the server is
+    // unreachable the admin call should error rather than silently no-op
+    // against local state, which doesn't have the concept of media folders.
+    listMediaFolders: http.listMediaFolders,
+    addMediaFolder: http.addMediaFolder,
+    updateMediaFolder: http.updateMediaFolder,
+    removeMediaFolder: http.removeMediaFolder,
+    browseServerPath: http.browseServerPath,
+    listPendingImports: http.listPendingImports,
+    confirmPendingImport: http.confirmPendingImport,
+    ignorePendingImport: http.ignorePendingImport,
+    researchPendingImport: http.researchPendingImport,
+    triggerAdminScan: http.triggerAdminScan,
   }
 
   // --- Hybrid capabilities ---
   // API mode means the server manages the library, so disable file-system
   // operations (add, rescan, refresh, relocate, remove). Downloads and VLC
-  // remain available since they're inherently local.
+  // remain available since they're inherently local. Admin is enabled
+  // because hybrid mode is connected to a server.
   const capabilities = {
     ...localCapabilities,
     canAdd: false,
     canManage: false,
+    canAdmin: true,
   }
 
   return {

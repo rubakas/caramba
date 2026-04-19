@@ -1,0 +1,25 @@
+pending_series_match:
+  media_folder: series_home
+  folder_path: /tmp/caramba-fixtures-series/Breaking Bad
+  kind: series
+  parsed_name: Breaking Bad
+  candidates: '[{"externalId":169,"name":"Breaking Bad","source":"tvmaze","posterUrl":"https://example.com/bb.jpg","year":2008,"rating":9.5}]'
+  status: pending
+
+pending_movie_match:
+  media_folder: movies_home
+  folder_path: /tmp/caramba-fixtures-movies/Inception (2010)
+  kind: movies
+  parsed_name: Inception
+  parsed_year: 2010
+  candidates: '[{"externalId":"tt1375666","name":"Inception","source":"imdb","posterUrl":"https://example.com/inception.jpg","year":2010}]'
+  status: pending
+
+confirmed_import:
+  media_folder: series_home
+  folder_path: /tmp/caramba-fixtures-series/The Office
+  kind: series
+  parsed_name: The Office
+  candidates: '[]'
+  status: confirmed
+  chosen_external_id: "526"

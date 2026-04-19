@@ -15,6 +15,7 @@ const ApiContext = createContext(null)
  * @param {boolean} props.capabilities.canOpenExternal - Can open in VLC/default player
  * @param {boolean} props.capabilities.hasNowPlaying - Show NowPlaying bar
  * @param {boolean} props.capabilities.hasSettings - Show Settings page
+ * @param {boolean} props.capabilities.canAdmin - Show Admin page (server-side library admin)
  */
 export function ApiProvider({ adapter, capabilities, children }) {
   const value = useMemo(() => ({ api: adapter, capabilities }), [adapter, capabilities])

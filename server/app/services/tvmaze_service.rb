@@ -3,9 +3,10 @@
 # Ported from desktop/electron/services/metadata-fetcher.js + ipc/discover.js
 #
 # Public API (all class methods):
-#   search_shows(query)       — discover search, returns array of mapped show hashes
-#   show_details(tvmaze_id)   — discover detail modal, returns { show:, episodes:, seasons: }
-#   fetch_for_series(series)  — updates Series + Episode records from TVMaze data
+#   search_shows(query)              — discover search, returns array of mapped show hashes
+#   show_details(tvmaze_id)          — discover detail modal, returns { show:, episodes:, seasons: }
+#   fetch_for_series(series)         — updates Series + Episode records from TVMaze data (by name)
+#   fetch_by_tvmaze_id(series, id)   — updates Series + Episode records from TVMaze data (by id)
 
 require "net/http"
 require "json"
@@ -55,13 +56,32 @@ class TvmazeService
     end
 
     # Fetch metadata for a Series record and update it + its episodes in DB.
-    # Returns true on success, false otherwise.
+    # Looks up by name via singlesearch. Returns true on success, false otherwise.
     def fetch_for_series(series)
       url = "#{BASE_URL}/singlesearch/shows?q=#{URI.encode_www_form_component(series.name)}&embed=episodes"
       data = get_json(url)
       return false unless data.is_a?(Hash) && data["id"]
+      apply_show_data(series, data)
+    rescue => e
+      Rails.logger.warn("TvmazeService: fetch_for_series failed for '#{series.name}' — #{e.message}")
+      false
+    end
 
-      # Update series metadata
+    # Same as fetch_for_series but by explicit tvmaze_id — used by the admin
+    # match-confirmation flow where the user has already picked a candidate.
+    def fetch_by_tvmaze_id(series, tvmaze_id)
+      url = "#{BASE_URL}/shows/#{tvmaze_id}?embed=episodes"
+      data = get_json(url)
+      return false unless data.is_a?(Hash) && data["id"]
+      apply_show_data(series, data)
+    rescue => e
+      Rails.logger.warn("TvmazeService: fetch_by_tvmaze_id failed for tvmaze_id=#{tvmaze_id} — #{e.message}")
+      false
+    end
+
+    private
+
+    def apply_show_data(series, data)
       poster_url = data.dig("image", "original") || data.dig("image", "medium")
       summary = strip_html(data["summary"])
 
@@ -80,7 +100,6 @@ class TvmazeService
 
       series.download_poster! if poster_changed && poster_url.present?
 
-      # Update episode metadata — match by S01E01 code
       api_episodes = data.dig("_embedded", "episodes") || []
       if api_episodes.any?
         api_lookup = {}
@@ -115,12 +134,8 @@ class TvmazeService
 
       Rails.logger.info("TvmazeService: updated series '#{series.name}' (TVMaze ID: #{data["id"]})")
       true
-    rescue => e
-      Rails.logger.warn("TvmazeService: fetch_for_series failed for '#{series.name}' — #{e.message}")
-      false
     end
 
-    private
 
     # Map a TVMaze show object to the shape expected by the React UI (matches discover.js mapShow)
     def map_show(show)
