@@ -124,6 +124,25 @@ class LibraryWatcherServiceTest < ActiveSupport::TestCase
     FileUtils.remove_entry(movies_root) if movies_root
   end
 
+  test "falls back to a parens-stripped query when first TVMaze search is empty" do
+    Dir.mkdir(File.join(@root, "The Office (UK)"))
+
+    # First call (with parens) returns empty; second call (without parens) returns a hit.
+    stub_request(:get, %r{https://api\.tvmaze\.com/search/shows\?q=.*UK})
+      .to_return(status: 200, body: "[]", headers: { "Content-Type" => "application/json" })
+    stub_request(:get, %r{https://api\.tvmaze\.com/search/shows\?q=The(\+|%20)Office(\?|&|$)})
+      .to_return(
+        status: 200,
+        body: build_tvmaze_results(2).to_json,
+        headers: { "Content-Type" => "application/json" }
+      )
+
+    LibraryWatcherService.scan_folder(@shows_folder)
+    pi = PendingImport.find_by(folder_path: File.join(@root, "The Office (UK)"))
+    assert_equal "The Office (UK)", pi.parsed_name, "parsed_name keeps the original folder label"
+    assert_operator pi.candidates.size, :>=, 1, "fallback query should produce candidates"
+  end
+
   test "returns 0 when folder path does not exist" do
     ghost = MediaFolder.new(path: "/does/not/exist/#{SecureRandom.hex}", kind: "shows")
     ghost.save(validate: false)

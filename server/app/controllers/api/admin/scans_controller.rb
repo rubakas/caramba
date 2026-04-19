@@ -1,9 +1,12 @@
 class Api::Admin::ScansController < Api::Admin::BaseController
-  # Triggers LibraryScanJob immediately. The recurring scheduler also runs
-  # every 5 minutes (see config/recurring.yml), so this is for the "Scan now"
-  # button in the admin UI.
+  # Runs the library scan synchronously so the admin UI gets immediate
+  # feedback. The recurring scheduler (config/recurring.yml) runs the same
+  # job every 5 minutes via SolidQueue's `bin/jobs` process — that's the
+  # auto-pickup path. This endpoint is the explicit "Scan now" path.
   def create
-    LibraryScanJob.perform_later
-    render json: { enqueued: true }, status: :accepted
+    created = MediaFolder.enabled.sum { |f| LibraryWatcherService.scan_folder(f) }
+    pending = PendingImport.pending.count
+    render json: { ok: true, created: created, pending: pending }
   end
 end
+

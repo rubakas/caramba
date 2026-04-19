@@ -39,17 +39,21 @@ export default function Admin() {
     return () => clearInterval(id)
   }, [canAdmin, refresh])
 
-  const handleScanNow = async () => {
+  const handleScanNow = useCallback(async () => {
     setScanning(true)
+    setError(null)
     try {
-      await api.triggerAdminScan()
-      setTimeout(refresh, 2000)
+      const result = await api.triggerAdminScan()
+      await refresh()
+      if (result && typeof result.created === 'number' && result.created === 0) {
+        setError('Scan finished — no new entries to import.')
+      }
     } catch (err) {
-      setError(err.message || 'Failed to trigger scan')
+      setError(err.message || 'Failed to run scan')
     } finally {
-      setTimeout(() => setScanning(false), 2000)
+      setScanning(false)
     }
-  }
+  }, [api, refresh])
 
   if (!canAdmin) {
     return (
@@ -69,19 +73,7 @@ export default function Admin() {
 
   return (
     <>
-      <Navbar
-        active="Admin"
-        actions={
-          <button
-            type="button"
-            className="btn-choose-folder"
-            onClick={handleScanNow}
-            disabled={scanning}
-          >
-            {scanning ? 'Scanning…' : 'Scan now'}
-          </button>
-        }
-      />
+      <Navbar active="Admin" />
       <main className="add-main">
         <div className="add-container" style={{ maxWidth: 960 }}>
           <h1 className="page-title">Admin</h1>
@@ -95,6 +87,8 @@ export default function Admin() {
                 folders={folders}
                 onChange={refresh}
                 onError={setError}
+                onScanNow={handleScanNow}
+                scanning={scanning}
               />
               <PendingMatchesQueue
                 api={api}

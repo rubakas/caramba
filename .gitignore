@@ -19,3 +19,6 @@ desktop/vendor/ffmpeg*
 
 # pnpm
 pnpm-debug.log*
+
+# playwright
+.playwright-mcp

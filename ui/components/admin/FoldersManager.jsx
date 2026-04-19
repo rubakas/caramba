@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import FolderBrowserDialog from './FolderBrowserDialog'
 
-export default function FoldersManager({ api, folders, onChange, onError }) {
+export default function FoldersManager({ api, folders, onChange, onError, onScanNow, scanning }) {
   const [picking, setPicking] = useState(false)
 
   const handleAdd = async ({ path, kind }) => {
@@ -11,15 +11,6 @@ export default function FoldersManager({ api, folders, onChange, onError }) {
       onChange()
     } catch (err) {
       onError(err.message || 'Failed to add folder')
-    }
-  }
-
-  const handleToggle = async (folder) => {
-    try {
-      await api.updateMediaFolder(folder.id, { enabled: !folder.enabled })
-      onChange()
-    } catch (err) {
-      onError(err.message || 'Failed to update folder')
     }
   }
 
@@ -37,14 +28,24 @@ export default function FoldersManager({ api, folders, onChange, onError }) {
     <section style={{ marginTop: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <h2 style={{ margin: 0, fontSize: 20 }}>Media folders</h2>
-        <button
-          type="button"
-          className="btn-choose-folder"
-          onClick={() => setPicking(true)}
-          style={{ marginLeft: 'auto' }}
-        >
-          + Add folder
-        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            className="btn-choose-folder"
+            onClick={() => setPicking(true)}
+            disabled={scanning}
+          >
+            + Add folder
+          </button>
+          <button
+            type="button"
+            className="btn-choose-folder"
+            onClick={onScanNow}
+            disabled={scanning}
+          >
+            {scanning ? 'Scanning…' : 'Scan now'}
+          </button>
+        </div>
       </div>
       {folders.length === 0 ? (
         <p className="add-help" style={{ marginTop: 12 }}>
@@ -53,11 +54,10 @@ export default function FoldersManager({ api, folders, onChange, onError }) {
       ) : (
         <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ textAlign: 'left', fontSize: 12, color: 'var(--muted, #888)' }}>
+            <tr style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-tertiary, #888)' }}>
               <th style={{ padding: '8px 4px' }}>Path</th>
               <th style={{ padding: '8px 4px' }}>Kind</th>
               <th style={{ padding: '8px 4px' }}>Last scanned</th>
-              <th style={{ padding: '8px 4px' }}>Enabled</th>
               <th style={{ padding: '8px 4px' }}></th>
             </tr>
           </thead>
@@ -66,21 +66,14 @@ export default function FoldersManager({ api, folders, onChange, onError }) {
               <tr key={f.id} style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                 <td style={{ padding: '10px 4px', fontFamily: 'monospace' }}>{f.path}</td>
                 <td style={{ padding: '10px 4px' }}>{f.kind}</td>
-                <td style={{ padding: '10px 4px', color: 'var(--muted, #888)', fontSize: 12 }}>
+                <td style={{ padding: '10px 4px', color: 'var(--text-tertiary, #888)', fontSize: 12 }}>
                   {f.lastScannedAt ? new Date(f.lastScannedAt).toLocaleString() : 'never'}
-                </td>
-                <td style={{ padding: '10px 4px' }}>
-                  <input
-                    type="checkbox"
-                    checked={!!f.enabled}
-                    onChange={() => handleToggle(f)}
-                  />
                 </td>
                 <td style={{ padding: '10px 4px', textAlign: 'right' }}>
                   <button
                     type="button"
+                    className="topnav-btn topnav-btn--danger"
                     onClick={() => handleRemove(f)}
-                    style={{ background: 'transparent', border: 0, color: '#c33', cursor: 'pointer' }}
                   >
                     Remove
                   </button>

@@ -120,6 +120,12 @@ class LibraryWatcherService
 
     def tvmaze_candidates(query)
       results = TvmazeService.search_shows(query) || []
+      if results.empty?
+        cleaned = strip_parens(query)
+        if cleaned.present? && cleaned != query
+          results = TvmazeService.search_shows(cleaned) || []
+        end
+      end
       results.first(5).map do |s|
         {
           "externalId" => s["tvmaze_id"],
@@ -131,6 +137,10 @@ class LibraryWatcherService
           "source" => "tvmaze"
         }
       end
+    end
+
+    def strip_parens(name)
+      name.to_s.gsub(/\s*\([^)]*\)/, " ").squeeze(" ").strip
     end
 
     def imdb_candidates(query)

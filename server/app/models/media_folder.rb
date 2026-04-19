@@ -5,7 +5,7 @@ class MediaFolder < ApplicationRecord
 
   before_validation :normalize_path
 
-  validates :path, presence: true, uniqueness: true
+  validates :path, presence: true, uniqueness: { scope: :kind }
   validates :kind, presence: true, inclusion: { in: KINDS }
   validate :path_must_be_absolute
   validate :path_must_exist_on_disk

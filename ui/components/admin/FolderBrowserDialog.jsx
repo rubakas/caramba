@@ -48,7 +48,7 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: '#1a1a1a',
-          color: '#fff',
+          color: 'var(--text-primary, #fff)',
           padding: 24,
           borderRadius: 12,
           minWidth: 540,
@@ -56,16 +56,17 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
           maxHeight: '80vh',
           display: 'flex',
           flexDirection: 'column',
+          border: '1px solid rgba(255,255,255,0.08)',
         }}
       >
         <h2 style={{ marginTop: 0 }}>Pick a folder</h2>
 
-        <div style={{ marginBottom: 12, fontFamily: 'monospace', fontSize: 13 }}>
-          {listing?.path || '(mount points)'}
+        <div style={{ marginBottom: 12, fontFamily: 'monospace', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ color: 'var(--text-secondary, #ccc)' }}>{listing?.path || '(mount points)'}</span>
           {listing?.parent != null && (
             <button
               type="button"
-              style={{ marginLeft: 12, background: 'transparent', border: '1px solid #555', color: '#ccc', padding: '2px 8px', borderRadius: 4, cursor: 'pointer' }}
+              className="topnav-btn"
               onClick={() => goTo(listing.parent)}
             >
               ↑ Parent
@@ -75,9 +76,9 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
 
         {error && <div className="alert" style={{ marginBottom: 12 }}>{error}</div>}
 
-        <div style={{ overflowY: 'auto', flex: 1, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6 }}>
+        <div style={{ overflowY: 'auto', flex: 1, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}>
           {loading ? (
-            <div style={{ padding: 16, color: '#888' }}>Loading…</div>
+            <div style={{ padding: 16, color: 'var(--text-tertiary, #888)' }}>Loading…</div>
           ) : (
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {(listing?.mounts?.length ? listing.mounts : listing?.entries || []).map((entry) => (
@@ -97,20 +98,40 @@ export default function FolderBrowserDialog({ api, onCancel, onSubmit }) {
                 </li>
               ))}
               {!loading && listing?.entries?.length === 0 && !listing?.mounts?.length && (
-                <li style={{ padding: 16, color: '#888' }}>(empty)</li>
+                <li style={{ padding: 16, color: 'var(--text-tertiary, #888)' }}>(empty)</li>
               )}
             </ul>
           )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 }}>
-          <label style={{ fontSize: 13 }}>Kind:</label>
-          <select value={kind} onChange={(e) => setKind(e.target.value)} style={{ padding: '4px 8px' }}>
-            <option value="shows">Shows</option>
-            <option value="movies">Movies</option>
+          <label htmlFor="folder-kind" style={{ fontSize: 13, color: 'var(--text-secondary, #ccc)' }}>Kind:</label>
+          <select
+            id="folder-kind"
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+            style={{
+              padding: '6px 12px',
+              background: 'rgba(255,255,255,0.06)',
+              color: 'var(--text-primary, #fff)',
+              border: '1px solid rgba(255,255,255,0.18)',
+              borderRadius: 8,
+              fontSize: 14,
+              fontFamily: 'inherit',
+              appearance: 'none',
+              backgroundImage: "url(\"data:image/svg+xml;charset=US-ASCII,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23999' d='M6 8L0 0h12z'/%3E%3C/svg%3E\")",
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 12px center',
+              backgroundSize: '10px 6px',
+              paddingRight: 32,
+              cursor: 'pointer',
+            }}
+          >
+            <option value="shows" style={{ background: '#1a1a1a', color: '#fff' }}>Shows</option>
+            <option value="movies" style={{ background: '#1a1a1a', color: '#fff' }}>Movies</option>
           </select>
           <div style={{ flex: 1 }} />
-          <button type="button" onClick={onCancel} style={{ padding: '6px 12px' }}>
+          <button type="button" className="topnav-btn" onClick={onCancel}>
             Cancel
           </button>
           <button

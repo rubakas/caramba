@@ -44,10 +44,18 @@ class Api::Admin::FoldersControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
   end
 
-  test "create rejects duplicate path" do
+  test "create rejects duplicate (path, kind) pair" do
     MediaFolder.create!(path: @dir, kind: "shows")
-    post "/api/admin/folders", params: { path: @dir, kind: "movies" }
+    post "/api/admin/folders", params: { path: @dir, kind: "shows" }
     assert_response :unprocessable_entity
+  end
+
+  test "create allows same path when kind differs" do
+    MediaFolder.create!(path: @dir, kind: "shows")
+    assert_difference("MediaFolder.count", 1) do
+      post "/api/admin/folders", params: { path: @dir, kind: "movies" }
+    end
+    assert_response :created
   end
 
   test "update toggles enabled" do

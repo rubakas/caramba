@@ -38,11 +38,18 @@ class MediaFolderTest < ActiveSupport::TestCase
     assert_match(/not included/, folder.errors[:kind].join)
   end
 
-  test "path must be unique" do
+  test "path must be unique within the same kind" do
     MediaFolder.create!(path: @existing_dir, kind: "shows")
-    dup = MediaFolder.new(path: @existing_dir, kind: "movies")
+    dup = MediaFolder.new(path: @existing_dir, kind: "shows")
     refute dup.valid?
     assert_match(/taken/, dup.errors[:path].join)
+  end
+
+  test "same path is allowed when kind differs" do
+    MediaFolder.create!(path: @existing_dir, kind: "shows")
+    other_kind = MediaFolder.new(path: @existing_dir, kind: "movies")
+    assert other_kind.valid?
+    assert other_kind.save
   end
 
   test "enabled defaults to true" do
