@@ -1,26 +1,30 @@
 /**
- * Subnet HTTP scanner — the discovery path for clients that can't do
- * mDNS (Android TV WebView, browsers on any OS).
+ * HTTP subnet scan for Caramba API servers.
  *
- * Design: Rails exposes a tiny TCP beacon on a fixed well-known port
- * (DISCOVERY_BEACON_PORT, default 3999). The beacon's JSON response
- * tells the client the real Rails URL, server name, and version. This
- * means the client only has to probe one port per IP — the main Rails
- * port can be anything.
+ * For every IP in the local /24 subnet(s), probe `/api/health` on the
+ * known Rails ports. A Caramba server answers with
+ * `{status:"ok", server_name, version, ...}`. Any other response (404,
+ * timeout, wrong shape) is ignored. The host that responded is the URL
+ * we report, so NAT (Android emulator) and multi-interface hosts work.
  *
- * Everything here is a pure function; `fetchImpl` and the WebRTC probe
- * are injected so `node --test` can drive the code without a real
- * network or browser.
+ * Everything is a pure function; `fetchImpl` and the WebRTC probe are
+ * injected so `node --test` can drive the code without real network.
  */
 
-export const DISCOVERY_BEACON_PORT = 3999
+/**
+ * Rails ports we probe `/api/health` on. These are the only ports
+ * this project's Procfiles and launchd plist ever bind to. A server
+ * on a non-standard port falls back to manual URL entry — after one
+ * successful connection, `currentUrl` plumbing keeps rediscovery
+ * working on that port.
+ */
+export const APP_PORTS = [3000, 3001]
 
 /**
- * Default fallback subnets when we can't determine the local one from
- * WebRTC and there's no saved URL to learn from. Covers common home-
+ * Default fallback subnets when WebRTC doesn't give us the device's
+ * LAN IP and there's no saved URL to learn from. Covers common home-
  * router defaults plus the Android emulator's virtual LAN (10.0.2.x;
- * the host is reachable at 10.0.2.2). If none of these match, the user
- * enters a URL manually and subsequent scans learn from `currentUrl`.
+ * the host is reachable at 10.0.2.2).
  */
 export const DEFAULT_FALLBACK_SUBNETS = [
   '192.168.0',
@@ -45,76 +49,55 @@ export function ipToSubnet(ip) {
 }
 
 /**
- * Determine the local /24 subnets worth scanning. Strategy:
- *   1. Try the WebRTC host-candidate trick to learn this device's LAN IP.
- *   2. If a `currentUrl` is already saved, derive its subnet too — keeps
- *      non-default networks working once the user has connected once.
- *   3. Union with DEFAULT_FALLBACK_SUBNETS as a safety net.
- *
- * Returns a de-duplicated array of `/24` prefixes (e.g. "192.168.1").
+ * Determine the local /24 subnets worth scanning. If WebRTC leaks the
+ * device's LAN IP (typical on Electron / desktop browsers) or a saved
+ * URL points at one, we scan only that. Otherwise fall back to the
+ * common home-router list.
  */
 export async function detectLocalSubnets({
   currentUrl = null,
   rtc = defaultRtcProbe,
   fallbacks = DEFAULT_FALLBACK_SUBNETS,
 } = {}) {
-  const subnets = new Set()
+  const known = new Set()
 
   try {
-    const ip = await rtc()
-    const subnet = ipToSubnet(ip)
-    if (subnet) subnets.add(subnet)
-  } catch {
-    // Browsers may mDNS-obfuscate the candidate or disable WebRTC entirely;
-    // fall through to currentUrl + fallbacks.
-  }
+    const subnet = ipToSubnet(await rtc())
+    if (subnet) known.add(subnet)
+  } catch {}
 
   if (currentUrl) {
     try {
-      const u = new URL(currentUrl)
-      const subnet = ipToSubnet(u.hostname)
-      if (subnet) subnets.add(subnet)
-    } catch {
-      // currentUrl not parseable; ignore.
-    }
+      const subnet = ipToSubnet(new URL(currentUrl).hostname)
+      if (subnet) known.add(subnet)
+    } catch {}
   }
 
-  for (const f of fallbacks) subnets.add(f)
-
-  return Array.from(subnets)
+  if (known.size > 0) return Array.from(known)
+  return Array.from(new Set(fallbacks))
 }
 
 /**
- * Parallel scan of `<subnet>.<1..254>:<port>` with bounded concurrency.
- * Each probe expects the beacon's JSON shape:
- *   { status: "ok", url, server_name, version }
- * Returns a de-duplicated list of { name, host, port, url, version }.
- *
- * - `port` defaults to DISCOVERY_BEACON_PORT. The *returned* `port` is
- *   the one the beacon reports (i.e. the real Rails port), not the
- *   beacon's own port.
- * - `timeoutMs` is per-probe; hangers are dropped and don't block the
- *   batch.
- * - `concurrency` caps in-flight probes so mobile WebViews don't exhaust
- *   their socket quota.
- * - `fetchImpl` is injected for tests.
+ * Parallel scan of every `<subnet>.<1..254>` on `APP_PORTS`, probing
+ * `/api/health` on each. Bounded concurrency; per-probe abort timeout.
+ * Returns a URL-deduped list of `{ name, host, port, url, version }`.
  */
 export async function subnetScan({
   subnets,
-  port = DISCOVERY_BEACON_PORT,
+  ports = APP_PORTS,
   timeoutMs = 800,
-  concurrency = 64,
+  concurrency = 128,
   fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
 } = {}) {
   if (!fetchImpl) return []
   if (!Array.isArray(subnets) || subnets.length === 0) return []
 
-  // Build the full URL list up front. Host byte 0 and 255 are network /
-  // broadcast, skip them.
   const urls = []
   for (const subnet of subnets) {
     for (let host = 1; host <= 254; host += 1) {
-      urls.push(`http://${subnet}.${host}:${port}/`)
+      for (const port of ports) {
+        urls.push(`http://${subnet}.${host}:${port}/api/health`)
+      }
     }
   }
 
@@ -122,12 +105,9 @@ export async function subnetScan({
   let cursor = 0
 
   async function worker() {
-    while (true) {
-      const i = cursor
-      cursor += 1
-      if (i >= urls.length) return
-      const url = urls[i]
-      const hit = await probeBeacon(url, { timeoutMs, fetchImpl })
+    while (cursor < urls.length) {
+      const i = cursor++
+      const hit = await probeHealth(urls[i], { timeoutMs, fetchImpl })
       if (hit) results.push(hit)
     }
   }
@@ -135,7 +115,6 @@ export async function subnetScan({
   const pool = Array.from({ length: Math.min(concurrency, urls.length) }, worker)
   await Promise.all(pool)
 
-  // De-dup by reported URL — a beacon can reply from multiple interfaces.
   const seen = new Set()
   return results.filter((r) => {
     if (seen.has(r.url)) return false
@@ -144,29 +123,26 @@ export async function subnetScan({
   })
 }
 
-async function probeBeacon(beaconUrl, { timeoutMs, fetchImpl }) {
+async function probeHealth(healthUrl, { timeoutMs, fetchImpl }) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
   try {
-    const res = await fetchImpl(beaconUrl, controller ? { signal: controller.signal } : undefined)
+    const res = await fetchImpl(healthUrl, controller ? { signal: controller.signal } : undefined)
     if (!res || !res.ok) return null
     const data = await (typeof res.json === 'function' ? res.json() : Promise.resolve(null))
     if (!data || data.status !== 'ok') return null
-    const appPort = typeof data.port === 'number' ? data.port : parseInt(data.port, 10)
-    if (!Number.isFinite(appPort) || appPort <= 0) return null
 
-    // The beacon reports only `port`; we build the URL around the host we
-    // reached the beacon on. A server's own IP is often unreachable from
-    // the client (Android emulator NAT hits the host via 10.0.2.2, not
-    // the host's 192.168.x) — the beacon's own host is the one that works.
-    const probedHost = safeUrl(beaconUrl)?.hostname
-    if (!probedHost) return null
+    const probed = safeUrl(healthUrl)
+    if (!probed) return null
+    const port = parseInt(probed.port, 10)
+    if (!Number.isFinite(port) || port <= 0) return null
 
+    const base = `http://${probed.hostname}:${port}`
     return {
-      name: data.server_name || probedHost,
-      host: probedHost,
-      port: appPort,
-      url: `http://${probedHost}:${appPort}`,
+      name: data.server_name || probed.hostname,
+      host: probed.hostname,
+      port,
+      url: base,
       version: data.version || null,
     }
   } catch {
@@ -185,12 +161,9 @@ function safeUrl(str) {
 }
 
 /**
- * Default WebRTC host-candidate probe. Creates a throwaway
- * RTCPeerConnection, triggers ICE gathering with no TURN/STUN servers,
- * reads the first non-mDNS-masked IPv4 from the candidate string.
- *
- * Returns null if WebRTC isn't available or if the browser only emits
- * `.local` mDNS candidates (modern Chrome + strict privacy mode).
+ * WebRTC host-candidate probe. Some browsers mDNS-mask the candidate
+ * (returns `.local` instead of an IPv4); in that case we return null
+ * and the caller uses fallback subnets.
  */
 async function defaultRtcProbe() {
   if (typeof RTCPeerConnection === 'undefined') return null
@@ -210,8 +183,7 @@ async function defaultRtcProbe() {
 
     pc.onicecandidate = (evt) => {
       if (!evt.candidate) return
-      const cand = evt.candidate.candidate || ''
-      const match = cand.match(/ (\d+\.\d+\.\d+\.\d+) /)
+      const match = (evt.candidate.candidate || '').match(/ (\d+\.\d+\.\d+\.\d+) /)
       if (!match) return
       const ip = match[1]
       if (ip.startsWith('0.') || ip.startsWith('127.')) return

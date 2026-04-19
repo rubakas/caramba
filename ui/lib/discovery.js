@@ -1,23 +1,18 @@
 /**
- * Per-platform helpers that locate Caramba API servers on the LAN.
- * All return Promise<Array<{ name, host, port, url, version? }>>.
+ * LAN discovery of Caramba API servers.
  *
- * - electronDiscover: main-process bonjour-service via preload IPC (mDNS).
- *   Fast, precise, but only usable from the Electron main process.
- * - subnetDiscover:   parallel HTTP probe of the discovery beacon port
- *   across the local /24 subnet(s). Works in Android WebView, desktop
- *   browsers on any OS — anywhere fetch works.
+ * - electronDiscover: mDNS via the Electron main-process preload
+ *   (bonjour-service). Precise but only usable from Electron.
+ * - subnetDiscover:   HTTP scan of `/api/health` on the default Rails
+ *   ports across the local subnet(s). Works anywhere `fetch` does:
+ *   browsers, Android WebView, the Electron renderer, Node.
  *
- * `defaultDiscover` picks the right one: Electron tries mDNS first and
- * falls back to subnet scan if mDNS returns nothing; every other client
- * goes straight to subnet scan.
+ * On Electron we run both in parallel and merge — mDNS can miss a
+ * server (multicast filtering, slow responder) that the subnet scan
+ * finds, and vice versa.
  */
 
-import {
-  detectLocalSubnets,
-  subnetScan,
-  DISCOVERY_BEACON_PORT,
-} from './subnet-scan.js'
+import { detectLocalSubnets, subnetScan } from './subnet-scan.js'
 
 /** Electron desktop — delegates to main process via preload. */
 export async function electronDiscover() {
@@ -31,44 +26,38 @@ export async function electronDiscover() {
   }
 }
 
-/**
- * Cross-platform discovery via HTTP subnet scan of the Caramba beacon.
- * Works from any runtime that has `fetch` — Android WebView, iOS, every
- * desktop browser.
- *
- * @param {object}  opts
- * @param {string}  [opts.currentUrl]   already-saved URL; its subnet is
- *                                      added to the probe list so
- *                                      non-default networks keep working
- * @param {number}  [opts.timeoutMs]
- * @param {number}  [opts.concurrency]
- */
 export async function subnetDiscover({ currentUrl = null, timeoutMs, concurrency } = {}) {
   if (typeof window === 'undefined') return []
   const subnets = await detectLocalSubnets({ currentUrl })
-  return subnetScan({
-    subnets,
-    port: DISCOVERY_BEACON_PORT,
-    timeoutMs,
-    concurrency,
-  })
+  return subnetScan({ subnets, timeoutMs, concurrency })
 }
 
 /**
- * Auto-pick the right discoverer for the current runtime. The returned
- * function accepts an options bag so callers can pass `currentUrl`.
- *
- * Electron: try mDNS, fall back to subnet scan if mDNS returned nothing.
- * Everything else: subnet scan only.
+ * Returned function accepts an options bag so callers can pass
+ * `currentUrl`. Electron runs both paths and merges; everything else
+ * runs subnet scan only.
  */
 export function defaultDiscover() {
   if (typeof window === 'undefined') return async () => []
   if (window.api?.discoverServers) {
     return async (opts) => {
-      const mdns = await electronDiscover()
-      if (mdns.length > 0) return mdns
-      return subnetDiscover(opts)
+      const [mdns, subnet] = await Promise.all([
+        electronDiscover(),
+        subnetDiscover(opts),
+      ])
+      return dedupeByUrl([...mdns, ...subnet])
     }
   }
   return (opts) => subnetDiscover(opts)
+}
+
+function dedupeByUrl(entries) {
+  const seen = new Set()
+  const out = []
+  for (const e of entries) {
+    if (!e?.url || seen.has(e.url)) continue
+    seen.add(e.url)
+    out.push(e)
+  }
+  return out
 }
