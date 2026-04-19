@@ -57,13 +57,13 @@ echo ""
 echo "Building Android TV app $CURRENT_VERSION..."
 cd android
 VERSION_NUM="${CURRENT_VERSION#v}"
-./gradlew clean assembleDebug -PappVersionName="$VERSION_NUM"
+./gradlew clean assembleRelease -PappVersionName="$VERSION_NUM"
 
 # Rename APK to include version
-APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
+APK_DIR="app/build/outputs/apk/release"
 APK_NAME="Caramba-${VERSION_NUM}-android-tv.apk"
-mv "$APK_SRC" "app/build/outputs/apk/debug/$APK_NAME"
-APK_PATH="app/build/outputs/apk/debug/$APK_NAME"
+mv "$APK_DIR/app-release.apk" "$APK_DIR/$APK_NAME"
+APK_PATH="$APK_DIR/$APK_NAME"
 cd ..
 
 # ── 6. Summary ─────────────────────────────────────────────────────

@@ -36,7 +36,7 @@ HEAD_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 # Collect artifacts (look for renamed APK)
 ARTIFACTS=()
 APK_NAME="Caramba-${VERSION_NUM}-android-tv.apk"
-APK_PATH="android/app/build/outputs/apk/debug/$APK_NAME"
+APK_PATH="android/app/build/outputs/apk/release/$APK_NAME"
 if [ -f "$APK_PATH" ]; then
   ARTIFACTS+=("$APK_PATH")
 fi

@@ -20,21 +20,19 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Debug keystore is fine for personal sideload; swap for a
+            // real release keystore before any Play Store distribution.
+            signingConfig signingConfigs.debug
         }
         debug {
-            // Dev builds get a distinct applicationId so they coexist with
-            // the production Caramba install from GitHub Releases. Without
-            // this, `cap run android -l` overwrites the prod app on the
-            // device — forcing a reinstall every time you switch back.
-            //
-            // Android treats com.caramba.tv and com.caramba.tv.dev as two
-            // separate packages; each has its own data sandbox, icon in
-            // the launcher, and SharedPreferences. The debug app label is
-            // overridden in src/debug/res/values/strings.xml so you can
-            // tell them apart on the home screen.
+            // Distinct applicationId so `cap run android -l` sideloads
+            // alongside the production install instead of overwriting it.
             applicationIdSuffix ".dev"
             versionNameSuffix "-dev"
         }
+    }
+    buildFeatures {
+        buildConfig true
     }
 }
 

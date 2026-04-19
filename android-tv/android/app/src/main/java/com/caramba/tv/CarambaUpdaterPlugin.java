@@ -151,6 +151,10 @@ public class CarambaUpdaterPlugin extends Plugin {
     
     @PluginMethod
     public void checkForUpdate(PluginCall call) {
+        if (BuildConfig.DEBUG) {
+            call.resolve(null);
+            return;
+        }
         executor.execute(() -> {
             try {
                 JSONObject release = fetchJson(API_URL);
