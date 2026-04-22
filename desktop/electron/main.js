@@ -1,3 +1,4 @@
+const Sentry = require('./sentry')
 const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')

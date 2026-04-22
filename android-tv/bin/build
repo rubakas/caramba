@@ -15,6 +15,14 @@ ROOT_DIR="$(cd .. && pwd)"
 
 ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 
+# ── Load .env.local (gitignored) for SENTRY_AUTH_TOKEN, SENTRY_ORG, etc. ────
+if [ -f "$ROOT_DIR/.env.local" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT_DIR/.env.local"
+  set +a
+fi
+
 # ── 0. Parse flags ──────────────────────────────────────────────────
 PUBLISH=false
 
@@ -39,13 +47,18 @@ cd android-tv
 # ── 2. Get version ──────────────────────────────────────────────────
 CURRENT_VERSION=$(node -e "console.log(require('$ROOT_PACKAGE_JSON').version)")
 echo "Version: $CURRENT_VERSION"
+export SENTRY_RELEASE="caramba@${CURRENT_VERSION#v}"
+echo "Sentry release: $SENTRY_RELEASE"
 
 # ── 3. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
 cd ../web
-pnpm build
+pnpm build --mode android
 cd ../android-tv
+
+# Always remove source maps from shipped artifacts.
+find ../web/dist -name '*.js.map' -delete 2>/dev/null || true
 
 # ── 4. Sync Capacitor ──────────────────────────────────────────────
 echo ""

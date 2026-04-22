@@ -1,6 +1,17 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useMemo, useState, useEffect } from 'react'
+import * as Sentry from '@sentry/capacitor'
+import * as SentryReact from '@sentry/react'
+import { sentryInit } from '@caramba/ui/sentry/init'
 import { ApiProvider } from '@caramba/ui/context/ApiContext'
+
+sentryInit({
+  Sentry: { ...SentryReact, ...Sentry, init: Sentry.init },
+  dsn: import.meta.env.VITE_SENTRY_DSN,
+  platform: 'android-tv',
+  release: __SENTRY_RELEASE__,
+  isDev: import.meta.env.DEV,
+})
 import { createHttpAdapter, httpCapabilities } from '@caramba/ui/adapters/http'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
 import { PlayerProvider } from '@caramba/ui/context/PlayerContext'

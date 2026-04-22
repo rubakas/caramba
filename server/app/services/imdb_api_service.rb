@@ -150,6 +150,7 @@ class ImdbApiService
 
       JSON.parse(response.body)
     rescue => e
+      Sentry.capture_exception(e, tags: { subsystem: "imdb" }) if defined?(Sentry) && Sentry.initialized?
       Rails.logger.warn("ImdbApiService: HTTP request failed for #{url} — #{e.message}")
       nil
     end

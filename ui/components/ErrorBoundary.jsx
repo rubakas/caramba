@@ -12,6 +12,11 @@ export default class ErrorBoundary extends Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('[ErrorBoundary] Uncaught render error:', error, errorInfo)
+    if (typeof window !== 'undefined' && window.__SENTRY__?.captureException) {
+      window.__SENTRY__.captureException(error, {
+        contexts: { react: { componentStack: errorInfo.componentStack } },
+      })
+    }
   }
 
   handleReload = () => {

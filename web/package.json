@@ -8,9 +8,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@caramba/ui": "workspace:*"
+    "@caramba/ui": "workspace:*",
+    "@sentry/react": "^8.40.0"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^2.22.0",
     "@vitejs/plugin-react": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
