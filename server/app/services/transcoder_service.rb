@@ -413,6 +413,7 @@ class TranscoderService
       return unless @session && @session[:hls_dir]
       FileUtils.rm_rf(@session[:hls_dir]) if Dir.exist?(@session[:hls_dir])
     rescue => e
+      Sentry.capture_exception(e, tags: { subsystem: "transcoder" }) if defined?(Sentry) && Sentry.initialized?
       Rails.logger.warn "[Transcoder] cleanup_hls_dir error: #{e.message}"
     end
 

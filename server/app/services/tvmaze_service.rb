@@ -195,6 +195,7 @@ class TvmazeService
 
       JSON.parse(response.body)
     rescue => e
+      Sentry.capture_exception(e, tags: { subsystem: "tvmaze" }) if defined?(Sentry) && Sentry.initialized?
       Rails.logger.warn("TvmazeService: HTTP request failed for #{url} — #{e.message}")
       nil
     end
