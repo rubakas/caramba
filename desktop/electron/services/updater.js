@@ -191,9 +191,18 @@ function downloadUpdate(assetUrl, onProgress, expectedSha256 = null) {
           }
           resolve(dest)
         })
-        out.on('error', reject)
-        res.on('error', reject)
-      }).on('error', reject)
+        out.on('error', (err) => {
+          try { require('@sentry/electron/main').captureException(err, { tags: { subsystem: 'updater' } }) } catch {}
+          reject(err)
+        })
+        res.on('error', (err) => {
+          try { require('@sentry/electron/main').captureException(err, { tags: { subsystem: 'updater' } }) } catch {}
+          reject(err)
+        })
+      }).on('error', (err) => {
+        try { require('@sentry/electron/main').captureException(err, { tags: { subsystem: 'updater' } }) } catch {}
+        reject(err)
+      })
     }
 
     doRequest(assetUrl, 5)

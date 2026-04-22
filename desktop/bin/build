@@ -15,6 +15,14 @@ ROOT_DIR="$(cd .. && pwd)"
 
 ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 
+# ── Load .env.local (gitignored) for SENTRY_AUTH_TOKEN, SENTRY_ORG, etc. ────
+if [ -f "$ROOT_DIR/.env.local" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$ROOT_DIR/.env.local"
+  set +a
+fi
+
 # ── 0. Parse flags ──────────────────────────────────────────────────
 PUBLISH=false
 
@@ -75,10 +83,19 @@ fi
 # electron-builder needs version WITHOUT 'v' prefix
 VERSION_NUM="${CURRENT_VERSION#v}"
 
+# Export the release tag for @sentry/vite-plugin and the runtime.
+FINAL_VERSION="${CURRENT_VERSION}"
+export SENTRY_RELEASE="caramba@${FINAL_VERSION#v}"
+echo "Sentry release: $SENTRY_RELEASE"
+
 # ── 4. Build React frontend ────────────────────────────────────────
 echo ""
 echo "Building React frontend..."
 pnpm exec vite build
+
+# Always remove source maps from shipped artifacts — plugin only deletes them
+# when auth token is set, but we never want maps inside the asar bundle.
+find dist-react -name '*.js.map' -delete 2>/dev/null || true
 
 # ── 5. Setup ffmpeg binaries ───────────────────────────────────────
 echo "Ensuring macOS ffmpeg binaries..."

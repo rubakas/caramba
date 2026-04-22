@@ -339,6 +339,7 @@ async function start(filePath, seekTime = 0, opts = {}) {
   })
 
   proc.on('error', (err) => {
+    try { require('@sentry/electron/main').captureException(err, { tags: { subsystem: 'transcoder' } }) } catch {}
     console.error(`Transcoder: ffmpeg error — ${err.message}`)
   })
 
@@ -395,6 +396,7 @@ async function extractSubtitles(filePath, streamIndex) {
       resolve(stdout)
     })
     proc.on('error', (err) => {
+      try { require('@sentry/electron/main').captureException(err, { tags: { subsystem: 'transcoder' } }) } catch {}
       console.error('[Subtitle] ffmpeg spawn error:', err)
       resolve(null)
     })
