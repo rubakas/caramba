@@ -45,6 +45,6 @@ export function sentryInit(opts) {
   Sentry.setTag('platform', platform)
 
   if (typeof window !== 'undefined') {
-    window.__SENTRY__ = Sentry
+    window.__caramba_sentry__ = Sentry
   }
 }
