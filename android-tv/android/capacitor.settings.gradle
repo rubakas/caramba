@@ -7,3 +7,6 @@ project(':capacitor-app').projectDir = new File('../../node_modules/.pnpm/@capac
 
 include ':capacitor-preferences'
 project(':capacitor-preferences').projectDir = new File('../../node_modules/.pnpm/@capacitor+preferences@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/preferences/android')
+
+include ':sentry-capacitor'
+project(':sentry-capacitor').projectDir = new File('../../node_modules/.pnpm/@sentry+capacitor@1.5.0_@capacitor+core@6.2.1_@sentry+react@8.55.1_react@19.2.5_/node_modules/@sentry/capacitor/android')

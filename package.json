@@ -1,6 +1,6 @@
 {
   "private": true,
-  "version": "v1.3.6",
+  "version": "v1.3.7",
   "description": "Caramba — media center monorepo",
   "scripts": {
     "test:ui": "pnpm --filter @caramba/ui test"
