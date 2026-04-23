@@ -13,6 +13,7 @@ gem "capistrano-rails", "~> 1.6", require: false
 gem "capistrano-bundler", "~> 2.1", require: false
 gem "sentry-ruby", "~> 5.22"
 gem "sentry-rails", "~> 5.22"
+gem "dotenv-rails"
 
 group :development, :test do
   gem "debug", platforms: %i[ mri ], require: "debug/prelude"

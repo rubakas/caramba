@@ -1,17 +1,6 @@
 require "sentry-rails"
 require Rails.root.join("lib/sentry/scrubbers")
 
-# ── Load server/.env (public DSN — SENTRY_DSN is committed as placeholder) ──
-env_path = Rails.root.join(".env")
-if File.exist?(env_path)
-  File.readlines(env_path).each do |line|
-    next if line.strip.empty? || line.lstrip.start_with?("#")
-    if (m = line.match(/\A\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*\z/))
-      ENV[m[1]] ||= m[2]
-    end
-  end
-end
-
 # ── Release tag: explicit > git sha > unknown ────────────────────
 release_tag =
   ENV["SENTRY_RELEASE"] ||
