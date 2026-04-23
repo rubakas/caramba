@@ -40,7 +40,8 @@
     },
     "files": [
       "electron/**/*",
-      "dist-react/**/*"
+      "dist-react/**/*",
+      ".env"
     ],
     "asar": true
   },
