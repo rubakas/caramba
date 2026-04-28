@@ -382,11 +382,12 @@ class Api::PlaybackController < Api::BaseController
       return [ saved_bitmap[:index], true ] if saved_bitmap
     end
 
+    # No saved preference: only auto-pick a text subtitle. Auto-burning a
+    # bitmap (PGS/VOBSUB) track forces full_transcode and pushes encode speed
+    # below 1× realtime on 4K sources, which the player then reads as a
+    # network error storm. Require an explicit user choice for bitmap subs.
     text_sub = subtitle_streams.find { |s| s[:isText] }
     return [ text_sub[:index], false ] if text_sub
-
-    bitmap_sub = subtitle_streams.find { |s| !s[:isText] }
-    return [ bitmap_sub[:index], true ] if bitmap_sub
 
     [ nil, false ]
   end
