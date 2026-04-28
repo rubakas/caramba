@@ -3,8 +3,17 @@ import Hls from 'hls.js'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi } from '../context/ApiContext'
+import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
+
+// Circuit-breaker budget for hls.js fatal errors. Without a cap, fatal
+// NETWORK_ERROR → startLoad() loops indefinitely whenever the server is
+// behind playback (e.g. 4K full_transcode under VideoToolbox), producing a
+// request storm against /api/playback/{playlist,segment}. Reset on every
+// successful frag/level load so a transient blip doesn't burn the budget.
+const HLS_MAX_FATAL_RECOVERIES = 3
+const HLS_FATAL_BACKOFF_MS = [1000, 2000, 4000]
 
 // Human-readable language names for common ISO 639 codes
 const LANG_NAMES = {
@@ -83,6 +92,7 @@ const SUB_STYLES = [
 export default function VideoPlayer() {
   const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
+  const { showToast } = useToast()
   const videoRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
@@ -174,8 +184,15 @@ export default function VideoPlayer() {
   // Desktop Electron serves the same manifest via the stream:// protocol;
   // the fetch/playback code path is identical.
   const hlsRef = useRef(null)
+  const fatalAttemptsRef = useRef(0)
+  const fatalTimerRef = useRef(null)
 
   const cleanupSource = useCallback(() => {
+    if (fatalTimerRef.current) {
+      clearTimeout(fatalTimerRef.current)
+      fatalTimerRef.current = null
+    }
+    fatalAttemptsRef.current = 0
     if (hlsRef.current) {
       try { hlsRef.current.destroy() } catch {}
       hlsRef.current = null
@@ -235,22 +252,54 @@ export default function VideoPlayer() {
         video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
       })
 
+      const resetFatalBudget = () => {
+        fatalAttemptsRef.current = 0
+      }
+      hls.on(Hls.Events.FRAG_LOADED, resetFatalBudget)
+      hls.on(Hls.Events.LEVEL_LOADED, resetFatalBudget)
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) {
           console.log('[Player] hls.js non-fatal:', data.type, data.details)
           return
         }
         console.warn('[Player] hls.js fatal:', data.type, data.details)
-        switch (data.type) {
-          case Hls.ErrorTypes.NETWORK_ERROR:
-            hls.startLoad()
-            break
-          case Hls.ErrorTypes.MEDIA_ERROR:
-            hls.recoverMediaError()
-            break
-          default:
-            cleanupSource()
+
+        const isRecoverable = data.type === Hls.ErrorTypes.NETWORK_ERROR ||
+                              data.type === Hls.ErrorTypes.MEDIA_ERROR
+        if (!isRecoverable) {
+          cleanupSource()
+          showToast('Playback failed', { type: 'error' })
+          closePlayer()
+          return
         }
+
+        const attempt = fatalAttemptsRef.current
+        if (attempt >= HLS_MAX_FATAL_RECOVERIES) {
+          console.warn('[Player] hls.js exceeded recovery budget — giving up')
+          cleanupSource()
+          showToast("Playback failed — server can't keep up", { type: 'error', duration: 6000 })
+          closePlayer()
+          return
+        }
+
+        const delay = HLS_FATAL_BACKOFF_MS[Math.min(attempt, HLS_FATAL_BACKOFF_MS.length - 1)]
+        fatalAttemptsRef.current = attempt + 1
+        if (fatalTimerRef.current) clearTimeout(fatalTimerRef.current)
+        fatalTimerRef.current = setTimeout(() => {
+          fatalTimerRef.current = null
+          // hls instance may have been destroyed during the wait
+          if (hlsRef.current !== hls) return
+          try {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad()
+            } else {
+              hls.recoverMediaError()
+            }
+          } catch (err) {
+            console.warn('[Player] recovery threw:', err?.message)
+          }
+        }, delay)
       })
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       console.log('[Player] Native HLS:', manifestUrl)

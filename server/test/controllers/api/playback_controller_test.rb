@@ -139,4 +139,65 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     assert_not_nil pref
     assert_equal "fre", pref.audio_language
   end
+
+  # select_subtitle_track guards against auto-picking bitmap (PGS/VOBSUB)
+  # tracks. Auto-burn forces full_transcode → encode <1× realtime on 4K → the
+  # client sees a request storm.
+  class SubtitleSelectionTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+    end
+
+    def select(streams, prefs = nil)
+      @controller.send(:select_subtitle_track, streams, prefs)
+    end
+
+    test "returns [nil, false] when no streams" do
+      assert_equal [ nil, false ], select([])
+    end
+
+    test "returns [nil, false] when only bitmap streams and no prefs" do
+      streams = [
+        { index: 2, language: "eng", isText: false }
+      ]
+      assert_equal [ nil, false ], select(streams)
+    end
+
+    test "returns [nil, false] when only bitmap streams and subtitleOff" do
+      streams = [
+        { index: 2, language: "eng", isText: false }
+      ]
+      assert_equal [ nil, false ], select(streams, { subtitleOff: true })
+    end
+
+    test "auto-picks text subtitle when both text and bitmap exist" do
+      streams = [
+        { index: 2, language: "eng", isText: false },
+        { index: 3, language: "eng", isText: true }
+      ]
+      assert_equal [ 3, false ], select(streams)
+    end
+
+    test "honors saved bitmap preference when language matches" do
+      streams = [
+        { index: 4, language: "eng", isText: false }
+      ]
+      assert_equal [ 4, true ], select(streams, { subtitleLanguage: "eng" })
+    end
+
+    test "saved text preference wins over bitmap of same language" do
+      streams = [
+        { index: 5, language: "eng", isText: false },
+        { index: 6, language: "eng", isText: true }
+      ]
+      assert_equal [ 6, false ], select(streams, { subtitleLanguage: "eng" })
+    end
+
+    test "saved language with only bitmap streams selects bitmap" do
+      streams = [
+        { index: 7, language: "fre", isText: false }
+      ]
+      assert_equal [ 7, true ], select(streams, { subtitleLanguage: "fre" })
+    end
+  end
 end
