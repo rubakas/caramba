@@ -291,6 +291,9 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
 // directory (usually 404 for not-yet-produced segments, which hls.js retries
 // cleanly).
 async function start(filePath, seekTime = 0, opts = {}) {
+  if (process.env.CARAMBA_TEST_INJECT_FAIL === '1') {
+    throw new Error('synthetic-test-failure')
+  }
   const probeResult = opts.probeResult || await probe(filePath)
   const forceTranscode = !!opts.forceTranscode
   const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex, forceTranscode)

@@ -31,12 +31,24 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
   // Active playback session ID (set by startPlayback, cleared by stopPlayback)
   let activeSessionId = null
 
+  function buildHeaders(extra = {}) {
+    const headers = { ...extra }
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.getItem('__caramba_test_run__') === '1') {
+        headers['X-Test-Run'] = '1'
+      }
+    } catch {}
+    return headers
+  }
+
   async function request(path, opts = {}) {
     const url = `${base}${path}`
     const config = { ...opts }
     if (config.body && typeof config.body === 'object') {
-      config.headers = { 'Content-Type': 'application/json', ...config.headers }
+      config.headers = buildHeaders({ 'Content-Type': 'application/json', ...config.headers })
       config.body = JSON.stringify(config.body)
+    } else {
+      config.headers = buildHeaders(config.headers)
     }
     const res = await fetch(url, config)
     if (!res.ok) {

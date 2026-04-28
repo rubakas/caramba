@@ -1,0 +1,15 @@
+{
+  "name": "@caramba/tests",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:web": "playwright test --project=web",
+    "test:electron": "playwright test --project=electron",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:playback": "playwright test --grep @playback"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

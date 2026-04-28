@@ -224,6 +224,14 @@ export default function VideoPlayer() {
         fragLoadingRetryDelay: 500,
       })
       hlsRef.current = hls
+
+      const isTestOrDev = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV) ||
+        (typeof localStorage !== 'undefined' && localStorage.getItem('__caramba_test_run__') === '1')
+      if (isTestOrDev && typeof window !== 'undefined') {
+        window.__caramba_hls__ = hls
+        window.__caramba_hls_errors__ = []
+      }
+
       hls.loadSource(manifestUrl)
       hls.attachMedia(video)
 
@@ -236,6 +244,14 @@ export default function VideoPlayer() {
       })
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (typeof window !== 'undefined' && Array.isArray(window.__caramba_hls_errors__)) {
+          window.__caramba_hls_errors__.push({
+            fatal: !!data.fatal,
+            type: data.type,
+            details: data.details,
+            ts: Date.now(),
+          })
+        }
         if (!data.fatal) {
           console.log('[Player] hls.js non-fatal:', data.type, data.details)
           return
