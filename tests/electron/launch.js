@@ -5,13 +5,13 @@ const { _electron: electron } = require('@playwright/test')
 
 const DESKTOP_DIR = path.resolve(__dirname, '..', '..', 'desktop')
 
-async function launchHybrid({ apiBase = 'http://localhost:3001', viteDevUrl = 'http://localhost:5173' } = {}) {
+async function launchHybrid({ apiBase = 'http://localhost:3001', viteDevUrl = 'http://localhost:5173', localPlayback = true } = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caramba-test-'))
   const storageDir = path.join(tempDir, 'storage')
   fs.mkdirSync(storageDir, { recursive: true })
   fs.writeFileSync(
     path.join(storageDir, 'api_config.json'),
-    JSON.stringify({ enabled: true, server_url: apiBase, local_playback: true }, null, 2),
+    JSON.stringify({ enabled: true, server_url: apiBase, local_playback: localPlayback }, null, 2),
   )
 
   const mainLog = []

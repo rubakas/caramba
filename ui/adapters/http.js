@@ -173,6 +173,14 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     openInVlc: noopAsync,
     openInDefault: noopAsync,
 
+    // libVLC library control (card #60) — no-ops in pure HTTP mode
+    vlcStatus: noopAsync,
+    vlcPause: noopAsync,
+    vlcResume: noopAsync,
+    vlcStop: noopAsync,
+    vlcSeek: noopAsync,
+    vlcSetVolume: noopAsync,
+
     // Downloads — no-ops
     downloadEpisode: noopAsync,
     deleteDownloadEpisode: noopAsync,
@@ -265,4 +273,5 @@ export const httpCapabilities = {
   hasNowPlaying: false,
   hasSettings: false,
   canAdmin: true,
+  hasVlcLibrary: false,
 }

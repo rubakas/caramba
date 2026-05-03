@@ -87,15 +87,27 @@ class Api::PlaybackController < Api::BaseController
 
     session[:playback_session_id] = session_id
 
-    hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8"
+    is_direct_play = result[:strategy] == :direct_play
+    stream_url =
+      if is_direct_play
+        "#{api_base_url}/api/playback/file/#{session_id}"
+      else
+        "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8"
+      end
     subtitle_url = subtitle_stream_index && !is_bitmap ? "#{api_base_url}/api/playback/subtitles?session=#{session_id}" : nil
 
     render json: {
-      hlsUrl: hls_url,
+      # `hlsUrl` historically named the manifest URL; for direct_play it's
+      # actually a file URL. The renderer reads strategy and routes the
+      # element accordingly.
+      hlsUrl: stream_url,
+      streamUrl: stream_url,
       sessionId: session_id,
       duration: info[:duration],
       startTime: start_time,
-      seekBase: start_time,
+      # direct_play: <video>.currentTime is absolute, so seekBase is 0.
+      # For ffmpeg-fed strategies seekBase tracks the -ss offset.
+      seekBase: is_direct_play ? 0 : start_time,
       subtitleUrl: subtitle_url,
       video: info[:video],
       audioStreams: info[:audioStreams],
@@ -270,6 +282,32 @@ class Api::PlaybackController < Api::BaseController
     render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
   rescue => e
     render json: { error: e.message }, status: :internal_server_error
+  end
+
+  # ── direct_play endpoint ────────────────────────────────────────────
+  #
+  # GET /api/playback/file/:session_id
+  # Serves the source file as-is for sessions whose strategy resolved to
+  # :direct_play (card #55). Range support is delegated to send_file +
+  # ActionDispatch's range middleware so the browser <video> can seek by
+  # byte without us segmenting anything.
+  def file
+    session_id = params[:session_id]
+    file_path = TranscoderService.direct_play_file_path(session_id)
+    return head(:not_found) unless file_path
+    return head(:not_found) unless File.exist?(file_path)
+
+    ext = File.extname(file_path).downcase
+    content_type =
+      case ext
+      when ".mp4", ".m4v" then "video/mp4"
+      when ".mov"         then "video/quicktime"
+      else                     "video/mp4"
+      end
+
+    response.headers["Accept-Ranges"] = "bytes"
+    response.headers["Cache-Control"] = "no-store"
+    send_file file_path, type: content_type, disposition: "inline"
   end
 
   # ── HLS endpoints ──────────────────────────────────────────────────

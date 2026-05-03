@@ -1,12 +1,14 @@
 // Desktop transcoder: ffmpeg → HLS (CMAF fmp4 segments).
-// Mirrors server/app/services/transcoder_service.rb: three strategies
-//   direct_play     — H.264 + AAC source, `-c copy`, zero encode CPU
-//   audio_transcode — H.264 + non-AAC audio, copy video, encode audio
-//   full_transcode  — HEVC or other, VideoToolbox H.264 encode
+// Mirrors server/app/services/transcoder_service.rb: four strategies
+//   direct_play     — file is already browser-playable; skip ffmpeg entirely
+//   direct_stream   — codecs OK, container needs remuxing; ffmpeg `-c copy` → fMP4
+//   audio_transcode — video OK, non-AAC audio; copy video, encode audio
+//   full_transcode  — re-encode video (VideoToolbox H.264)
 //
-// Output goes to a session temp directory. The stream:// protocol
-// handler (main.js) serves the playlist, init segment, and media
-// segments from that directory.
+// Card #55: the direct_play tier means no transcoder process at all — the
+// renderer pulls the file via the stream:// protocol with Range requests.
+// Output for the other three goes to a session temp directory; the stream://
+// handler in main.js serves the playlist, init segment, and media segments.
 
 const { spawn, execSync } = require('child_process')
 const path = require('path')
@@ -136,9 +138,13 @@ async function probe(filePath) {
         const audioStreams = data.streams?.filter(s => s.codec_type === 'audio') || []
         const subtitleStreams = data.streams?.filter(s => s.codec_type === 'subtitle') || []
         const duration = parseFloat(data.format?.duration) || 0
+        // ffprobe's format_name is comma-separated (e.g. "mov,mp4,m4a,3gp,3g2,mj2"),
+        // representing the demuxer family. Used by the direct_play check below.
+        const formatName = (data.format?.format_name || '').toLowerCase()
 
         resolve({
           duration,
+          formatName,
           video: videoStream ? {
             codec: videoStream.codec_name,
             width: videoStream.width,
@@ -176,24 +182,68 @@ async function probe(filePath) {
 // list must be re-encoded to H.264.
 const DIRECT_PLAY_VIDEO_CODECS = new Set(['h264', 'hevc', 'h265'])
 
-// One of 'direct_play' | 'audio_transcode' | 'full_transcode'.
+// Container families a Chromium <video> can demux directly. ffprobe's
+// format_name is comma-joined; we substring-match. MKV / TS / AVI / WebM*
+// require remuxing because the demuxer either isn't present or doesn't
+// support the codec combinations Caramba ships. (* WebM is fine for VP8/VP9
+// but those aren't in the direct-play codec list.)
+const DIRECT_PLAY_CONTAINERS = ['mp4', 'm4v', 'mov', 'mj2']
+
+function isDirectPlayContainer(formatName) {
+  if (!formatName) return false
+  return DIRECT_PLAY_CONTAINERS.some(c => formatName.includes(c))
+}
+
+// 10-bit pixel formats — Chromium MSE on Electron 33 / macOS plays HEVC
+// Main-10 (4K HDR) inconsistently: segments arrive but the decoder produces
+// no frames, so the player stalls with bufferStalledError even though the
+// buffer has data. Force full_transcode for these so the user gets H.264
+// 8-bit output we know plays smoothly.
+const TEN_BIT_PIX_FMTS = new Set([
+  'yuv420p10le', 'yuv420p10be',
+  'yuv422p10le', 'yuv422p10be',
+  'yuv444p10le', 'yuv444p10be',
+  'p010le', 'p010be',
+])
+
+// One of 'direct_play' | 'direct_stream' | 'audio_transcode' | 'full_transcode'.
+//
+// direct_play   — browser plays the file as-is; no ffmpeg.
+// direct_stream — codecs OK but container needs remuxing; ffmpeg `-c copy` → fMP4.
+// audio_transcode — video OK, audio re-encoded to AAC stereo.
+// full_transcode  — video re-encoded.
 function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex, forceTranscode) {
   if (burnSubtitleIndex != null) return 'full_transcode'
   if (forceTranscode) return 'full_transcode'
   const videoCodec = probeResult.video?.codec
   if (!DIRECT_PLAY_VIDEO_CODECS.has(videoCodec)) return 'full_transcode'
+  // 10-bit HEVC: Chromium MSE accepts the codec string but stalls on decode.
+  // Re-encode to 8-bit H.264 instead. This is the price of MSE compatibility.
+  if ((videoCodec === 'hevc' || videoCodec === 'h265') &&
+      TEN_BIT_PIX_FMTS.has(probeResult.video?.pix_fmt)) {
+    return 'full_transcode'
+  }
   const audio = probeResult.audioStreams.find(s => s.index === audioStreamIndex)
   const audioCodec = audio?.codec
-  return audioCodec === 'aac' ? 'direct_play' : 'audio_transcode'
+  if (audioCodec !== 'aac') return 'audio_transcode'
+  // Codecs are compatible. If the container is also browser-friendly,
+  // hand the file to <video> directly — no ffmpeg in the loop. Otherwise
+  // remux into fMP4 (DirectStream).
+  return isDirectPlayContainer(probeResult.formatName) ? 'direct_play' : 'direct_stream'
 }
 
 // Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
 // meaningfully higher bitrate than x264 to reach the same perceptual quality.
+//
+// 4K sources are downscaled to 1080p before encoding. VideoToolbox H.264
+// at 4K + 10-bit HDR input runs at ~0.7×–1× realtime, which leaves no
+// headroom — the player starts before the encoder can build a buffer and
+// stalls. Downscaling to 1080p brings encoding speed to >2× realtime and
+// avoids stalls. Higher fidelity than that requires libmpv (card #54).
 function fullTranscodeVideoArgs(probeResult) {
   const width = probeResult.video?.width || 0
   let bitrate, maxrate, bufsize
-  if (width >= 3000)      { [bitrate, maxrate, bufsize] = ['20M', '30M', '60M'] }  // 4K
-  else if (width >= 1800) { [bitrate, maxrate, bufsize] = ['12M', '18M', '36M'] }  // 1080p
+  if (width >= 1800)      { [bitrate, maxrate, bufsize] = ['12M', '18M', '36M'] }  // ≥1080p (incl. downscaled 4K)
   else if (width >= 1100) { [bitrate, maxrate, bufsize] = ['8M',  '12M', '24M'] }  // 720p
   else                    { [bitrate, maxrate, bufsize] = ['4M',  '6M',  '12M'] }  // SD
 
@@ -206,6 +256,12 @@ function fullTranscodeVideoArgs(probeResult) {
     '-pix_fmt', 'yuv420p',
     '-g', '48',
   ]
+}
+
+// Whether the source needs to be downscaled to 1080p before encoding.
+// True for any source > 1920 wide (4K, ultra-wide cinema rips, etc.).
+function needsDownscale(probeResult) {
+  return (probeResult.video?.width || 0) > 1920
 }
 
 // The child reads the input via fd 3 (inherited stdio slot). The path
@@ -245,7 +301,7 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
   }
 
   switch (strategy) {
-    case 'direct_play':
+    case 'direct_stream':
       args.push('-c', 'copy')
       break
     case 'audio_transcode':
@@ -256,7 +312,16 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
       args.push(...fullTranscodeVideoArgs(probeResult))
       args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
       break
+    // 'direct_play' is unreachable: start() short-circuits before we
+    // ever build args — there's no ffmpeg invocation for it.
   }
+
+  // (We tested `-tag:v hvc1` for HEVC copy paths — counter-intuitively, that
+  // retag broke playback on Electron 33 / Chromium 130 / macOS for HEVC
+  // Main-10 sources: readyState went to 4 with currentTime stuck. ffmpeg's
+  // default `hev1` tag plays correctly on this stack via VideoToolbox.
+  // The Playwright `@smoke electron plays first movie` test pins this — see
+  // tests/specs/electron/smoke.playback.spec.js.)
 
   args.push(
     '-f', 'hls',
@@ -297,6 +362,26 @@ async function start(filePath, seekTime = 0, opts = {}) {
   const probeResult = opts.probeResult || await probe(filePath)
   const forceTranscode = !!opts.forceTranscode
   const strategy = transcodeStrategy(probeResult, opts.audioStreamIndex, opts.burnSubtitleIndex, forceTranscode)
+
+  // direct_play: no ffmpeg in the loop. Tear down any prior transcoder
+  // session, record this file as the active source for the stream://
+  // protocol's direct-serve branch, and return early. The renderer will
+  // load the file via stream://direct?... with byte-range requests handled
+  // by main.js — no segmenter, no encoder, no HLS overhead.
+  if (strategy === 'direct_play') {
+    const oldProc = activeProcess
+    const oldDir = activeDir
+    activeProcess = null
+    activeSessionId = `direct-${Date.now().toString(36)}`
+    activeDir = null
+    activeFilePath = filePath
+    activeStartTime = seekTime
+    activeForceTranscode = false
+    if (oldProc) { try { oldProc.kill('SIGKILL') } catch {} }
+    if (oldDir) wipeDir(oldDir)
+    console.log(`Transcoder: direct_play ${path.basename(filePath)} (no ffmpeg)`)
+    return { sessionId: activeSessionId, strategy }
+  }
 
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   const newDir = sessionDir(sessionId)
@@ -413,7 +498,15 @@ function getActiveSessionId() { return activeSessionId }
 function getActiveFilePath() { return activeFilePath }
 function getActiveStartTime() { return activeStartTime }
 function getActiveForceTranscode() { return activeForceTranscode }
-function isActive() { return activeProcess !== null && !activeProcess.killed }
+// Active when an ffmpeg process is running OR when we're in direct_play
+// mode (no process, but a file is being served via stream://direct).
+function isActive() {
+  if (activeProcess !== null && !activeProcess.killed) return true
+  return isDirectPlay()
+}
+function isDirectPlay() {
+  return activeProcess === null && activeDir === null && !!activeFilePath
+}
 
 // Whitelist of allowed asset names (prevents directory traversal).
 function isValidAssetName(assetName) {
@@ -439,11 +532,14 @@ module.exports = {
   stop,
   extractSubtitles,
   transcodeStrategy,
+  // Exported only for unit tests — never call from production code.
+  _buildArgs: buildArgs,
   getActiveSessionDir,
   getActiveSessionId,
   getActiveFilePath,
   getActiveStartTime,
   getActiveForceTranscode,
   isActive,
+  isDirectPlay,
   resolveAsset,
 }

@@ -2,6 +2,7 @@ const Sentry = require('./sentry')
 const { app, BrowserWindow, shell, protocol, net, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { Readable } = require('stream')
 const db = require('./db')
 const dbSync = require('./services/db-sync')
 const transcoder = require('./services/transcoder')
@@ -88,6 +89,79 @@ function shiftVtt(vtt, offset) {
   }
 
   return result.join('\n')
+}
+
+// Content-type guess for the small set of containers we mark as direct-play
+// in the transcoder. Anything outside this set goes through ffmpeg → fMP4.
+const DIRECT_PLAY_CONTENT_TYPE = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+}
+
+// Serve the active direct-play file with HTTP Range support so the
+// renderer's <video> element can seek by byte. Returns 416 on out-of-range
+// requests, 206 for partial content, 200 for full reads.
+async function serveDirectPlay(request) {
+  if (!transcoder.isDirectPlay()) {
+    return new Response('No direct-play session', { status: 404 })
+  }
+  const filePath = transcoder.getActiveFilePath()
+  if (!filePath || !fs.existsSync(filePath)) {
+    return new Response('Source file gone', { status: 404 })
+  }
+
+  const stat = fs.statSync(filePath)
+  const total = stat.size
+  const ext = path.extname(filePath).toLowerCase()
+  const contentType = DIRECT_PLAY_CONTENT_TYPE[ext] || 'video/mp4'
+
+  const range = request.headers.get('Range')
+  if (!range) {
+    const stream = Readable.toWeb(fs.createReadStream(filePath))
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(total),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
+
+  const match = /bytes=(\d*)-(\d*)/.exec(range)
+  if (!match) {
+    return new Response('Bad Range', { status: 400 })
+  }
+  let start = match[1] === '' ? null : parseInt(match[1], 10)
+  let end = match[2] === '' ? null : parseInt(match[2], 10)
+  if (start === null && end !== null) {
+    // suffix range: last `end` bytes
+    start = Math.max(0, total - end)
+    end = total - 1
+  } else if (start !== null && end === null) {
+    end = total - 1
+  }
+  if (start === null || end === null || start > end || start >= total) {
+    return new Response('Range Not Satisfiable', {
+      status: 416,
+      headers: { 'Content-Range': `bytes */${total}` },
+    })
+  }
+  if (end >= total) end = total - 1
+
+  const stream = Readable.toWeb(fs.createReadStream(filePath, { start, end }))
+  return new Response(stream, {
+    status: 206,
+    headers: {
+      'Content-Type': contentType,
+      'Content-Range': `bytes ${start}-${end}/${total}`,
+      'Content-Length': String(end - start + 1),
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    },
+  })
 }
 
 let mainWindow = null
@@ -191,16 +265,25 @@ app.whenReady().then(() => {
   // Electron versions disagree on pathname parsing. Pull the last path
   // component off the raw URL directly to stay safe.
   protocol.handle('stream', async (request) => {
+    // direct_play branch: stream://direct/<anything>?... — serve the
+    // currently-active source file as-is with Range support. The
+    // renderer's <video> element drives seeks via byte ranges.
+    if (/^stream:\/\/direct(\/|\?|$)/i.test(request.url)) {
+      return serveDirectPlay(request)
+    }
+
     const pathPart = request.url.replace(/^stream:\/\/[^/]*\/?/, '').split('?')[0]
     const assetName = pathPart || 'playlist.m3u8'
 
     const resolved = transcoder.resolveAsset(assetName)
     if (resolved.status === 'bad_name') {
+      console.warn(`[stream://] 400 bad asset name: ${assetName}`)
       return new Response('Bad asset', { status: 400 })
     }
     if (resolved.status === 'no_session') {
       // No active transcoder yet (e.g. mid-seek before the new session has
       // been installed). Return 404 so hls.js retries instead of giving up.
+      console.warn(`[stream://] 404 no_session for ${assetName} — activeDir is null. Likely strategy resolved to direct_play but the renderer requested an HLS asset.`)
       return new Response('No active session', { status: 404 })
     }
     const assetPath = resolved.path
@@ -218,6 +301,7 @@ app.whenReady().then(() => {
     }
 
     if (!fs.existsSync(assetPath)) {
+      console.warn(`[stream://] 404 ${assetName} not written by ffmpeg within ${timeoutMs}ms (path=${assetPath}). Most likely ffmpeg failed to start — check the Transcoder: lines above.`)
       return new Response('Not ready', { status: 404 })
     }
 

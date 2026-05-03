@@ -53,6 +53,9 @@ importers:
       bonjour-service:
         specifier: ^1.3.0
         version: 1.3.0
+      node-vlc-http:
+        specifier: ^1.2.0
+        version: 1.2.0
     devDependencies:
       '@electron/rebuild':
         specifier: ^4.0.3
@@ -2530,6 +2533,9 @@ packages:
 
   node-releases@2.0.37:
     resolution: {integrity: sha512-1h5gKZCF+pO/o3Iqt5Jp7wc9rH3eJJ0+nh/CIoiRwjRxde/hAHyLPXYN4V3CqKAbiZPSeJFSWHmJsbkicta0Eg==}
+
+  node-vlc-http@1.2.0:
+    resolution: {integrity: sha512-lThjWN/yN4YlWqMYEiZ4iUHtrxczDMdTbQzCp1MAxaNxAtViK7R2yzW6D5dhtkZzrlGz6lbKGcdtciD0TFRpuQ==}
 
   nopt@6.0.0:
     resolution: {integrity: sha512-ZwLpbTgdhuZUnZzjd7nb1ZV+4DoiC6/sfiVKok72ym/4Tlf+DFdlHYmT2JPmcNNWV6Pi3SDf1kT+A4r9RTuT9g==}
@@ -6065,6 +6071,8 @@ snapshots:
       - supports-color
 
   node-releases@2.0.37: {}
+
+  node-vlc-http@1.2.0: {}
 
   nopt@6.0.0:
     dependencies:
