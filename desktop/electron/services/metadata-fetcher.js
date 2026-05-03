@@ -17,36 +17,56 @@ function stripHtml(html) {
   return text.trim() || null
 }
 
-async function search(query) {
-  const url = `${BASE_URL}/singlesearch/shows?q=${encodeURIComponent(query)}&embed=episodes`
+async function getJson(url) {
   try {
     const res = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     })
-    // Handle rate limiting (TVMaze: 20 calls/10s)
     if (res.status === 429) {
       const retryAfter = parseInt(res.headers.get('retry-after') || '10', 10)
       console.warn(`MetadataFetcher: rate limited, retrying after ${retryAfter}s`)
       await new Promise(r => setTimeout(r, retryAfter * 1000))
-      return search(query) // single retry
+      return getJson(url) // single retry
     }
     if (!res.ok) return null
-    const data = await res.json()
-    // Basic response validation — expect an object with an id
-    if (!data || typeof data !== 'object' || !data.id) return null
-    return data
+    return await res.json()
   } catch (e) {
-    console.warn(`MetadataFetcher: search failed for '${query}' — ${e.message}`)
+    console.warn(`MetadataFetcher: HTTP failed for ${url} — ${e.message}`)
     return null
   }
 }
 
-async function fetchForShow(showId) {
+async function search(query) {
+  const data = await getJson(`${BASE_URL}/singlesearch/shows?q=${encodeURIComponent(query)}&embed=episodes`)
+  if (!data || typeof data !== 'object' || !data.id) return null
+  return data
+}
+
+// Direct IMDb-id lookup. Returns the full show payload with episodes embedded,
+// or null if no match. Best when the id was extracted from a [imdbid-tt…]
+// filename marker or NFO sidecar.
+async function fetchByImdbId(imdbId) {
+  if (!imdbId) return null
+  const lookup = await getJson(`${BASE_URL}/lookup/shows?imdb=${encodeURIComponent(imdbId)}`)
+  if (!lookup || !lookup.id) return null
+  const data = await getJson(`${BASE_URL}/shows/${lookup.id}?embed=episodes`)
+  if (!data || !data.id) return null
+  return data
+}
+
+async function fetchForShow(showId, opts = {}) {
   const s = db.shows.findById(showId)
   if (!s) return false
 
-  const data = await search(s.name)
+  // Prefer direct IMDb lookup when known — single exact match, no
+  // search fuzziness. Caller (media-scanner.js) seeds opts.imdbId from
+  // NFO sidecars and [imdbid-tt…] filename markers.
+  let data = null
+  if (opts.imdbId) {
+    data = await fetchByImdbId(opts.imdbId)
+  }
+  data ||= await search(s.name)
   if (!data) return false
 
   // Update show metadata
@@ -99,4 +119,4 @@ async function fetchForShow(showId) {
   return true
 }
 
-module.exports = { fetchForShow, search }
+module.exports = { fetchForShow, fetchByImdbId, search }

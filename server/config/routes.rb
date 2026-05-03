@@ -64,6 +64,7 @@ Rails.application.routes.draw do
           post :confirm
           post :ignore
           post :research
+          post :switch_kind
         end
       end
       post "scan", to: "scans#create"

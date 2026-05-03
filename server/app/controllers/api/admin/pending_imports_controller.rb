@@ -1,5 +1,5 @@
 class Api::Admin::PendingImportsController < Api::Admin::BaseController
-  before_action :set_pending_import, only: [ :confirm, :ignore, :research ]
+  before_action :set_pending_import, only: [ :confirm, :ignore, :research, :switch_kind ]
 
   def index
     scope = PendingImport.all
@@ -33,6 +33,21 @@ class Api::Admin::PendingImportsController < Api::Admin::BaseController
     candidates = LibraryWatcherService.candidates_for(@pending_import)
     @pending_import.update!(candidates: candidates, status: "pending", error: nil)
     render json: serialize(@pending_import)
+  end
+
+  # Flip a misclassified import between "shows" and "movies" and re-fetch
+  # candidates from the right service. Used when the same root is
+  # registered as both kinds and the show scan claimed a movie folder
+  # (or vice-versa).
+  def switch_kind
+    new_kind = (params[:kind] || params[:newKind]).to_s
+    if LibraryWatcherService.switch_kind(@pending_import, new_kind)
+      render json: serialize(@pending_import.reload)
+    else
+      render json: { error: "Cannot switch to '#{new_kind}'" }, status: :unprocessable_entity
+    end
+  rescue ActiveRecord::RecordInvalid => e
+    render json: { error: e.message }, status: :unprocessable_entity
   end
 
   private

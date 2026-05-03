@@ -99,6 +99,7 @@ function migrate() {
   db.exec(schema)
   migrateWatchlist()
   migratePlaybackPreferences()
+  migrateTechMetadata()
 }
 
 function tableExists(name) {
@@ -189,6 +190,15 @@ function migrateWatchlist() {
   // Create partial unique indexes (safe — IF NOT EXISTS)
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_tvmaze ON watchlist(tvmaze_id) WHERE tvmaze_id IS NOT NULL")
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_imdb ON watchlist(imdb_id) WHERE imdb_id IS NOT NULL")
+}
+
+function migrateTechMetadata() {
+  if (!columnExists('episodes', 'tech_metadata')) {
+    db.exec("ALTER TABLE episodes ADD COLUMN tech_metadata TEXT")
+  }
+  if (!columnExists('movies', 'tech_metadata')) {
+    db.exec("ALTER TABLE movies ADD COLUMN tech_metadata TEXT")
+  }
 }
 
 function migratePlaybackPreferences() {

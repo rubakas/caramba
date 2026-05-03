@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_19_100005) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_03_100001) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -65,6 +65,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100005) do
     t.integer "runtime"
     t.integer "season_number"
     t.integer "show_id", null: false
+    t.text "tech_metadata"
     t.string "title"
     t.integer "tvmaze_id"
     t.datetime "updated_at", null: false
@@ -97,6 +98,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_19_100005) do
     t.float "rating"
     t.integer "runtime"
     t.string "slug", null: false
+    t.text "tech_metadata"
     t.string "title", null: false
     t.datetime "updated_at", null: false
     t.integer "watched", default: 0

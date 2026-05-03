@@ -70,7 +70,10 @@ class Api::PlaybackController < Api::BaseController
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
     return render(json: { error: "File not found: #{file_path}" }, status: :unprocessable_entity) unless File.exist?(file_path)
 
-    info = TranscoderService.probe(file_path)
+    # Prefer cached probe data on the Episode/Movie row (written at scan
+    # time by TechProbeJob). Falls back to a live ffprobe when missing.
+    record = find_record_for(file_path)
+    info = (record && TechProbeService.probe_for(record)) || TranscoderService.probe(file_path)
 
     audio_stream_index = select_audio_track(info[:audioStreams], prefs)
     subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs)
@@ -374,6 +377,13 @@ class Api::PlaybackController < Api::BaseController
   end
 
   private
+
+  # Locate the Episode or Movie row backing a given file path, so the
+  # cached tech_metadata can be reused on playback start. nil when the
+  # file isn't tracked yet (e.g. ad-hoc playback of a path).
+  def find_record_for(file_path)
+    Episode.find_by(file_path: file_path) || Movie.find_by(file_path: file_path)
+  end
 
   def find_preference
     if params[:type] == "episode" && params[:show_id].present?

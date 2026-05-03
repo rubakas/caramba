@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom'
 
 export default function MatchCandidatePicker({ api, pendingImport, onChange, onError }) {
   const navigate = useNavigate()
-  const [busy, setBusy] = useState(null) // 'confirm' | 'ignore' | 'research' | null
+  const [busy, setBusy] = useState(null) // 'confirm' | 'ignore' | 'research' | 'switch' | null
+  const otherKind = pendingImport.kind === 'shows' ? 'movies' : 'shows'
+  const switchLabel = `Search as ${otherKind === 'movies' ? 'movie' : 'show'} instead`
 
   const candidates = pendingImport.candidates || []
 
@@ -48,6 +50,18 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
     }
   }
 
+  const handleSwitchKind = async () => {
+    setBusy('switch')
+    try {
+      await api.switchPendingImportKind(pendingImport.id, otherKind)
+      onChange()
+    } catch (err) {
+      onError(err.message || 'Failed to switch kind')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <article
       style={{
@@ -66,6 +80,9 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
           {pendingImport.kind} · {pendingImport.folderPath}
         </span>
         <div style={{ flex: 1 }} />
+        <button type="button" className="topnav-btn" onClick={handleSwitchKind} disabled={!!busy}>
+          {busy === 'switch' ? 'Switching…' : switchLabel}
+        </button>
         <button type="button" className="topnav-btn" onClick={handleResearch} disabled={!!busy}>
           {busy === 'research' ? 'Searching…' : 'Re-search'}
         </button>

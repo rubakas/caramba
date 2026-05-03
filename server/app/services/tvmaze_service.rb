@@ -7,6 +7,7 @@
 #   show_details(tvmaze_id)          — discover detail modal, returns { show:, episodes:, seasons: }
 #   fetch_for_show(show)             — updates Show + Episode records from TVMaze data (by name)
 #   fetch_by_tvmaze_id(show, id)     — updates Show + Episode records from TVMaze data (by id)
+#   fetch_by_imdb_id(show, imdb_id)  — direct lookup by IMDb id, no fuzzy match
 
 require "net/http"
 require "json"
@@ -79,6 +80,25 @@ class TvmazeService
       false
     end
 
+    # Direct IMDb-id lookup. TVmaze's /lookup/shows endpoint returns the
+    # exact match without name-search fuzziness — best when the id was
+    # extracted from a [imdbid-tt…] filename marker or NFO sidecar.
+    def fetch_by_imdb_id(show, imdb_id)
+      lookup_url = "#{BASE_URL}/lookup/shows?imdb=#{URI.encode_www_form_component(imdb_id)}"
+      lookup = get_json(lookup_url)
+      return false unless lookup.is_a?(Hash) && lookup["id"]
+
+      # Lookup returns the show without embedded episodes — fetch the
+      # full record so apply_show_data can match local episodes.
+      url = "#{BASE_URL}/shows/#{lookup["id"]}?embed=episodes"
+      data = get_json(url)
+      return false unless data.is_a?(Hash) && data["id"]
+      apply_show_data(show, data)
+    rescue => e
+      Rails.logger.warn("TvmazeService: fetch_by_imdb_id failed for imdb_id=#{imdb_id} — #{e.message}")
+      false
+    end
+
     private
 
     def apply_show_data(show, data)
@@ -112,8 +132,15 @@ class TvmazeService
         local_episodes = show.episodes.to_a
         matched = 0
 
+        # Per-episode fallback is opt-in: every miss costs an HTTP call,
+        # which is a poor default for shows with sparse local episodes.
+        # Set Thread.current[:tvmaze_episode_fallback] = true to enable
+        # for a specific scan (e.g. anime absolute-numbering refresh).
+        episode_fallback = Thread.current[:tvmaze_episode_fallback] == true
+
         local_episodes.each do |episode|
           api_ep = api_lookup[episode.code]
+          api_ep ||= fetch_episode_by_number(data["id"], episode.season_number, episode.episode_number) if episode_fallback
           next unless api_ep
 
           attrs = {}
@@ -136,6 +163,19 @@ class TvmazeService
       true
     end
 
+
+    # Per-episode fallback for the rare case where the embed=episodes
+    # list doesn't cover a local episode (e.g. anime absolute numbering
+    # vs. season+episode metadata). Cheap, exact, no key.
+    def fetch_episode_by_number(tvmaze_id, season, number)
+      return nil if season.nil? || number.nil?
+      url = "#{BASE_URL}/shows/#{tvmaze_id}/episodebynumber?season=#{season}&number=#{number}"
+      data = get_json(url)
+      data.is_a?(Hash) && data["id"] ? data : nil
+    rescue => e
+      Rails.logger.debug("TvmazeService: episodebynumber fallback failed s#{season}e#{number} — #{e.message}")
+      nil
+    end
 
     # Map a TVMaze show object to the shape expected by the React UI (matches discover.js mapShow)
     def map_show(show)

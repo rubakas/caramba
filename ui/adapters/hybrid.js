@@ -404,6 +404,7 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     confirmPendingImport: http.confirmPendingImport,
     ignorePendingImport: http.ignorePendingImport,
     researchPendingImport: http.researchPendingImport,
+    switchPendingImportKind: http.switchPendingImportKind,
     triggerAdminScan: http.triggerAdminScan,
   }
 

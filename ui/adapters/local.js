@@ -100,6 +100,7 @@ export function createLocalAdapter() {
     confirmPendingImport: async () => null,
     ignorePendingImport: async () => null,
     researchPendingImport: async () => null,
+    switchPendingImportKind: async () => null,
     triggerAdminScan: async () => null,
   }
 }

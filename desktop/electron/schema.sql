@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS episodes (
   watched INTEGER NOT NULL DEFAULT 0,
   progress_seconds INTEGER NOT NULL DEFAULT 0,
   duration_seconds INTEGER NOT NULL DEFAULT 0,
+  tech_metadata TEXT,
   last_watched_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS movies (
   watched INTEGER DEFAULT 0,
   progress_seconds INTEGER NOT NULL DEFAULT 0,
   duration_seconds INTEGER NOT NULL DEFAULT 0,
+  tech_metadata TEXT,
   last_watched_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
