@@ -259,6 +259,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
     confirmPendingImport: (id, externalId) => post(`/api/admin/pending_imports/${id}/confirm`, { externalId }),
     ignorePendingImport: (id) => post(`/api/admin/pending_imports/${id}/ignore`),
     researchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/research`),
+    switchPendingImportKind: (id, kind) => post(`/api/admin/pending_imports/${id}/switch_kind`, { kind }),
     triggerAdminScan: () => post('/api/admin/scan'),
   }
 }

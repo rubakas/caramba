@@ -51,6 +51,68 @@ class LibraryWatcherService
       end
     end
 
+    # Flip a stuck PendingImport between shows and movies and re-fetch
+    # candidates. Used when the show/movie auto-classification was wrong
+    # (typically: same root registered as both kinds, shows scan claimed
+    # a movie folder first).
+    #
+    # When converting to movies and the folder_path is a directory, find
+    # the largest video file inside and use that as the new folder_path —
+    # Movie#file_path needs to point at the actual file for playback.
+    def switch_kind(pending_import, new_kind)
+      return false unless KIND_TO_HANDLERS.key?(new_kind)
+      return false if pending_import.kind == new_kind
+
+      attrs = { kind: new_kind, status: "pending", error: nil, candidates: [] }
+
+      case new_kind
+      when "movies"
+        path = pending_import.folder_path
+        if File.directory?(path)
+          main = main_video_in(path)
+          attrs[:folder_path] = main if main
+        end
+        target_path = attrs[:folder_path] || path
+        attrs[:parsed_name] = MovieParserService.name_from_filename(target_path)
+        year = MovieParserService.year_from_filename(target_path)
+        attrs[:parsed_year] = year&.to_i
+        query = year.present? ? "#{attrs[:parsed_name]} #{year}" : attrs[:parsed_name].to_s
+        attrs[:candidates] = imdb_candidates(query)
+      when "shows"
+        attrs[:parsed_name] = MediaScannerService.name_from_path(pending_import.folder_path)
+        attrs[:parsed_year] = nil
+        attrs[:candidates] = tvmaze_candidates(attrs[:parsed_name].to_s)
+      end
+
+      pending_import.update!(attrs)
+      true
+    end
+
+    KIND_TO_HANDLERS = { "shows" => true, "movies" => true }.freeze
+
+    # Pick the most likely "main" movie file from inside a directory:
+    # the largest video file that isn't an extras/sample.
+    def main_video_in(dir)
+      best = nil
+      best_size = 0
+      Dir.children(dir).each do |name|
+        next if name.start_with?(".")
+        full = File.join(dir, name)
+        next unless File.file?(full)
+        next unless FilenameParserService.video_file?(name)
+        next if FilenameParserService.extra_kind(full)
+
+        size = File.size?(full).to_i
+        if size > best_size
+          best = full
+          best_size = size
+        end
+      end
+      best
+    rescue SystemCallError
+      nil
+    end
+
     private
 
     def candidates_for_scan(media_folder)
@@ -87,6 +149,11 @@ class LibraryWatcherService
     end
 
     def build_show_import(media_folder, entry_path)
+      # When the same root is registered as both shows and movies (a common
+      # mixed-content setup), don't claim folders that are clearly movies —
+      # leave them for the movies scan to pick up.
+      return nil if movie_shaped_folder?(entry_path)
+
       name = MediaScannerService.name_from_path(entry_path)
       return nil if name.blank?
 
@@ -98,6 +165,30 @@ class LibraryWatcherService
         parsed_name: name,
         candidates: candidates
       )
+    end
+
+    # A folder looks like a movie when it has video files at the top level
+    # and no season subfolders (no "Season N", "S01", "specials", etc.).
+    # Multi-disc movies (CD1/CD2 etc.) are still movies — cap at 4 files
+    # to leave room for that and a few extras.
+    def movie_shaped_folder?(folder_path)
+      return false unless File.directory?(folder_path)
+
+      entries = Dir.children(folder_path).reject { |n| n.start_with?(".") }
+      has_season_subdir = entries.any? do |name|
+        full = File.join(folder_path, name)
+        File.directory?(full) && FilenameParserService.season_from_folder(name)
+      end
+      return false if has_season_subdir
+
+      video_files = entries.select do |name|
+        File.file?(File.join(folder_path, name)) && FilenameParserService.video_file?(name)
+      end
+      return false if video_files.empty?
+
+      video_files.size <= 4 && video_files.none? { |f| f =~ /S\d{1,2}E\d{1,3}/i }
+    rescue SystemCallError
+      false
     end
 
     def build_movie_import(media_folder, entry_path)
