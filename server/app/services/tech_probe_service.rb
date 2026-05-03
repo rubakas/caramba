@@ -33,6 +33,13 @@ class TechProbeService
     subviewer subviewer1 vplayer
   ].freeze
 
+  # Bump whenever the probe result shape changes in a way the consumers
+  # depend on. Cache rows tagged with an older version are treated as
+  # misses by `probe_for` and silently re-probed on next play. Lets us
+  # add fields (e.g. video.color_transfer for HDR detection) without
+  # having to manually re-scan the library.
+  CACHE_SCHEMA_VERSION = 2
+
   class << self
     # Live ffprobe call. Returns nil on failure (never raises).
     def probe(file_path)
@@ -61,7 +68,9 @@ class TechProbeService
       return nil unless file_path.present?
 
       cached = parse_cached(record)
-      if cached && cached["size_bytes"].to_i == safe_size(file_path)
+      if cached &&
+         cached["size_bytes"].to_i == safe_size(file_path) &&
+         cached["_schema_v"].to_i >= CACHE_SCHEMA_VERSION
         return symbolize(cached)
       end
 
@@ -116,7 +125,10 @@ class TechProbeService
           "width" => video_stream["width"],
           "height" => video_stream["height"],
           "profile" => video_stream["profile"],
-          "pix_fmt" => video_stream["pix_fmt"]
+          "pix_fmt" => video_stream["pix_fmt"],
+          "color_transfer" => video_stream["color_transfer"],
+          "color_primaries" => video_stream["color_primaries"],
+          "color_space" => video_stream["color_space"]
         },
         "audioStreams" => audio_streams.map { |s|
           {
@@ -137,7 +149,8 @@ class TechProbeService
           }
         },
         "has_bitmap_subtitle" => subtitle_streams.any? { |s| BITMAP_SUBTITLE_CODECS.include?(s["codec_name"]) },
-        "probed_at" => Time.current.iso8601
+        "probed_at" => Time.current.iso8601,
+        "_schema_v" => CACHE_SCHEMA_VERSION
       }
     end
 

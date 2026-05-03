@@ -290,10 +290,14 @@ app.whenReady().then(() => {
 
     const isPlaylist = assetName === 'playlist.m3u8'
 
-    // ffmpeg writes the playlist and segments on its own schedule. Give
-    // segments up to 4s to appear — longer than the 2s segment duration so
-    // we respond successfully even when encoding briefly lags behind playback.
-    const timeoutMs = isPlaylist ? 3000 : 4000
+    // ffmpeg writes the playlist and segments on its own schedule. The
+    // playlist takes longest on first start because ffmpeg has to read
+    // analyzeduration of input + warm up zscale/tonemap (HDR 4K sources)
+    // + finish the first GOP before flushing the manifest. Segments after
+    // the first arrive on the 6s segment cadence + ~2s encode lag at 1×
+    // realtime, so 10s gives headroom without making genuine failures
+    // hang too long.
+    const timeoutMs = isPlaylist ? 12000 : 10000
     const pollEveryMs = 150
     const started = Date.now()
     while (!fs.existsSync(assetPath) && Date.now() - started < timeoutMs) {

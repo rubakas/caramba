@@ -53,6 +53,7 @@ class TranscoderService
       audio_streams = (data["streams"] || []).select { |s| s["codec_type"] == "audio" }
       subtitle_streams = (data["streams"] || []).select { |s| s["codec_type"] == "subtitle" }
       duration = data.dig("format", "duration").to_f
+      bitrate = data.dig("format", "bit_rate")&.to_i
       # ffprobe joins compatible demuxer names with commas (e.g.
       # "mov,mp4,m4a,3gp,3g2,mj2"). Used by the direct_play strategy to
       # decide whether the browser can demux the source as-is.
@@ -67,12 +68,16 @@ class TranscoderService
       {
         duration: duration,
         formatName: format_name,
+        bitrate: bitrate,
         video: video_stream ? {
           codec: video_stream["codec_name"],
           width: video_stream["width"],
           height: video_stream["height"],
           profile: video_stream["profile"],
-          pix_fmt: video_stream["pix_fmt"]
+          pix_fmt: video_stream["pix_fmt"],
+          color_transfer: video_stream["color_transfer"],
+          color_primaries: video_stream["color_primaries"],
+          color_space: video_stream["color_space"]
         } : nil,
         audioStreams: audio_streams.map { |s|
           {
@@ -401,6 +406,28 @@ class TranscoderService
       p010le p010be
     ].freeze
 
+    # HDR transfer characteristics — sources tagged with these need an explicit
+    # PQ/HLG → linear → BT.709 SDR conversion. Without it, naive 8-bit output
+    # crushes mid-tones and produces visible banding on subtle gradients.
+    HDR_TRANSFERS = %w[smpte2084 arib-std-b67].freeze
+
+    # zscale + tonemap chain for HDR PQ/HLG → SDR BT.709. Requires libzimg
+    # (the `zscale` filter); homebrew ffmpeg without `--enable-libzimg`
+    # doesn't have it. Hable curve gives gentle highlight rolloff close to
+    # what Jellyfin's web client produces. The float intermediate (gbrpf32le)
+    # plus the final yuv420p conversion includes implicit dithering that
+    # eliminates the 10→8 bit banding.
+    HDR_TONEMAP_CHAIN =
+      "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709," \
+      "tonemap=tonemap=hable:desat=0," \
+      "zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+
+    # Output color metadata after tonemapping. Tells the encoder (and the
+    # browser decoder) that the stream is BT.709 SDR.
+    SDR_OUTPUT_COLOR_FLAGS = %w[
+      -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv
+    ].freeze
+
     def allowed_direct_play_codecs(codec_support)
       return DEFAULT_CLIENT_DIRECT_PLAY_CODECS if codec_support.nil?
       allowed = []
@@ -408,6 +435,37 @@ class TranscoderService
       allowed += %w[hevc h265] if truthy?(codec_support[:hevc]) || truthy?(codec_support["hevc"])
       # If client reported nothing, assume baseline H.264 (universal).
       allowed.empty? ? %w[h264] : allowed
+    end
+
+    def hevc10_supported?(codec_support)
+      return false if codec_support.nil?
+      truthy?(codec_support[:hevc10]) || truthy?(codec_support["hevc10"])
+    end
+
+    # Map ffprobe `codec_name` (lowercase) → key in codec_support[:audio].
+    # ffprobe uses "ac3", "eac3", "mp3"; MSE uses "ac-3", "ec-3", "mp3".
+    AUDIO_CODEC_PROBE_KEY = {
+      "aac"  => :aac,
+      "ac3"  => :ac3,
+      "eac3" => :eac3,
+      "flac" => :flac,
+      "mp3"  => :mp3,
+      "opus" => :opus
+    }.freeze
+
+    # Whether the client can decode this audio codec in an MSE fMP4 segment.
+    # AAC is unconditionally allowed (every MSE-capable client supports it,
+    # and our segmenter falls back to AAC whenever it can't pass through).
+    # Other codecs require an explicit signal in `codec_support[:audio]`.
+    def allowed_audio_codec?(codec_name, codec_support)
+      return false if codec_name.blank?
+      return true if codec_name == "aac"
+      return false unless codec_support
+      audio_caps = codec_support[:audio] || codec_support["audio"]
+      return false unless audio_caps
+      key = AUDIO_CODEC_PROBE_KEY[codec_name]
+      return false unless key
+      truthy?(audio_caps[key]) || truthy?(audio_caps[key.to_s])
     end
 
     def truthy?(v)
@@ -428,16 +486,22 @@ class TranscoderService
       allowed = allowed_direct_play_codecs(codec_support)
       return :full_transcode unless allowed.include?(video_codec)
 
-      # 10-bit HEVC: MSE accepts the codec string but stalls on decode. Re-encode.
+      # 10-bit HEVC: only force re-encode when the client did NOT advertise
+      # Main 10 MSE support. Real browsers (Safari, Chrome 107+) decode 10-bit
+      # HEVC reliably and report `hevc10: true` — we direct-stream the source
+      # so the user gets true HDR with zero re-encode. Electron 33 / Chromium
+      # 130 MSE accepts the codec string but stalls on decode, so the http
+      # adapter explicitly suppresses hevc10 for the Electron user agent.
       if %w[hevc h265].include?(video_codec) &&
-         TEN_BIT_PIX_FMTS.include?(probe_result.dig(:video, :pix_fmt))
+         TEN_BIT_PIX_FMTS.include?(probe_result.dig(:video, :pix_fmt)) &&
+         !hevc10_supported?(codec_support)
         return :full_transcode
       end
 
       audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
       audio_codec = audio_stream ? audio_stream[:codec] : nil
 
-      return :audio_transcode unless audio_codec == "aac"
+      return :audio_transcode unless allowed_audio_codec?(audio_codec, codec_support)
 
       # Codecs are compatible. If the container is also browser-friendly,
       # serve the file as-is (direct_play, no ffmpeg). Otherwise remux into
@@ -519,7 +583,20 @@ class TranscoderService
       stderr_log.close
       @ffmpeg_pid = pid
 
-      Rails.logger.info "[Transcoder] ffmpeg HLS started: pid=#{pid}, strategy=#{strategy}, seek=#{seek_time}s, dir=#{hls_dir}"
+      vf = extract_arg(args, "-vf") || extract_arg(args, "-filter_complex")
+      bv = extract_arg(args, "-b:v")
+      ba = extract_arg(args, "-b:a")
+      ac = extract_arg(args, "-ac")
+      Rails.logger.info "[Transcoder] ffmpeg HLS started: pid=#{pid}, strategy=#{strategy}, " \
+        "seek=#{seek_time}s, video=#{bv ? "#{(bv.to_i / 1_000_000.0).round(1)}M" : "copy"}, " \
+        "audio=#{ba || 'copy'}#{ac ? "/#{ac}ch" : ''}, hdr_filter=#{vf && vf.include?('tonemap') ? 'tonemap' : 'none'}"
+      Rails.logger.debug "[Transcoder] -vf: #{vf}" if vf
+    end
+
+    # Extract the value following a flag from a flat ffmpeg arg array.
+    def extract_arg(args, flag)
+      idx = args.index(flag)
+      idx && args[idx + 1]
     end
 
     # ── ffmpeg argument builder ──────────────────────────────────────
@@ -529,24 +606,90 @@ class TranscoderService
     # native Safari, Android TV WebView, and correct SAR handling out of
     # the box.
 
-    # Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
-    # meaningfully higher bitrate than x264 to reach the same perceptual quality;
-    # at 4 Mbps a 1080p HEVC source transcodes visibly softer than the original.
-    # On LAN we have plenty of bandwidth — spend it.
-    def full_transcode_video_args(probe_result)
-      width = probe_result.dig(:video, :width).to_i
-      bitrate, maxrate, bufsize =
-        if width >= 3000      then [ "20M", "30M", "60M" ]   # 4K
-        elsif width >= 1800   then [ "12M", "18M", "36M" ]   # 1080p
-        elsif width >= 1100   then [ "8M",  "12M", "24M" ]   # 720p
-        else                       [ "4M",  "6M",  "12M" ]   # SD
+    # True when the source is HDR-graded (PQ or HLG). Drives the tonemap
+    # branch in the filter chain. Kept tolerant of probe shape differences
+    # (TechProbeService caches symbolize on read; live probe uses symbols).
+    def hdr_source?(probe_result)
+      transfer = probe_result.dig(:video, :color_transfer).to_s
+      HDR_TRANSFERS.include?(transfer)
+    end
+
+    # Whether the resolved ffmpeg binary has the `zscale` filter compiled in.
+    # Memoized per process — `ffmpeg -filters` is ~30ms. The flag column in
+    # `ffmpeg -filters` output is 2-3 chars wide ([T.][S.][C.]), so we just
+    # match a token boundary around the filter name rather than pinning the
+    # exact flags.
+    def zscale_available?
+      return @zscale_available unless @zscale_available.nil?
+      stdout, _stderr, status = Open3.capture3(ffmpeg_path, "-hide_banner", "-filters")
+      @zscale_available = status.success? && stdout.match?(/^\s+\S+\s+zscale\s+/)
+    rescue StandardError
+      @zscale_available = false
+    end
+
+    # AAC encode args sized to the source channel layout. Browsers decode
+    # AAC-LC up to 5.1 reliably; 7.1 is inconsistent across MSE
+    # implementations, so we cap at 6 channels (downmixing 7.1 → 5.1, never
+    # to stereo). Bitrate scales with channel count so 5.1 sources don't get
+    # squashed into a 192k stereo-grade allocation.
+    def audio_transcode_args(probe_result, audio_stream_index)
+      stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
+      source_channels = stream && stream[:channels].to_i > 0 ? stream[:channels].to_i : 2
+      channels = [ source_channels, 6 ].min
+      bitrate =
+        if channels >= 6 then "384k"
+        elsif channels >= 3 then "256k"
+        else                     "192k"
         end
+
+      args = [ "-c:a", "aac", "-b:a", bitrate ]
+      # Only force a layout change when we're capping 7.1 → 5.1; for matching
+      # or smaller layouts, let ffmpeg preserve the source channel order.
+      args += [ "-ac", channels.to_s ] if source_channels > channels
+      # Force the AAC sample rate to match the source. With 7.1 → 5.1 downmix
+      # ffmpeg occasionally picks an off-by-one rate that drifts audio.
+      args += [ "-ar", "48000" ]
+      # Sample-level alignment of the re-encoded audio. Conservative async=1
+      # (1 sample/sec compensation) — combined with the -copyts family at the
+      # input level, this is enough; aggressive async values caused over-
+      # compensation and audible drift on TrueHD/DTS-HD MA decoding paths.
+      args += [ "-af", "aresample=async=1" ]
+      args
+    end
+
+    # Per-resolution bitrate ceilings for full_transcode. VideoToolbox H.264
+    # needs meaningfully higher bitrate than x264 to reach the same perceptual
+    # quality, so we set ceilings high enough that the typical case is "match
+    # the source." On LAN we have plenty of bandwidth.
+    #
+    # Caps in bits/sec: 4K 40M, 1080p 20M, 720p 12M, SD 6M.
+    def video_bitrate_cap_bps(width)
+      if width >= 3000      then 40_000_000
+      elsif width >= 1800   then 20_000_000
+      elsif width >= 1100   then 12_000_000
+      else                       6_000_000
+      end
+    end
+
+    # Source-aware bitrate selection. Reads probe :bitrate (set by both
+    # TechProbeService and TranscoderService.probe). Targets the source's
+    # bitrate so the output is perceptually close to the original, capped
+    # per resolution so a 100 Mbps remux doesn't blow up encoding.
+    # Falls back to the cap when the probe didn't provide a bitrate.
+    def full_transcode_video_args(probe_result)
+      width  = probe_result.dig(:video, :width).to_i
+      cap    = video_bitrate_cap_bps(width)
+      source = probe_result[:bitrate].to_i
+      target = source > 0 ? [ source, cap ].min : cap
+      maxrate = (target * 1.5).round
+      bufsize = (target * 3).round
 
       [
         "-c:v", "h264_videotoolbox",
-        "-b:v", bitrate,
-        "-maxrate", maxrate,
-        "-bufsize", bufsize,
+        "-allow_sw", "1",
+        "-b:v", target.to_s,
+        "-maxrate", maxrate.to_s,
+        "-bufsize", bufsize.to_s,
         "-profile:v", "high",
         "-pix_fmt", "yuv420p",
         "-g", "48"
@@ -569,13 +712,29 @@ class TranscoderService
 
       args += [ "-i", file_path ]
 
-      # Filters / stream mapping
+      hdr = hdr_source?(probe_result)
+      tonemap = hdr && zscale_available?
+      width = probe_result.dig(:video, :width).to_i
+
+      # Filters / stream mapping. SAR fix is always applied. For tonemapped
+      # HDR sources wider than 1080p we downscale BEFORE the zscale/tonemap
+      # chain — that's where the CPU goes (zscale + tonemap operate on every
+      # pixel in linear-light float space; 4K → 1080p is ~4× less work) and
+      # the output is 8-bit SDR anyway so the extra resolution would only
+      # serve to inflate the encode bitrate.
+      base_filter = "scale=iw*sar:ih:flags=lanczos,setsar=1"
+      base_filter += ",scale=-2:1080:flags=lanczos" if tonemap && width >= 2560
+      base_filter += ",#{HDR_TONEMAP_CHAIN}" if tonemap
+
       if burn_sub
-        args += [ "-filter_complex", "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1" ]
+        chain = "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,#{base_filter}"
+        args += [ "-filter_complex", chain ]
         args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
       elsif strategy == :full_transcode
-        # Anamorphic source handling: enforce square pixels.
-        args += [ "-vf", "scale=iw*sar:ih:flags=lanczos,setsar=1" ]
+        if hdr && !zscale_available?
+          Rails.logger.warn "[Transcoder] HDR source but ffmpeg lacks zscale — output will band. Install ffmpeg with libzimg or use the vendored binary."
+        end
+        args += [ "-vf", base_filter ]
         args += [ "-map", "0:v:0" ]
         args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
       else
@@ -590,10 +749,14 @@ class TranscoderService
         args += %w[-c copy]
       when :audio_transcode
         args += %w[-c:v copy]
-        args += %w[-c:a aac -b:a 192k -ac 2]
+        args += audio_transcode_args(probe_result, opts[:audio_stream_index])
       when :full_transcode
         args += full_transcode_video_args(probe_result)
-        args += %w[-c:a aac -b:a 192k -ac 2]
+        # When tonemapping HDR → SDR, tag the output with BT.709 metadata so
+        # the browser decoder interprets the colorspace correctly. Without
+        # these the decoder may apply its own legacy conversion on top.
+        args += SDR_OUTPUT_COLOR_FLAGS if hdr && zscale_available?
+        args += audio_transcode_args(probe_result, opts[:audio_stream_index])
       end
       # :direct_play is unreachable here — start_session short-circuits before
       # calling start_ffmpeg_hls when the strategy resolves to direct_play.
@@ -605,15 +768,17 @@ class TranscoderService
       # VideoToolbox. Mirrored on the desktop side.)
 
       # HLS output: CMAF (fMP4) segments.
-      #   hls_time 2       — 2-second segments so the playlist grows faster than
-      #                      playback consumes it, even under 1× realtime encode
-      #                      (avoids the "play 4s, stall for 1–3s, resume" pattern).
+      #   hls_time 6       — 6-second segments matches Jellyfin's default and
+      #                      reduces HTTP round-trips. VideoToolbox H.264
+      #                      encodes well above 1× realtime on Apple Silicon
+      #                      (4K ≥ 4×, 1080p ≥ 10×) so segment production
+      #                      stays well ahead of playback consumption.
       #   temp_file        — atomic write: ffmpeg writes *.tmp then renames, so
       #                      the HTTP server never sees a half-flushed segment.
       #   independent_segments — each segment decodes standalone.
       args += %w[
         -f hls
-        -hls_time 2
+        -hls_time 6
         -hls_list_size 0
         -hls_playlist_type event
         -hls_segment_type fmp4
@@ -631,7 +796,15 @@ class TranscoderService
 
     # ── Utility ──────────────────────────────────────────────────────
 
+    # Prefer the vendored ffmpeg shared with the desktop app (compiled with
+    # libzimg, so the `zscale` filter is available — required by the HDR
+    # tonemap chain). The vendored path resolves only in dev where the repo
+    # is laid out as ../desktop/vendor; in any deployment without that
+    # directory, falls through to system ffmpeg.
     def find_binary(name)
+      vendored = File.expand_path("../../../desktop/vendor/ffmpeg-arm64/#{name}", __dir__)
+      return vendored if File.executable?(vendored)
+
       candidates = [
         "/opt/homebrew/bin/#{name}",
         "/usr/local/bin/#{name}",

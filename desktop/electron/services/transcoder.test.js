@@ -11,11 +11,21 @@ function probeResult({
   formatName = 'matroska,webm',
   width = 1920,
   pixFmt = 'yuv420p',
+  channels = 2,
+  bitrate = 0,
+  colorTransfer = null,
 } = {}) {
   return {
     formatName,
-    video: { codec: videoCodec, width, height: 1080, pix_fmt: pixFmt },
-    audioStreams: [{ index: 1, codec: audioCodec, channels: 2, language: 'eng' }],
+    bitrate,
+    video: {
+      codec: videoCodec,
+      width,
+      height: 1080,
+      pix_fmt: pixFmt,
+      color_transfer: colorTransfer,
+    },
+    audioStreams: [{ index: 1, codec: audioCodec, channels, language: 'eng' }],
     subtitleStreams: [],
   }
 }
@@ -192,3 +202,143 @@ test('buildArgs: H.264 copy does not add a video tag', () => {
   const args = buildArgs(0, '/tmp/out', 'direct_stream', probe, { audioStreamIndex: 1 })
   assert.equal(findArg(args, '-tag:v'), null)
 })
+
+test('buildArgs: uses 6-second HLS segments', () => {
+  const probe = probeResult({ videoCodec: 'hevc', audioCodec: 'aac' })
+  const args = buildArgs(0, '/tmp/out', 'direct_stream', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-hls_time'), '6')
+})
+
+// ── Source-aware video bitrate (full_transcode) ──────────────────────
+
+test('buildArgs full_transcode: targets source bitrate when below the cap', () => {
+  const probe = probeResult({ videoCodec: 'vc1', width: 1920, bitrate: 8_000_000 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:v'), '8000000')
+  assert.equal(findArg(args, '-maxrate'), '12000000')
+  assert.equal(findArg(args, '-bufsize'), '24000000')
+})
+
+test('buildArgs full_transcode: caps 1080p source at 20M ceiling', () => {
+  const probe = probeResult({ videoCodec: 'vc1', width: 1920, bitrate: 50_000_000 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:v'), '20000000')
+})
+
+test('buildArgs full_transcode: 4K source caps at 40M', () => {
+  const probe = probeResult({ videoCodec: 'vc1', width: 3840, bitrate: 100_000_000 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:v'), '40000000')
+})
+
+test('buildArgs full_transcode: falls back to cap when probe has no bitrate', () => {
+  const probe = probeResult({ videoCodec: 'vc1', width: 1920, bitrate: 0 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:v'), '20000000')
+})
+
+test('buildArgs full_transcode: includes -allow_sw 1', () => {
+  const probe = probeResult({ videoCodec: 'vc1', width: 1920, bitrate: 8_000_000 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-allow_sw'), '1')
+})
+
+// ── Multi-channel AAC ────────────────────────────────────────────────
+
+test('buildArgs audio_transcode: stereo source → 192k AAC, no -ac flag', () => {
+  const probe = probeResult({ videoCodec: 'h264', audioCodec: 'ac3', channels: 2 })
+  const args = buildArgs(0, '/tmp/out', 'audio_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:a'), '192k')
+  assert.equal(findArg(args, '-ac'), null, 'stereo source should not force a layout change')
+})
+
+test('buildArgs audio_transcode: 5.1 source → 384k AAC, no downmix', () => {
+  const probe = probeResult({ videoCodec: 'h264', audioCodec: 'eac3', channels: 6 })
+  const args = buildArgs(0, '/tmp/out', 'audio_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:a'), '384k')
+  assert.equal(findArg(args, '-ac'), null)
+})
+
+test('buildArgs audio_transcode: 7.1 source → 384k AAC, downmixed to 6 channels', () => {
+  const probe = probeResult({ videoCodec: 'h264', audioCodec: 'truehd', channels: 8 })
+  const args = buildArgs(0, '/tmp/out', 'audio_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-b:a'), '384k')
+  assert.equal(findArg(args, '-ac'), '6')
+})
+
+// ── HDR tonemap (PQ/HLG → SDR) ───────────────────────────────────────
+
+test('buildArgs full_transcode: HDR PQ source prepends tonemap chain to -vf', () => {
+  const probe = probeResult({
+    videoCodec: 'hevc', pixFmt: 'yuv420p10le', width: 3840,
+    colorTransfer: 'smpte2084', bitrate: 16_000_000,
+  })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  const vf = findArg(args, '-vf')
+  assert.match(vf, /zscale=t=linear:npl=100/)
+  assert.match(vf, /tonemap=tonemap=hable/)
+  assert.match(vf, /format=yuv420p$/)
+  assert.equal(findArg(args, '-color_primaries'), 'bt709')
+  assert.equal(findArg(args, '-color_trc'), 'bt709')
+  assert.equal(findArg(args, '-colorspace'), 'bt709')
+  assert.equal(findArg(args, '-color_range'), 'tv')
+})
+
+test('buildArgs full_transcode: HLG source also tonemaps', () => {
+  const probe = probeResult({
+    videoCodec: 'hevc', pixFmt: 'yuv420p10le', width: 3840,
+    colorTransfer: 'arib-std-b67',
+  })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.match(findArg(args, '-vf'), /tonemap=tonemap=hable/)
+})
+
+test('buildArgs full_transcode: SDR (bt709) source skips tonemap', () => {
+  const probe = probeResult({ videoCodec: 'vc1', colorTransfer: 'bt709' })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  const vf = findArg(args, '-vf')
+  assert.doesNotMatch(vf, /zscale|tonemap/)
+  assert.equal(findArg(args, '-color_primaries'), null,
+    'SDR sources must not be tagged with bt709 explicitly')
+})
+
+test('buildArgs full_transcode: missing color_transfer is treated as SDR', () => {
+  const probe = probeResult({ videoCodec: 'vc1', colorTransfer: null })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.doesNotMatch(findArg(args, '-vf'), /zscale|tonemap/)
+})
+
+test('buildArgs full_transcode: HDR 4K downscales to 1080p before tonemap (CPU mitigation)', () => {
+  const probe = probeResult({
+    videoCodec: 'hevc', pixFmt: 'yuv420p10le', width: 3840,
+    colorTransfer: 'smpte2084',
+  })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  const vf = findArg(args, '-vf')
+  assert.match(vf, /scale=-2:1080:flags=lanczos/)
+  assert.ok(vf.indexOf('scale=-2:1080') < vf.indexOf('zscale=t=linear'),
+    'downscale must precede tonemap')
+})
+
+test('buildArgs full_transcode: HDR 1080p does NOT add downscale', () => {
+  const probe = probeResult({
+    videoCodec: 'hevc', pixFmt: 'yuv420p10le', width: 1920,
+    colorTransfer: 'smpte2084',
+  })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.doesNotMatch(findArg(args, '-vf'), /scale=-2:1080/)
+})
+
+test('buildArgs full_transcode: SDR 4K does NOT downscale', () => {
+  const probe = probeResult({ videoCodec: 'vc1', colorTransfer: 'bt709', width: 3840 })
+  const args = buildArgs(0, '/tmp/out', 'full_transcode', probe, { audioStreamIndex: 1 })
+  assert.doesNotMatch(findArg(args, '-vf'), /scale=-2:1080/)
+})
+
+test('audioTranscodeArgs: uses conservative aresample=async=1', () => {
+  const probe = probeResult({ channels: 6 })
+  const args = buildArgs(0, '/tmp/out', 'audio_transcode', probe, { audioStreamIndex: 1 })
+  assert.equal(findArg(args, '-af'), 'aresample=async=1')
+  assert.equal(findArg(args, '-ar'), '48000')
+})
+

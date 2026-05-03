@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_03_100001) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_03_160001) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -125,6 +125,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_03_100001) do
   end
 
   create_table "playback_preferences", force: :cascade do |t|
+    t.integer "audio_channels"
+    t.string "audio_codec"
     t.string "audio_language"
     t.datetime "created_at", null: false
     t.integer "movie_id"

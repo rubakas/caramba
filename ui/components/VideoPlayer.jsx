@@ -74,6 +74,92 @@ function strategyLabel(strategy) {
   }
 }
 
+// Dev-only overlay that surfaces what the playback pipeline is actually doing —
+// which strategy was picked, source codec/res/bitrate, HDR transfer, audio
+// layout. Visible only when Vite is in dev mode (production builds tree-shake
+// the branch). Discreet pill in the top-right; pointer-events disabled so it
+// never intercepts player clicks.
+function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
+  if (!import.meta.env.DEV) return null
+
+  const STRATEGY_COLOR = {
+    direct_play:     '#34c759', // green — best
+    direct_stream:   '#34c759', // green — remux only
+    audio_transcode: '#ffd60a', // yellow
+    full_transcode:  '#ff453a', // red — most expensive
+  }
+  const HDR_TRANSFERS = new Set(['smpte2084', 'arib-std-b67'])
+  const isHdr = !!video?.color_transfer && HDR_TRANSFERS.has(video.color_transfer)
+  const mbps = bitrate ? `${(bitrate / 1_000_000).toFixed(1)} Mbps` : null
+  const res = video?.width && video?.height ? `${video.width}×${video.height}` : null
+  const bitDepth = video?.pix_fmt?.match(/p10|p12|p16/) ? '10-bit' : '8-bit'
+
+  const row = { display: 'flex', gap: 6, alignItems: 'baseline' }
+  const dim = { color: '#888', fontWeight: 400 }
+
+  return (
+    <div style={{
+      position: 'absolute', top: 12, left: 12, zIndex: 9999,
+      pointerEvents: 'none', userSelect: 'text',
+      background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(8px)',
+      color: '#fff', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: 11, lineHeight: 1.4, padding: '6px 10px', borderRadius: 6,
+      border: '1px solid rgba(255,255,255,0.1)',
+      maxWidth: 320, fontWeight: 500,
+    }}>
+      <div style={row}>
+        <span style={{
+          background: STRATEGY_COLOR[strategy] || '#666', color: '#000',
+          padding: '1px 5px', borderRadius: 3, fontSize: 10, fontWeight: 700,
+          letterSpacing: 0.3,
+        }}>
+          {strategy ? strategy.toUpperCase().replace('_', ' ') : '—'}
+        </span>
+        {isHdr && (
+          <span style={{
+            background: '#af52de', color: '#fff',
+            padding: '1px 5px', borderRadius: 3, fontSize: 10, fontWeight: 700,
+            letterSpacing: 0.3,
+          }}>HDR</span>
+        )}
+      </div>
+      {video && (
+        <div style={{ marginTop: 4 }}>
+          <span style={dim}>video </span>
+          {(video.codec || '?').toUpperCase()} {res} {bitDepth}
+        </div>
+      )}
+      {video?.color_transfer && (
+        <div><span style={dim}>transfer </span>{video.color_transfer}</div>
+      )}
+      {mbps && (
+        <div><span style={dim}>source </span>{mbps}</div>
+      )}
+      {audioStream && (
+        <div>
+          <span style={dim}>audio </span>
+          {(audioStream.codec || '?').toUpperCase()} {audioStream.channels}ch
+          {audioStream.language && audioStream.language !== 'und' && ` ${audioStream.language}`}
+          {(strategy === 'audio_transcode' || strategy === 'full_transcode') && (
+            <span style={{ color: '#ffd60a' }}>
+              {' → AAC '}
+              {Math.min(audioStream.channels || 2, 6)}ch
+            </span>
+          )}
+        </div>
+      )}
+      {strategy === 'full_transcode' && video && (
+        <div>
+          <span style={dim}>video out </span>
+          <span style={{ color: '#ffd60a' }}>
+            H.264 {video.width >= 2560 && video.color_transfer && HDR_TRANSFERS.has(video.color_transfer) ? '1920×1080 (downscaled)' : `${video.width}×${video.height}`} 8-bit
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Subtitle size presets
 const SUB_SIZES = [
   { id: 'small',  label: 'S',  em: '0.7em' },
@@ -935,6 +1021,12 @@ export default function VideoPlayer() {
         ref={containerRef}
         className={`video-player-overlay controls-visible tv-player${isSettingsMode ? ' tv-settings-mode' : ''}`}
       >
+        <DevPlaybackInfo
+          strategy={playerState.strategy}
+          video={playerState.video}
+          bitrate={playerState.bitrate}
+          audioStream={playerState.audioStreams?.find(s => s.index === playerState.activeAudioIndex)}
+        />
         {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
         <video
           ref={videoRef}
@@ -1199,6 +1291,7 @@ export default function VideoPlayer() {
   }
 
   // Desktop UI (unchanged)
+  const activeAudio = playerState.audioStreams?.find(s => s.index === playerState.activeAudioIndex)
   return (
     <div
       ref={containerRef}
@@ -1206,6 +1299,12 @@ export default function VideoPlayer() {
       onMouseMove={showControls}
       onWheel={(e) => e.stopPropagation()}
     >
+      <DevPlaybackInfo
+        strategy={playerState.strategy}
+        video={playerState.video}
+        bitrate={playerState.bitrate}
+        audioStream={activeAudio}
+      />
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
        <video
          ref={videoRef}

@@ -8,14 +8,52 @@
 // transcode to H.264 (slower but universally supported). Android WebView
 // in particular often lacks MSE HEVC support even when the device itself
 // can hardware-decode HEVC in other contexts.
+//
+// hevc10 (HEVC Main 10 / 4K HDR) drives the HDR direct-stream path on the
+// server. When true the server skips the 10-bit guard and remuxes the
+// source as-is — keeps true HDR, zero re-encode. We force it to false in
+// Electron because Chromium 130 / Electron 33 MSE accepts the codec string
+// but the decoder stalls on actual 10-bit playback (no frames produced).
+// Real browsers (Safari, Chrome 107+) decode 10-bit HEVC reliably.
+function isElectronRuntime() {
+  if (typeof navigator === 'undefined') return false
+  return /\bElectron\b/.test(navigator.userAgent || '')
+}
+
 function detectCodecSupport() {
   if (typeof MediaSource === 'undefined' || typeof MediaSource.isTypeSupported !== 'function') {
-    return { h264: true, hevc: false }
+    return { h264: true, hevc: false, hevc10: false, audio: { aac: true } }
   }
   const test = (type) => { try { return MediaSource.isTypeSupported(type) } catch { return false } }
+  const hevc = test('video/mp4; codecs="hvc1.1.6.L120.B0"') || test('video/mp4; codecs="hev1.1.6.L120.B0"')
+  // Main 10 profile (`.2.4.`) at level 5.0 — the smallest level that covers
+  // 4K HDR sources. Suppressed on Electron until the upstream MSE bug is
+  // resolved.
+  const hevc10 = !isElectronRuntime() && (
+    test('video/mp4; codecs="hvc1.2.4.L150.B0"') ||
+    test('video/mp4; codecs="hev1.2.4.L150.B0"')
+  )
+  // Audio codecs the browser MSE can decode in fMP4 segments. Lets the
+  // server skip audio_transcode when the source already matches. AAC is
+  // assumed everywhere; the others vary (Firefox lacks AC3/EAC3, Safari
+  // lacks Opus, etc.). TrueHD/DTS-HD are never in MSE — those always
+  // transcode.
+  const audio = {
+    // AAC is unconditionally true: every MSE-capable browser supports it,
+    // and some return false for the exact `mp4a.40.2` string while playing
+    // it in practice.
+    aac:  true,
+    ac3:  test('audio/mp4; codecs="ac-3"'),
+    eac3: test('audio/mp4; codecs="ec-3"'),
+    flac: test('audio/mp4; codecs="flac"'),
+    mp3:  test('audio/mp4; codecs="mp4a.40.34"') || test('audio/mp4; codecs="mp3"'),
+    opus: test('audio/mp4; codecs="opus"'),
+  }
   return {
     h264: test('video/mp4; codecs="avc1.640028"'),
-    hevc: test('video/mp4; codecs="hvc1.1.6.L120.B0"') || test('video/mp4; codecs="hev1.1.6.L120.B0"'),
+    hevc,
+    hevc10,
+    audio,
   }
 }
 

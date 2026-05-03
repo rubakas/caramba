@@ -200,4 +200,73 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       assert_equal [ 7, true ], select(streams, { subtitleLanguage: "fre" })
     end
   end
+
+  # select_audio_track has to disambiguate same-language tracks (TrueHD eng
+  # + AC3 eng on UHD remuxes) and even same-language same-codec tracks
+  # (AAC stereo + AAC 5.1 from a single source). Three-key match.
+  class AudioSelectionTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+    end
+
+    def select(streams, prefs = nil, codec_support = nil)
+      @controller.send(:select_audio_track, streams, prefs, codec_support)
+    end
+
+    def aac_streams
+      [
+        { index: 1, codec: "aac", channels: 6, language: "eng" },
+        { index: 2, codec: "aac", channels: 2, language: "eng" }
+      ]
+    end
+
+    test "saved (lang, codec, channels) finds the exact stereo track among AAC siblings" do
+      assert_equal 2, select(aac_streams, {
+        audioLanguage: "eng", audioCodec: "aac", audioChannels: 2
+      })
+    end
+
+    test "saved (lang, codec, channels) finds the exact 5.1 track among AAC siblings" do
+      assert_equal 1, select(aac_streams, {
+        audioLanguage: "eng", audioCodec: "aac", audioChannels: 6
+      })
+    end
+
+    test "saved (lang, codec) without channels falls back to first language+codec match" do
+      # Both qualify; we accept whichever ffprobe lists first since we have no
+      # channel hint. This is the legacy pre-channels behavior.
+      assert_equal 1, select(aac_streams, { audioLanguage: "eng", audioCodec: "aac" })
+    end
+
+    test "exact (lang, codec, channels) miss falls through to lang+codec" do
+      streams = [
+        { index: 1, codec: "truehd", channels: 8, language: "eng" },
+        { index: 2, codec: "ac3",    channels: 6, language: "eng" }
+      ]
+      # User saved AAC stereo last time; this source has neither. Fall through
+      # to lang+codec → still no match → fall further to lang + playable.
+      result = select(streams, {
+        audioLanguage: "eng", audioCodec: "aac", audioChannels: 2
+      }, { audio: { ac3: true } })
+      assert_equal 2, result, "should land on the AC3 track because client decodes it"
+    end
+
+    test "no saved prefs: prefers a client-decodable codec in the desired language" do
+      streams = [
+        { index: 1, codec: "truehd", channels: 8, language: "eng" },
+        { index: 2, codec: "ac3",    channels: 6, language: "eng" }
+      ]
+      result = select(streams, nil, { audio: { ac3: true } })
+      assert_equal 2, result
+    end
+
+    test "no saved prefs and nothing playable: first language match wins" do
+      streams = [
+        { index: 1, codec: "truehd", channels: 8, language: "eng" },
+        { index: 2, codec: "dts",    channels: 6, language: "eng" }
+      ]
+      result = select(streams, nil, { audio: { aac: true } })
+      assert_equal 1, result
+    end
+  end
 end

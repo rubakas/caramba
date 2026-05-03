@@ -35,6 +35,8 @@ class Api::PlaybackController < Api::BaseController
 
     render json: {
       audioLanguage: pref.audio_language,
+      audioCodec: pref.audio_codec,
+      audioChannels: pref.audio_channels,
       subtitleLanguage: pref.subtitle_language,
       subtitleOff: pref.subtitle_off != 0,
       subtitleSize: pref.subtitle_size || "medium",
@@ -75,7 +77,7 @@ class Api::PlaybackController < Api::BaseController
     record = find_record_for(file_path)
     info = (record && TechProbeService.probe_for(record)) || TranscoderService.probe(file_path)
 
-    audio_stream_index = select_audio_track(info[:audioStreams], prefs)
+    audio_stream_index = select_audio_track(info[:audioStreams], prefs, codec_support)
     subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs)
 
     session_id = SecureRandom.hex(8)
@@ -113,6 +115,7 @@ class Api::PlaybackController < Api::BaseController
       seekBase: is_direct_play ? 0 : start_time,
       subtitleUrl: subtitle_url,
       video: info[:video],
+      bitrate: info[:bitrate],
       audioStreams: info[:audioStreams],
       subtitleStreams: info[:subtitleStreams],
       activeAudioIndex: audio_stream_index,
@@ -356,10 +359,10 @@ class Api::PlaybackController < Api::BaseController
     asset_path = TranscoderService.hls_asset_path(session_id, asset_name)
     return head :bad_request unless asset_path
 
-    # Wait up to 4s for ffmpeg to finish writing the segment. Longer than the
-    # segment duration, so we respond successfully even when encoding briefly
-    # lags behind wall-clock playback.
-    20.times do
+    # Wait up to 8s for ffmpeg to finish writing the segment. Longer than the
+    # 6-second segment duration, so we respond successfully even when encoding
+    # briefly lags behind wall-clock playback.
+    40.times do
       break if File.exist?(asset_path)
       sleep 0.2
     end
@@ -396,6 +399,8 @@ class Api::PlaybackController < Api::BaseController
   def preference_attrs
     {
       audio_language: params[:audioLanguage],
+      audio_codec: params[:audioCodec],
+      audio_channels: params[:audioChannels],
       subtitle_language: params[:subtitleLanguage],
       subtitle_off: params[:subtitleOff] ? 1 : 0,
       subtitle_size: params[:subtitleSize] || "medium",
@@ -403,16 +408,50 @@ class Api::PlaybackController < Api::BaseController
     }
   end
 
-  def select_audio_track(audio_streams, prefs)
+  # Pick the audio track. Selection precedence (most specific first):
+  #   1. Saved (language, codec, channels) — disambiguates AAC stereo vs
+  #      AAC 5.1 from the same source where lang+codec are identical.
+  #   2. Saved (language, codec) — handles TrueHD eng + AC3 eng pairs.
+  #   3. Saved language alone — prefer a client-decodable codec to stay
+  #      direct_stream / direct_play.
+  #   4. English with same playable preference.
+  #   5. First available track.
+  def select_audio_track(audio_streams, prefs, codec_support = nil)
     return nil if audio_streams.empty?
 
-    if prefs && prefs[:audioLanguage].present?
-      saved = audio_streams.find { |s| s[:language] == prefs[:audioLanguage] }
-      return saved ? saved[:index] : audio_streams.first[:index]
+    saved_lang     = prefs && prefs[:audioLanguage].presence
+    saved_codec    = prefs && prefs[:audioCodec].presence
+    saved_channels = prefs && prefs[:audioChannels].presence
+    desired_lang = saved_lang || "eng"
+
+    if saved_lang && saved_codec && saved_channels
+      exact = audio_streams.find { |s|
+        matches_language?(s[:language], saved_lang) &&
+          s[:codec] == saved_codec &&
+          s[:channels].to_i == saved_channels.to_i
+      }
+      return exact[:index] if exact
     end
 
-    eng = audio_streams.find { |s| %w[eng en].include?(s[:language]) }
-    eng ? eng[:index] : audio_streams.first[:index]
+    if saved_lang && saved_codec
+      exact = audio_streams.find { |s|
+        matches_language?(s[:language], saved_lang) && s[:codec] == saved_codec
+      }
+      return exact[:index] if exact
+    end
+
+    in_lang = audio_streams.select { |s| matches_language?(s[:language], desired_lang) }
+    in_lang = audio_streams if in_lang.empty?
+
+    playable = in_lang.find { |s| TranscoderService.allowed_audio_codec?(s[:codec], codec_support) }
+    (playable || in_lang.first)[:index]
+  end
+
+  def matches_language?(stream_language, requested)
+    return true if stream_language.to_s == requested.to_s
+    # ffprobe sometimes returns the 2-letter ISO code, sometimes the 3-letter.
+    requested == "eng" && stream_language.to_s == "en" ||
+      requested == "en" && stream_language.to_s == "eng"
   end
 
   def select_subtitle_track(subtitle_streams, prefs)

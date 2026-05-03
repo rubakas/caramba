@@ -138,6 +138,7 @@ async function probe(filePath) {
         const audioStreams = data.streams?.filter(s => s.codec_type === 'audio') || []
         const subtitleStreams = data.streams?.filter(s => s.codec_type === 'subtitle') || []
         const duration = parseFloat(data.format?.duration) || 0
+        const bitrate = parseInt(data.format?.bit_rate, 10) || 0
         // ffprobe's format_name is comma-separated (e.g. "mov,mp4,m4a,3gp,3g2,mj2"),
         // representing the demuxer family. Used by the direct_play check below.
         const formatName = (data.format?.format_name || '').toLowerCase()
@@ -145,12 +146,16 @@ async function probe(filePath) {
         resolve({
           duration,
           formatName,
+          bitrate,
           video: videoStream ? {
             codec: videoStream.codec_name,
             width: videoStream.width,
             height: videoStream.height,
             profile: videoStream.profile,
             pix_fmt: videoStream.pix_fmt,
+            color_transfer: videoStream.color_transfer,
+            color_primaries: videoStream.color_primaries,
+            color_space: videoStream.color_space,
           } : null,
           audioStreams: audioStreams.map(s => ({
             index: s.index,
@@ -206,6 +211,36 @@ const TEN_BIT_PIX_FMTS = new Set([
   'p010le', 'p010be',
 ])
 
+// HDR transfer characteristics — sources tagged with these need an explicit
+// PQ/HLG → linear → BT.709 SDR conversion. Without it, naive 8-bit output
+// crushes mid-tones and produces visible banding on subtle gradients (e.g.
+// sunset skies in animation HDR remasters).
+const HDR_TRANSFERS = new Set(['smpte2084', 'arib-std-b67'])
+
+// zscale + tonemap chain for HDR PQ/HLG → SDR BT.709. Vendored ffmpeg is
+// built with libzimg so zscale is always available here. Hable curve gives
+// gentle highlight rolloff close to what Jellyfin's web client produces.
+// The float intermediate (gbrpf32le) plus the final yuv420p conversion
+// includes implicit dithering that eliminates the 10→8 bit banding.
+const HDR_TONEMAP_CHAIN =
+  'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,' +
+  'tonemap=tonemap=hable:desat=0,' +
+  'zscale=t=bt709:m=bt709:r=tv,format=yuv420p'
+
+// Output color metadata after tonemapping. Tells the encoder (and the
+// browser decoder) that the stream is BT.709 SDR.
+const SDR_OUTPUT_COLOR_FLAGS = [
+  '-color_primaries', 'bt709',
+  '-color_trc', 'bt709',
+  '-colorspace', 'bt709',
+  '-color_range', 'tv',
+]
+
+function isHdrSource(probeResult) {
+  const transfer = probeResult.video?.color_transfer
+  return transfer ? HDR_TRANSFERS.has(transfer) : false
+}
+
 // One of 'direct_play' | 'direct_stream' | 'audio_transcode' | 'full_transcode'.
 //
 // direct_play   — browser plays the file as-is; no ffmpeg.
@@ -232,30 +267,70 @@ function transcodeStrategy(probeResult, audioStreamIndex, burnSubtitleIndex, for
   return isDirectPlayContainer(probeResult.formatName) ? 'direct_play' : 'direct_stream'
 }
 
-// Resolution-aware bitrate for full_transcode. VideoToolbox H.264 needs
-// meaningfully higher bitrate than x264 to reach the same perceptual quality.
+// Per-resolution bitrate ceilings for full_transcode (mirrors the Rails
+// service). VideoToolbox H.264 needs meaningfully higher bitrate than x264
+// to reach the same perceptual quality, so we set ceilings high enough that
+// the typical case is "match the source." On LAN we have plenty of bandwidth.
 //
-// 4K sources are downscaled to 1080p before encoding. VideoToolbox H.264
-// at 4K + 10-bit HDR input runs at ~0.7×–1× realtime, which leaves no
-// headroom — the player starts before the encoder can build a buffer and
-// stalls. Downscaling to 1080p brings encoding speed to >2× realtime and
-// avoids stalls. Higher fidelity than that requires libmpv (card #54).
+// Caps in bits/sec: 4K 40M, 1080p 20M, 720p 12M, SD 6M.
+function videoBitrateCapBps(width) {
+  if (width >= 3000)      return 40_000_000
+  else if (width >= 1800) return 20_000_000
+  else if (width >= 1100) return 12_000_000
+  else                    return 6_000_000
+}
+
+// Source-aware bitrate selection. Targets the source's bitrate so the output
+// is perceptually close to the original, capped per resolution so a 100 Mbps
+// remux doesn't blow up encoding. Falls back to the cap when the probe
+// didn't report a bitrate.
 function fullTranscodeVideoArgs(probeResult) {
-  const width = probeResult.video?.width || 0
-  let bitrate, maxrate, bufsize
-  if (width >= 1800)      { [bitrate, maxrate, bufsize] = ['12M', '18M', '36M'] }  // ≥1080p (incl. downscaled 4K)
-  else if (width >= 1100) { [bitrate, maxrate, bufsize] = ['8M',  '12M', '24M'] }  // 720p
-  else                    { [bitrate, maxrate, bufsize] = ['4M',  '6M',  '12M'] }  // SD
+  const width  = probeResult.video?.width || 0
+  const cap    = videoBitrateCapBps(width)
+  const source = probeResult.bitrate | 0
+  const target = source > 0 ? Math.min(source, cap) : cap
+  const maxrate = Math.round(target * 1.5)
+  const bufsize = Math.round(target * 3)
 
   return [
     '-c:v', 'h264_videotoolbox',
-    '-b:v', bitrate,
-    '-maxrate', maxrate,
-    '-bufsize', bufsize,
+    '-allow_sw', '1',
+    '-b:v', String(target),
+    '-maxrate', String(maxrate),
+    '-bufsize', String(bufsize),
     '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
     '-g', '48',
   ]
+}
+
+// AAC encode args sized to the source channel layout. Browsers decode
+// AAC-LC up to 5.1 reliably; 7.1 is inconsistent across MSE implementations,
+// so we cap at 6 channels (downmixing 7.1 → 5.1, never to stereo). Bitrate
+// scales with channel count so 5.1 sources don't get squashed into a 192k
+// stereo-grade allocation.
+function audioTranscodeArgs(probeResult, audioStreamIndex) {
+  const stream = probeResult.audioStreams?.find(s => s.index === audioStreamIndex)
+  const sourceChannels = stream?.channels > 0 ? stream.channels : 2
+  const channels = Math.min(sourceChannels, 6)
+  const bitrate =
+    channels >= 6 ? '384k' :
+    channels >= 3 ? '256k' :
+                    '192k'
+
+  const args = ['-c:a', 'aac', '-b:a', bitrate]
+  // Only force a layout change when capping 7.1 → 5.1; for matching or
+  // smaller layouts, let ffmpeg preserve the source channel order.
+  if (sourceChannels > channels) args.push('-ac', String(channels))
+  // Force the AAC sample rate to match the source. With 7.1 → 5.1 downmix
+  // ffmpeg occasionally picks an off-by-one rate that drifts audio.
+  args.push('-ar', '48000')
+  // Sample-level alignment of the re-encoded audio. Conservative async=1
+  // (1 sample/sec compensation) — combined with the -copyts family at the
+  // input level, this is enough; aggressive async values caused over-
+  // compensation and audible drift on TrueHD/DTS-HD MA decoding paths.
+  args.push('-af', 'aresample=async=1')
+  return args
 }
 
 // Whether the source needs to be downscaled to 1080p before encoding.
@@ -273,6 +348,8 @@ const INPUT_FD_PATH = '/dev/fd/3'
 function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
   const args = []
   const burnSub = opts.burnSubtitleIndex != null
+  const hdr = isHdrSource(probeResult)
+  const width = probeResult.video?.width || 0
 
   if (strategy === 'full_transcode' && !burnSub) {
     args.push('-hwaccel', 'videotoolbox')
@@ -287,12 +364,21 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
 
   args.push('-i', INPUT_FD_PATH)
 
+  // SAR fix is always applied. For tonemapped HDR sources wider than 1080p
+  // we downscale BEFORE the zscale/tonemap chain — that's where the CPU
+  // goes (zscale + tonemap operate on every pixel in linear-light float
+  // space; 4K → 1080p is ~4× less work) and the output is 8-bit SDR anyway
+  // so the extra resolution would only serve to inflate the encode bitrate.
+  let baseFilter = 'scale=iw*sar:ih:flags=lanczos,setsar=1'
+  if (hdr && width >= 2560) baseFilter += ',scale=-2:1080:flags=lanczos'
+  if (hdr) baseFilter += ',' + HDR_TONEMAP_CHAIN
+
   if (burnSub) {
     args.push('-filter_complex',
-      `[0:v:0][0:${opts.burnSubtitleIndex}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1`)
+      `[0:v:0][0:${opts.burnSubtitleIndex}]overlay,${baseFilter}`)
     args.push('-map', opts.audioStreamIndex != null ? `0:${opts.audioStreamIndex}` : '0:a:0')
   } else if (strategy === 'full_transcode') {
-    args.push('-vf', 'scale=iw*sar:ih:flags=lanczos,setsar=1')
+    args.push('-vf', baseFilter)
     args.push('-map', '0:v:0')
     args.push('-map', opts.audioStreamIndex != null ? `0:${opts.audioStreamIndex}` : '0:a:0')
   } else {
@@ -306,11 +392,15 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
       break
     case 'audio_transcode':
       args.push('-c:v', 'copy')
-      args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
+      args.push(...audioTranscodeArgs(probeResult, opts.audioStreamIndex))
       break
     case 'full_transcode':
       args.push(...fullTranscodeVideoArgs(probeResult))
-      args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2')
+      // When tonemapping HDR → SDR, tag the output with BT.709 metadata so
+      // the browser decoder interprets the colorspace correctly. Without
+      // these the decoder may apply its own legacy conversion on top.
+      if (hdr) args.push(...SDR_OUTPUT_COLOR_FLAGS)
+      args.push(...audioTranscodeArgs(probeResult, opts.audioStreamIndex))
       break
     // 'direct_play' is unreachable: start() short-circuits before we
     // ever build args — there's no ffmpeg invocation for it.
@@ -325,10 +415,12 @@ function buildArgs(seekTime, outputDir, strategy, probeResult, opts) {
 
   args.push(
     '-f', 'hls',
-    // 2s segments: keeps ffmpeg ahead of playback even under 1x realtime
-    // encode. temp_file flag means segments rename atomically so the protocol
-    // handler never reads a half-flushed file.
-    '-hls_time', '2',
+    // 6s segments matches Jellyfin's default and reduces HTTP round-trips.
+    // VideoToolbox H.264 encodes well above 1× realtime on Apple Silicon
+    // (4K ≥ 4×, 1080p ≥ 10×) so segment production stays well ahead of
+    // playback consumption. temp_file flag means segments rename atomically
+    // so the protocol handler never reads a half-flushed file.
+    '-hls_time', '6',
     '-hls_list_size', '0',
     '-hls_playlist_type', 'event',
     '-hls_segment_type', 'fmp4',

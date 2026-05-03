@@ -37,6 +37,11 @@ export function PlayerProvider({ children }) {
     activeSubtitleIndex: null, // null = off
     isBitmapSubtitle: false, // true when active subtitle is burned into video
     strategy: null,
+    // Source probe (codec/width/height/pix_fmt/color_transfer/color_primaries) +
+    // overall source bitrate. Surfaced for the dev overlay so we can see at a
+    // glance whether playback is direct/remux/transcode and HDR or SDR.
+    video: null,
+    bitrate: null,
     subtitleSize: 'medium',
     subtitleStyle: 'classic',
   })
@@ -95,6 +100,8 @@ export function PlayerProvider({ children }) {
         activeSubtitleIndex: result.activeSubtitleIndex ?? null,
         isBitmapSubtitle: result.isBitmapSubtitle || false,
         strategy: result.strategy || null,
+        video: result.video || null,
+        bitrate: result.bitrate || null,
         subtitleSize: prefs?.subtitleSize || 'medium',
         subtitleStyle: prefs?.subtitleStyle || 'classic',
       })
@@ -183,6 +190,13 @@ export function PlayerProvider({ children }) {
       showId: state.showId,
       movieId: state.movieId,
       audioLanguage: audioStream?.language || null,
+      // audioCodec + audioChannels disambiguate identical-language tracks:
+      //   audioCodec separates TrueHD eng vs AC3 eng (UHD remuxes).
+      //   audioChannels separates AAC stereo vs AAC 5.1 from the same source.
+      // Without all three, the auto-pick always lands on whichever ffprobe
+      // lists first.
+      audioCodec: audioStream?.codec || null,
+      audioChannels: audioStream?.channels || null,
       subtitleLanguage: subtitleStream?.language || null,
       subtitleOff: subtitleIndex == null,
       subtitleSize: overrides.subtitleSize || state.subtitleSize || 'medium',
