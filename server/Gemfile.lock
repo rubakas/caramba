@@ -376,6 +376,7 @@ DEPENDENCIES
   puma
   rack-cors
   rails
+  rexml
   rubocop-rails-omakase
   sentry-rails (~> 5.22)
   sentry-ruby (~> 5.22)
