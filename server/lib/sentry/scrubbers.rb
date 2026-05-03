@@ -19,8 +19,8 @@ module Sentry
     end
 
     def self.scrub_url(input)
-      return input unless input.is_a?(String)
-      base = input.split("?").first
+      return input unless input.is_a?(String) && !input.empty?
+      base = input.split("?", 2).first
       base
         .gsub(UUID_RE, "/:id")
         .gsub(NUMERIC_ID_RE, "/:id")
