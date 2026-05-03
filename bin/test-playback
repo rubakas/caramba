@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bin/test-playback <slug | path-to-file | episode:<id> | slug:<slug>>
+# Reproduces a playback issue end-to-end: runs the @playback Playwright tests
+# (web + electron) against the given target, writes a per-test diagnostic
+# bundle to tests/test-results/.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ -z "${1:-}" ]; then
+  echo "Usage: bin/test-playback <slug | /abs/path.mkv | episode:<id> | slug:<slug> | file:<path>>" >&2
+  exit 1
+fi
+
+exec env CARAMBA_TEST_TARGET="$1" pnpm --filter @caramba/tests test:playback

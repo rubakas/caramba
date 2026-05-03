@@ -352,6 +352,14 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     openInVlc: local.openInVlc,
     openInDefault: local.openInDefault,
 
+    // libVLC library control (card #60) — always local
+    vlcStatus: local.vlcStatus,
+    vlcPause: local.vlcPause,
+    vlcResume: local.vlcResume,
+    vlcStop: local.vlcStop,
+    vlcSeek: local.vlcSeek,
+    vlcSetVolume: local.vlcSetVolume,
+
     // === Downloads: ALWAYS local ===
     downloadEpisode: local.downloadEpisode,
     deleteDownloadEpisode: local.deleteDownloadEpisode,

@@ -1,16 +1,20 @@
-# Transcoder service — wraps ffmpeg/ffprobe for HLS video streaming.
+# Transcoder service — wraps ffmpeg/ffprobe for video streaming.
 #
-# Output is always HLS with CMAF (fMP4) segments. Every client — Chromium
-# desktop/web, Android TV WebView, Safari/iOS — plays from the same manifest.
+# Four strategies, chosen per file via ffprobe (card #55):
+#   1. direct_play   — file is browser-playable as-is; no ffmpeg.
+#                      Controller serves the original file with HTTP Range.
+#   2. direct_stream — codecs OK but container needs remuxing.
+#                      ffmpeg `-c copy` → HLS fMP4. Zero encode CPU.
+#   3. audio_transcode — video OK, non-AAC audio re-encoded to AAC stereo.
+#   4. full_transcode  — re-encode video (VideoToolbox H.264 on macOS).
 #
-# Three transcoding strategies, chosen per file via ffprobe:
-#   1. direct_play — video H.264 + audio AAC: `-c copy`, zero encode CPU
-#   2. audio_transcode — video H.264 + non-AAC audio: copy video, re-encode audio
-#   3. full_transcode — HEVC or other: VideoToolbox H.264 encode
+# Transcoded paths (2-4) output HLS with CMAF (fMP4) segments. Every client —
+# Chromium desktop/web, Android TV WebView, Safari/iOS — plays from the same
+# manifest. The direct_play tier short-circuits this entirely so high-bitrate
+# files don't get bottlenecked by realtime encoding or HLS segmentation.
 #
 # One active session at a time. Seeking kills ffmpeg and restarts from the
-# new position (same behaviour as before). A persistent segment cache is a
-# planned follow-up.
+# new position. A persistent segment cache is a planned follow-up.
 class TranscoderService
   TMP_ROOT = File.join(Dir.tmpdir, "caramba-sessions")
 
@@ -49,6 +53,10 @@ class TranscoderService
       audio_streams = (data["streams"] || []).select { |s| s["codec_type"] == "audio" }
       subtitle_streams = (data["streams"] || []).select { |s| s["codec_type"] == "subtitle" }
       duration = data.dig("format", "duration").to_f
+      # ffprobe joins compatible demuxer names with commas (e.g.
+      # "mov,mp4,m4a,3gp,3g2,mj2"). Used by the direct_play strategy to
+      # decide whether the browser can demux the source as-is.
+      format_name = data.dig("format", "format_name").to_s.downcase
 
       text_codecs = %w[
         ass ssa srt subrip webvtt mov_text hdmv_text_subtitle
@@ -58,6 +66,7 @@ class TranscoderService
 
       {
         duration: duration,
+        formatName: format_name,
         video: video_stream ? {
           codec: video_stream["codec_name"],
           width: video_stream["width"],
@@ -117,7 +126,24 @@ class TranscoderService
           started_at: Time.current
         }
 
-        start_ffmpeg_hls(file_path, start_time.to_f, opts)
+        # direct_play short-circuits: pre-compute the strategy from the probe
+        # we'd run inside start_ffmpeg_hls anyway, and skip ffmpeg if it's
+        # direct_play. Subtitle extraction is still useful, since the file's
+        # embedded text subs need to be exposed via the session VTT.
+        probe_result = probe(file_path)
+        decided = transcode_strategy(
+          probe_result,
+          opts[:audio_stream_index],
+          opts[:burn_subtitle_index],
+          opts[:codec_support],
+          !!opts[:force_transcode]
+        )
+
+        if decided == :direct_play
+          @session[:strategy] = :direct_play
+        else
+          start_ffmpeg_hls(file_path, start_time.to_f, opts.merge(probe_result: probe_result))
+        end
 
         if subtitle_stream_index && !is_bitmap
           extract_subtitles_async(session_id, file_path, subtitle_stream_index)
@@ -134,6 +160,14 @@ class TranscoderService
         return nil unless @session && @session[:id] == session_id
 
         @session[:seek_time] = seek_time.to_f
+
+        # direct_play has no ffmpeg to restart — the client moves <video>
+        # currentTime via the byte-range request. Just record the seek time
+        # so subtitle shifting and progress reporting use the right offset.
+        if @session[:strategy] == :direct_play
+          Rails.logger.info "[Transcoder] direct_play seek session #{session_id} to #{seek_time}s"
+          return seek_time
+        end
 
         cleanup_hls_dir
         start_ffmpeg_hls(
@@ -292,6 +326,12 @@ class TranscoderService
       @session
     end
 
+    def direct_play_file_path(session_id)
+      return nil unless @session && @session[:id] == session_id
+      return nil unless @session[:strategy] == :direct_play
+      @session[:file_path]
+    end
+
     # ── VTT timestamp shifting ────────────────────────────────────────
     #
     # After a seek, video.currentTime restarts from 0 but the extracted
@@ -345,6 +385,22 @@ class TranscoderService
     # allowed — which covers Electron and desktop browsers.
     DEFAULT_CLIENT_DIRECT_PLAY_CODECS = %w[h264 hevc h265].freeze
 
+    # Container families a browser <video> can demux directly. ffprobe's
+    # format_name is comma-joined (e.g. "mov,mp4,m4a,3gp,3g2,mj2"); we
+    # substring-match. MKV/AVI/TS/WebM(*) require remuxing. (* WebM with
+    # VP8/VP9 plays direct, but those codecs aren't in the direct-play list.)
+    DIRECT_PLAY_CONTAINERS = %w[mp4 m4v mov mj2].freeze
+
+    # 10-bit pixel formats — Chromium MSE on Electron 33 / macOS plays HEVC
+    # Main-10 (4K HDR) inconsistently (segments arrive but the decoder
+    # produces no frames). Force full_transcode for these.
+    TEN_BIT_PIX_FMTS = %w[
+      yuv420p10le yuv420p10be
+      yuv422p10le yuv422p10be
+      yuv444p10le yuv444p10be
+      p010le p010be
+    ].freeze
+
     def allowed_direct_play_codecs(codec_support)
       return DEFAULT_CLIENT_DIRECT_PLAY_CODECS if codec_support.nil?
       allowed = []
@@ -358,7 +414,12 @@ class TranscoderService
       v == true || v == "true" || v == 1 || v == "1"
     end
 
-    # Returns one of :direct_play, :audio_transcode, :full_transcode.
+    def direct_play_container?(format_name)
+      return false if format_name.blank?
+      DIRECT_PLAY_CONTAINERS.any? { |c| format_name.include?(c) }
+    end
+
+    # Returns one of :direct_play, :direct_stream, :audio_transcode, :full_transcode.
     def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil, force_transcode = false)
       return :full_transcode if burn_subtitle_index
       return :full_transcode if force_transcode
@@ -367,13 +428,24 @@ class TranscoderService
       allowed = allowed_direct_play_codecs(codec_support)
       return :full_transcode unless allowed.include?(video_codec)
 
+      # 10-bit HEVC: MSE accepts the codec string but stalls on decode. Re-encode.
+      if %w[hevc h265].include?(video_codec) &&
+         TEN_BIT_PIX_FMTS.include?(probe_result.dig(:video, :pix_fmt))
+        return :full_transcode
+      end
+
       audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
       audio_codec = audio_stream ? audio_stream[:codec] : nil
 
-      if audio_codec == "aac"
+      return :audio_transcode unless audio_codec == "aac"
+
+      # Codecs are compatible. If the container is also browser-friendly,
+      # serve the file as-is (direct_play, no ffmpeg). Otherwise remux into
+      # fMP4 via `-c copy` (direct_stream).
+      if direct_play_container?(probe_result[:formatName])
         :direct_play
       else
-        :audio_transcode
+        :direct_stream
       end
     end
 
@@ -423,7 +495,7 @@ class TranscoderService
       hls_dir = @session[:hls_dir]
       FileUtils.mkdir_p(hls_dir)
 
-      probe_result = probe(file_path)
+      probe_result = opts[:probe_result] || probe(file_path)
       codec_support = @session && @session[:codec_support]
       force_transcode = (opts.key?(:force_transcode) ? opts[:force_transcode] : @session && @session[:force_transcode]) ? true : false
       strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support, force_transcode)
@@ -513,7 +585,7 @@ class TranscoderService
 
       # Codec selection per strategy
       case strategy
-      when :direct_play
+      when :direct_stream
         # No re-encode — just remux into CMAF segments.
         args += %w[-c copy]
       when :audio_transcode
@@ -523,6 +595,14 @@ class TranscoderService
         args += full_transcode_video_args(probe_result)
         args += %w[-c:a aac -b:a 192k -ac 2]
       end
+      # :direct_play is unreachable here — start_session short-circuits before
+      # calling start_ffmpeg_hls when the strategy resolves to direct_play.
+
+      # (We tested `-tag:v hvc1` for HEVC copy paths — counter-intuitively,
+      # that retag broke playback on Electron 33 / Chromium 130 / macOS for
+      # HEVC Main-10 sources: readyState went to 4 with currentTime stuck.
+      # ffmpeg's default `hev1` tag plays correctly on this stack via
+      # VideoToolbox. Mirrored on the desktop side.)
 
       # HLS output: CMAF (fMP4) segments.
       #   hls_time 2       — 2-second segments so the playlist grows faster than

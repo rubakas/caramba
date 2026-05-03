@@ -6,7 +6,12 @@ const { app } = require('electron')
 let db = null
 
 function getStoragePath() {
-  // In packaged app, use userData; in dev, use ./storage
+  // Env override (test harness only). Ignored in packaged builds so the prod
+  // app can never have its userData redirected via env.
+  if (!app.isPackaged && process.env.CARAMBA_STORAGE_PATH) {
+    fs.mkdirSync(process.env.CARAMBA_STORAGE_PATH, { recursive: true })
+    return process.env.CARAMBA_STORAGE_PATH
+  }
   if (app.isPackaged) {
     const p = path.join(app.getPath('userData'), 'storage')
     fs.mkdirSync(p, { recursive: true })

@@ -49,6 +49,9 @@ Rails.application.routes.draw do
     get "playback/hls/:session_id/:asset", to: "playback#hls_asset", as: :playback_hls_asset,
         constraints: { asset: /(?:init\.mp4|segment_\d+\.m4s)/ }
 
+    # direct_play file stream (card #55): served as-is with HTTP Range support
+    get "playback/file/:session_id", to: "playback#file", as: :playback_file
+
     # Media file streaming
     get "media/episodes/:id", to: "media#episode", as: :media_episode
     get "media/movies/:id", to: "media#movie", as: :media_movie

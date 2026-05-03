@@ -3,7 +3,10 @@
   "version": "v1.3.8",
   "description": "Caramba — media center monorepo",
   "scripts": {
-    "test:ui": "pnpm --filter @caramba/ui test"
+    "test:ui": "pnpm --filter @caramba/ui test",
+    "test:e2e": "pnpm --filter @caramba/tests test",
+    "test:e2e:smoke": "pnpm --filter @caramba/tests test:smoke",
+    "test:e2e:playback": "pnpm --filter @caramba/tests test:playback"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

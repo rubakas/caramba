@@ -45,6 +45,14 @@ contextBridge.exposeInMainWorld('api', {
   checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),
   openInVlc: (opts) => ipcRenderer.invoke('playback:openInVlc', opts),
   openInDefault: (filePath, episodeId, movieId) => ipcRenderer.invoke('playback:openInDefault', filePath, episodeId, movieId),
+
+  // libVLC library control surface (card #60)
+  vlcStatus: () => ipcRenderer.invoke('libvlc:status'),
+  vlcPause: () => ipcRenderer.invoke('libvlc:pause'),
+  vlcResume: () => ipcRenderer.invoke('libvlc:resume'),
+  vlcStop: () => ipcRenderer.invoke('libvlc:stop'),
+  vlcSeek: (seconds) => ipcRenderer.invoke('libvlc:seek', seconds),
+  vlcSetVolume: (level) => ipcRenderer.invoke('libvlc:setVolume', level),
   onVlcPlaybackEnded: (cb) => {
     const handler = () => cb()
     ipcRenderer.on('vlc-playback-ended', handler)

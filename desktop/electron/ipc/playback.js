@@ -1,30 +1,22 @@
 // IPC handler for in-app video playback via ffmpeg transcoder.
 // Replaces VLC-based polling with transcoder + HTML5 <video> approach.
+// External VLC control is delegated to the libvlc-player service.
 
 const { ipcMain, shell } = require('electron')
-const { spawn } = require('child_process')
 const fs = require('fs')
-const crypto = require('crypto')
 const db = require('../db')
 const transcoder = require('../services/transcoder')
 const apiConfig = require('../services/api-config')
+const libvlc = require('../services/libvlc-player')
+const { selectAudioTrack, selectSubtitleTrack } = require('../services/track-selection')
 const { resolvePlaybackPath } = require('./downloads')
 
-const VLC_APP_PATH = '/Applications/VLC.app'
-const VLC_BIN_PATH = '/Applications/VLC.app/Contents/MacOS/VLC'
-const VLC_HTTP_PORT = 9090
-// Generate a random password per app session to prevent local cross-app access
-const VLC_HTTP_PASSWORD = crypto.randomBytes(16).toString('hex')
-const VLC_AUTH_HEADER = 'Basic ' + Buffer.from(`:${VLC_HTTP_PASSWORD}`).toString('base64')
-const VLC_POLL_INTERVAL = 3000 // 3 seconds
-
-// VLC external playback tracking state
-let vlcPollTimer = null
+// VLC external playback tracking state — bookkeeping that ties VLC's playback
+// session to a specific episode/movie. The playback details (time, length,
+// state) live in libvlc-player.
 let vlcEpisodeId = null
 let vlcMovieId = null
 let vlcWatchHistoryId = null
-let vlcLastTime = 0
-let vlcLastLength = 0
 
 // Tracked playback state
 let currentEpisodeId = null
@@ -52,49 +44,10 @@ function register() {
 
       const info = await transcoder.probe(filePath)
 
-      // Pick audio track: saved preference (by language) > English > first
-      let audioStreamIndex = null
-      if (info.audioStreams.length > 0) {
-        if (prefs && prefs.audioLanguage) {
-          const saved = info.audioStreams.find(s => s.language === prefs.audioLanguage)
-          audioStreamIndex = saved ? saved.index : info.audioStreams[0].index
-        } else {
-          const eng = info.audioStreams.find(s => s.language === 'eng' || s.language === 'en')
-          audioStreamIndex = eng ? eng.index : info.audioStreams[0].index
-        }
-      }
-
-      // Pick subtitle track: saved preference (by language / off) > first text sub > first bitmap sub
-      let subtitleStreamIndex = null
-      let isBitmapSubtitle = false
-      if (prefs && prefs.subtitleOff) {
-        subtitleStreamIndex = null
-      } else if (prefs && prefs.subtitleLanguage) {
-        // Try text subs first for saved language
-        const savedText = info.subtitleStreams.find(s => s.isText && s.language === prefs.subtitleLanguage)
-        if (savedText) {
-          subtitleStreamIndex = savedText.index
-        } else {
-          // Fall back to bitmap sub with matching language
-          const savedBitmap = info.subtitleStreams.find(s => !s.isText && s.language === prefs.subtitleLanguage)
-          if (savedBitmap) {
-            subtitleStreamIndex = savedBitmap.index
-            isBitmapSubtitle = true
-          }
-        }
-      } else {
-        const textSub = info.subtitleStreams.find(s => s.isText)
-        if (textSub) {
-          subtitleStreamIndex = textSub.index
-        } else {
-          // No text subs — fall back to first bitmap sub
-          const bitmapSub = info.subtitleStreams.find(s => !s.isText)
-          if (bitmapSub) {
-            subtitleStreamIndex = bitmapSub.index
-            isBitmapSubtitle = true
-          }
-        }
-      }
+      const audioStreamIndex = selectAudioTrack(info.audioStreams, prefs)
+      const sub = selectSubtitleTrack(info.subtitleStreams, prefs)
+      const subtitleStreamIndex = sub.index
+      const isBitmapSubtitle = sub.isBitmap
 
       // Start transcoding — burn bitmap subtitles into video if selected.
       // Pass the probe result we already computed so transcoder.start()
@@ -109,6 +62,15 @@ function register() {
       currentDuration = info.duration
       currentAudioStreamIndex = audioStreamIndex
       currentBurnSubtitleIndex = isBitmapSubtitle ? subtitleStreamIndex : null
+
+      // direct_play: stream the file as-is. Renderer skips hls.js and
+      // points <video> at stream://direct, which main.js serves with
+      // Range support. The startTime is conveyed via the URL so the
+      // renderer can seek the <video> element after metadata loads.
+      const isDirectPlay = startResult.strategy === 'direct_play'
+      const streamUrl = isDirectPlay
+        ? `stream://direct/file?t=${Date.now()}&start=${startTime}`
+        : 'stream://video/playlist.m3u8?t=' + Date.now()
 
       // Extract text subtitles in the background (non-blocking).
       // The video starts playing immediately; subtitles arrive asynchronously
@@ -134,9 +96,13 @@ function register() {
       }
 
       return {
-        streamUrl: 'stream://video/playlist.m3u8?t=' + Date.now(),
+        streamUrl,
         duration: info.duration,
         startTime,
+        // direct_play: seekBase is 0 because <video>.currentTime *is* the
+        // absolute timeline position. For ffmpeg-fed strategies seekBase
+        // tracks the -ss offset so display time = seekBase + currentTime.
+        seekBase: isDirectPlay ? 0 : startTime,
         subtitleUrl: null, // subtitles arrive asynchronously
         video: info.video,
         audioStreams: info.audioStreams,
@@ -355,7 +321,10 @@ function register() {
     }
 
     // Check VLC external playback
-    if (vlcPollTimer) {
+    const tick = libvlc.lastTick()
+    if (tick) {
+      const time = tick.time
+      const duration = tick.length
       if (vlcEpisodeId) {
         const ep = db.episodes.findById(vlcEpisodeId)
         const s = ep ? db.shows.findById(ep.show_id) : null
@@ -368,8 +337,8 @@ function register() {
           episode_code: ep?.code,
           show_name: s?.name,
           show_slug: s?.slug,
-          time: vlcLastTime,
-          duration: vlcLastLength,
+          time,
+          duration,
         }
       }
 
@@ -382,12 +351,12 @@ function register() {
           movie_id: vlcMovieId,
           movie_title: movie?.title,
           movie_slug: movie?.slug,
-          time: vlcLastTime,
-          duration: vlcLastLength,
+          time,
+          duration,
         }
       }
 
-      return { playing: true, source: 'vlc', time: vlcLastTime, duration: vlcLastLength }
+      return { playing: true, source: 'vlc', time, duration }
     }
 
     return { playing: false }
@@ -434,13 +403,11 @@ function register() {
   })
 
   // Check if VLC is installed
-  ipcMain.handle('playback:checkVlc', () => {
-    return fs.existsSync(VLC_APP_PATH)
-  })
+  ipcMain.handle('playback:checkVlc', () => libvlc.isInstalled())
 
-  // Open file in VLC with playback tracking via HTTP interface
+  // Open file in VLC with playback tracking via libvlc-player service
   ipcMain.handle('playback:openInVlc', async (_e, { filePath, episodeId, movieId }) => {
-    if (!fs.existsSync(VLC_APP_PATH)) {
+    if (!libvlc.isInstalled()) {
       return { error: 'VLC is not installed. Install it from https://www.videolan.org/' }
     }
 
@@ -455,15 +422,11 @@ function register() {
       return { error: 'File is not in a registered media directory' }
     }
 
-    // Stop any existing VLC polling
-    stopVlcPolling()
-
-    // Set up tracking context for new session
+    // Reset session state for new playback
+    libvlc.stopPolling()
     vlcEpisodeId = episodeId || null
     vlcMovieId = movieId || null
     vlcWatchHistoryId = null
-    vlcLastTime = 0
-    vlcLastLength = 0
 
     // Create watch history entry for episodes
     if (vlcEpisodeId) {
@@ -494,47 +457,34 @@ function register() {
     }
 
     try {
-      // Check if VLC is already running with HTTP interface
-      const running = await vlcRequest()
-
-      if (running) {
-        // Enqueue file into running VLC
-        // Build a proper file:// URI — encode each path component individually
-        // to correctly handle spaces, #, ?, and other special characters in filenames
-        const fileUri = 'file://' + resolvedPath.split('/').map(c => encodeURIComponent(c)).join('/')
-        await vlcRequest('?command=pl_empty')
-        await vlcRequest(`?command=in_play&input=${fileUri}`)
-        if (startTime > 0) {
-          await new Promise(r => setTimeout(r, 500))
-          await vlcRequest(`?command=seek&val=${startTime}`)
-        }
-      } else {
-        // Launch VLC with HTTP interface
-        const args = [
-          resolvedPath,
-          '--extraintf', 'http',
-          '--http-host', '127.0.0.1',
-          '--http-port', String(VLC_HTTP_PORT),
-          '--http-password', VLC_HTTP_PASSWORD,
-          '--no-http-forward-cookies',
-        ]
-        if (startTime > 0) {
-          args.push('--start-time', String(startTime))
-        }
-        const child = spawn(VLC_BIN_PATH, args, {
-          detached: true,
-          stdio: 'ignore',
-        })
-        child.unref()
-      }
-
-      // Start polling after a short delay (give VLC time to start)
-      setTimeout(() => startVlcPolling(), 2000)
-
+      await libvlc.play(resolvedPath, startTime)
+      // Wait briefly for VLC to settle, then begin polling for progress.
+      setTimeout(() => libvlc.startPolling(), 2000)
       return { ok: true }
     } catch (err) {
       return { error: err.message }
     }
+  })
+
+  // libvlc library control surface — fine-grained playback commands the
+  // renderer can issue for VLC sessions started via openInVlc.
+  ipcMain.handle('libvlc:status', async () => {
+    try { return await libvlc.status() } catch { return null }
+  })
+  ipcMain.handle('libvlc:pause', async () => {
+    try { await libvlc.pause(); return { ok: true } } catch (err) { return { error: err.message } }
+  })
+  ipcMain.handle('libvlc:resume', async () => {
+    try { await libvlc.resume(); return { ok: true } } catch (err) { return { error: err.message } }
+  })
+  ipcMain.handle('libvlc:stop', async () => {
+    try { await libvlc.stop(); libvlc.stopPolling(); return { ok: true } } catch (err) { return { error: err.message } }
+  })
+  ipcMain.handle('libvlc:seek', async (_e, seconds) => {
+    try { await libvlc.seek(seconds); return { ok: true } } catch (err) { return { error: err.message } }
+  })
+  ipcMain.handle('libvlc:setVolume', async (_e, level) => {
+    try { await libvlc.setVolume(level); return { ok: true } } catch (err) { return { error: err.message } }
   })
 
   // Open file in default OS player
@@ -584,21 +534,11 @@ function saveProgress(time, duration) {
 
 function getCurrentSeekBase() { return currentSeekBase }
 
-// -- VLC HTTP interface helpers --
-
-async function vlcRequest(queryPath = '') {
-  const url = `http://127.0.0.1:${VLC_HTTP_PORT}/requests/status.json${queryPath}`
-  try {
-    const res = await fetch(url, {
-      headers: { Authorization: VLC_AUTH_HEADER },
-      signal: AbortSignal.timeout(3000),
-    })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  }
-}
+// -- VLC session bridge --
+//
+// libvlc-player owns the polling loop and emits 'tick' / 'ended' events.
+// Here we tie those events to per-card progress writes and the renderer
+// notification, then clear our local episode/movie/history bookkeeping.
 
 function saveVlcProgress(time, duration) {
   if (vlcEpisodeId && duration > 0) {
@@ -618,52 +558,22 @@ function saveVlcProgress(time, duration) {
   }
 }
 
-function startVlcPolling() {
-  // Only clear the timer, not the tracking state
-  if (vlcPollTimer) {
-    clearInterval(vlcPollTimer)
-    vlcPollTimer = null
-  }
-  vlcPollTimer = setInterval(async () => {
-    const data = await vlcRequest()
-    if (!data || data.state === 'stopped') {
-      // VLC stopped or closed — save final progress and clean up
-      if (vlcLastTime > 0 && vlcLastLength > 0) {
-        saveVlcProgress(vlcLastTime, vlcLastLength)
-      }
-      clearVlcState()
-      // Notify renderer to refresh data
-      try {
-        const { BrowserWindow } = require('electron')
-        const win = BrowserWindow.getAllWindows()[0]
-        if (win) win.webContents.send('vlc-playback-ended')
-      } catch {}
-      return
-    }
-    const time = parseInt(data.time) || 0
-    const length = parseInt(data.length) || 0
-    if (time > 0 && length > 0) {
-      vlcLastTime = time
-      vlcLastLength = length
-      saveVlcProgress(time, length)
-    }
-  }, VLC_POLL_INTERVAL)
-}
+libvlc.events.on('tick', ({ time, length }) => {
+  if (time > 0 && length > 0) saveVlcProgress(time, length)
+})
 
-function stopVlcPolling() {
-  if (vlcPollTimer) {
-    clearInterval(vlcPollTimer)
-    vlcPollTimer = null
+libvlc.events.on('ended', (final) => {
+  if (final && final.time > 0 && final.length > 0) {
+    saveVlcProgress(final.time, final.length)
   }
-}
-
-function clearVlcState() {
-  stopVlcPolling()
   vlcEpisodeId = null
   vlcMovieId = null
   vlcWatchHistoryId = null
-  vlcLastTime = 0
-  vlcLastLength = 0
-}
+  try {
+    const { BrowserWindow } = require('electron')
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) win.webContents.send('vlc-playback-ended')
+  } catch {}
+})
 
 module.exports = { register, getCurrentSeekBase }

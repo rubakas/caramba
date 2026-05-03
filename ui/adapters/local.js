@@ -50,6 +50,14 @@ export function createLocalAdapter() {
     openInVlc: (opts) => api.openInVlc(opts),
     openInDefault: (...args) => api.openInDefault(...args),
 
+    // libVLC library control (card #60)
+    vlcStatus: () => api.vlcStatus(),
+    vlcPause: () => api.vlcPause(),
+    vlcResume: () => api.vlcResume(),
+    vlcStop: () => api.vlcStop(),
+    vlcSeek: (seconds) => api.vlcSeek(seconds),
+    vlcSetVolume: (level) => api.vlcSetVolume(level),
+
     // Downloads
     downloadEpisode: (arg) => api.downloadEpisode(arg),
     deleteDownloadEpisode: (arg) => api.deleteDownloadEpisode(arg),
@@ -107,4 +115,5 @@ export const localCapabilities = {
   hasSettings: true,
   hasPlayground: true,
   canAdmin: false,
+  hasVlcLibrary: true,
 }
