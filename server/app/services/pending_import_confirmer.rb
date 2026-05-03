@@ -65,13 +65,15 @@ class PendingImportConfirmer
       title = candidate&.dig("name").presence || pending_import.parsed_name.presence || File.basename(pending_import.folder_path, File.extname(pending_import.folder_path))
       year = candidate&.dig("year")&.to_s.presence || pending_import.parsed_year&.to_s
 
-      nfo = NfoParserService.read_movie(pending_import.folder_path) || {}
-      filename_imdb = FilenameParserService.extract_provider_ids(pending_import.folder_path)[:imdb]
+      file_path = resolve_movie_file(pending_import.folder_path)
+
+      nfo = NfoParserService.read_movie(file_path) || {}
+      filename_imdb = FilenameParserService.extract_provider_ids(file_path)[:imdb]
       imdb_id = nfo[:imdb_id] || filename_imdb || external_id
 
       movie = Movie.new(
         title: nfo[:title].presence || title,
-        file_path: pending_import.folder_path,
+        file_path: file_path,
         year: nfo[:year].presence || year,
         imdb_id: imdb_id
       )
@@ -90,6 +92,13 @@ class PendingImportConfirmer
     def find_candidate(pending_import, external_id)
       return nil unless pending_import.candidates.is_a?(Array)
       pending_import.candidates.find { |c| c["externalId"].to_s == external_id }
+    end
+
+    def resolve_movie_file(path)
+      return path unless File.directory?(path)
+      main = LibraryWatcherService.main_video_in(path)
+      raise ArgumentError, "No video file found inside #{path}" unless main
+      main
     end
   end
 end
