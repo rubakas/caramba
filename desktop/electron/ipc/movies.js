@@ -19,13 +19,22 @@ function register() {
   })
 
   ipcMain.handle('movies:add', async (_e, filePaths) => {
+    const parser = require('../services/filename-parser')
+    const nfo = require('../services/nfo-parser')
+
     const results = []
     for (const fp of filePaths) {
-      const title = movieMetadata.nameFromFilename(fp)
-      const year = movieMetadata.yearFromFilename(fp)
-      const movie = db.movies.create({ title, file_path: fp, year })
+      // Local-first: NFO sidecar then filename — beat the title and id
+      // out of disk before going to the network.
+      const nfoData = nfo.readMovie(fp) || {}
+      const filenameIds = parser.extractProviderIds(fp)
+      const imdbId = nfoData.imdb_id || filenameIds.imdb || null
+
+      const title = nfoData.title || movieMetadata.nameFromFilename(fp)
+      const year = nfoData.year || movieMetadata.yearFromFilename(fp)
+      const movie = db.movies.create({ title, file_path: fp, year, imdb_id: imdbId })
       if (movie) {
-        await movieMetadata.fetchForMovie(movie.id)
+        await movieMetadata.fetchForMovie(movie.id, { imdbId })
         results.push(db.movies.findById(movie.id))
       }
     }

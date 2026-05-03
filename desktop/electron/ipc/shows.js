@@ -80,14 +80,9 @@ function register() {
   })
 
   ipcMain.handle('shows:add', async (_e, folderPath) => {
-    const name = mediaScanner.nameFromPath(folderPath.trim())
-    let s = db.shows.findByMediaPath(folderPath.trim())
-    if (!s) {
-      s = db.shows.create({ name, media_path: folderPath.trim() })
-    }
-    mediaScanner.scan(s.id)
-    await metadataFetcher.fetchForShow(s.id)
-    return db.shows.findById(s.id)
+    return mediaScanner.addFromPath(folderPath, async (s, opts) => {
+      await metadataFetcher.fetchForShow(s.id, opts)
+    })
   })
 
   ipcMain.handle('shows:scan', (_e, slug) => {
@@ -99,7 +94,7 @@ function register() {
   ipcMain.handle('shows:refreshMetadata', async (_e, slug) => {
     const s = db.shows.findBySlug(slug)
     if (!s) return false
-    return metadataFetcher.fetchForShow(s.id)
+    return metadataFetcher.fetchForShow(s.id, { imdbId: s.imdb_id })
   })
 
   ipcMain.handle('shows:destroy', (_e, slug) => {

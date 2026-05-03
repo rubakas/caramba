@@ -1,97 +1,76 @@
 // Scans a show's media directory for episode files.
-// Supports dot-separated (scene), space+hyphen (Plex), and flat structures.
-// Also handles "release folder" nesting (one level deep).
+// Mirrors server/app/services/media_scanner_service.rb. Filename / episode
+// parsing is delegated to filename-parser.js (the Jellyfin-style chained
+// parser). Public surface preserved for existing callers:
+//   nameFromPath, parseEpisode, collectMkvFiles, scan, addFromPath
 
 const fs = require('fs')
 const path = require('path')
 const db = require('../db')
+const parser = require('./filename-parser')
+const nfo = require('./nfo-parser')
+const techProbe = require('./tech-probe')
 
-const EPISODE_CODE_RE = /S(\d{1,3})E(\d{1,3})/i
-
-// Derive a clean show name from a folder path.
 function nameFromPath(folderPath) {
-  let folder = path.basename(folderPath)
-  let clean = folder
-
-  // Strip parenthesized year and everything after: "Black Books (2000) Season..." -> "Black Books"
-  let stripped = clean.replace(/\s*\(\d{4}\).*/, '')
-  if (stripped !== clean && stripped.trim()) return stripped.trim()
-
-  // Strip dot-separated year and everything after: "The.Simpsons.1989..." -> "The.Simpsons"
-  stripped = clean.replace(/[.](?:19|20)\d{2}.*/, '')
-  if (stripped !== clean && stripped.trim()) {
-    return stripped.replace(/\./g, ' ').trim()
-  }
-
-  // Strip season code and everything after: "The.City.And.The.City.S01..." -> "The.City.And.The.City"
-  stripped = clean.replace(/[.\s]S\d+.*/i, '')
-  if (stripped !== clean && stripped.trim()) {
-    return stripped.replace(/\./g, ' ').trim()
-  }
-
-  return clean.replace(/\./g, ' ').trim() || folder
+  const folder = path.basename(folderPath || '')
+  const parsed = parser.parse(folder)
+  if (parsed.title && parsed.title !== folder) return parsed.title
+  return folder.replace(/\./g, ' ').trim() || folder
 }
 
-// Check if a directory name is a season directory
 function isSeasonDir(name) {
-  return /^season\s*\d+$/i.test(name) ||
-    /^S\d+$/i.test(name) ||
-    /\.S\d+\./i.test(name) ||
-    /^specials?$/i.test(name)
+  return parser.seasonFromFolder(name) != null
 }
 
-// Collect MKV files from a directory (season subdirs + root-level)
+function safeReaddir(dir) {
+  try { return fs.readdirSync(dir) } catch { return [] }
+}
+
+function isFile(p) {
+  try { return fs.statSync(p).isFile() } catch { return false }
+}
+
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory() } catch { return false }
+}
+
 function collectFromDir(dir) {
   const files = []
-  let entries
-  try { entries = fs.readdirSync(dir) } catch { return files }
+  const entries = safeReaddir(dir)
 
   for (const entry of entries) {
     if (entry.startsWith('.')) continue
     const dirPath = path.join(dir, entry)
-    try {
-      if (!fs.statSync(dirPath).isDirectory()) continue
-    } catch { continue }
+    if (!isDirectory(dirPath)) continue
     if (!isSeasonDir(entry)) continue
 
-    let subEntries
-    try { subEntries = fs.readdirSync(dirPath) } catch { continue }
-    for (const f of subEntries) {
-      if (f.toLowerCase().endsWith('.mkv')) {
-        files.push([path.join(dirPath, f), f])
+    for (const f of safeReaddir(dirPath)) {
+      const full = path.join(dirPath, f)
+      if (parser.videoFile(f) && isFile(full)) {
+        files.push([full, f])
       }
     }
   }
 
-  // Also check root for MKV files (flat structure)
   for (const f of entries) {
     const full = path.join(dir, f)
-    try {
-      if (f.toLowerCase().endsWith('.mkv') && fs.statSync(full).isFile()) {
-        files.push([full, f])
-      }
-    } catch { /* skip */ }
+    if (parser.videoFile(f) && isFile(full)) {
+      files.push([full, f])
+    }
   }
 
   return files
 }
 
-// Collect all MKV files, handling release folder nesting
 function collectMkvFiles(mediaRoot) {
   let files = collectFromDir(mediaRoot)
 
   if (files.length === 0) {
-    // Look one level deeper for release folders
-    let entries
-    try { entries = fs.readdirSync(mediaRoot) } catch { return [] }
-    for (const entry of entries) {
+    for (const entry of safeReaddir(mediaRoot)) {
       if (entry.startsWith('.')) continue
       const subdir = path.join(mediaRoot, entry)
-      try {
-        if (!fs.statSync(subdir).isDirectory()) continue
-      } catch { continue }
+      if (!isDirectory(subdir)) continue
       if (isSeasonDir(entry)) continue
-
       const nested = collectFromDir(subdir)
       if (nested.length > 0) {
         files = nested
@@ -103,44 +82,46 @@ function collectMkvFiles(mediaRoot) {
   return files.sort((a, b) => a[1].localeCompare(b[1]))
 }
 
-// Extract episode title from filename
-function extractTitle(filename, codeMatch) {
-  const afterCode = filename.slice(codeMatch.index + codeMatch[0].length)
+function seasonFromPath(fullPath) {
+  return parser.seasonFromFolder(path.basename(path.dirname(fullPath)))
+}
 
-  // Hyphen-separated: " - Title (quality).mkv"
+// Extract a human episode title from the part of the filename after the
+// SxxExx code. Independent of filename-parser — this one is for display
+// titles, the parser is for identifiers.
+function extractTitle(filename) {
+  const m = filename.match(/S(\d{1,3})E(\d{1,3})/i)
+  if (!m) return null
+  const afterCode = filename.slice(m.index + m[0].length)
+
   if (/^\s*-\s*/.test(afterCode)) {
     let title = afterCode.replace(/^\s*-\s*/, '')
-    title = title.replace(/\s*\([^)]*\)\s*\.mkv$/i, '')
-    title = title.replace(/\.mkv$/i, '')
+    title = title.replace(/\s*\([^)]*\)\s*\.\w+$/i, '')
+    title = title.replace(/\.\w+$/i, '')
     return title.trim() || null
   }
 
-  // Dot-separated: ".Title.Here.1080p..."
   if (/^\./.test(afterCode)) {
     let title = afterCode.replace(/^\./, '')
+    title = title.replace(/\.\w+$/i, '')
     title = title.replace(/\.(?:\d{3,4}p|WEB[-.]?DL|WEBRip|BluRay|BDRip|BDRemux|HDTV|DVDRip|AMZN|REPACK).*$/i, '')
     title = title.replace(/\./g, ' ').trim()
     if (/^\d{3,4}p$/i.test(title)) return null
     return title || null
   }
-
   return null
 }
 
-// Parse episode info from filename
 function parseEpisode(filename) {
-  const match = filename.match(EPISODE_CODE_RE)
-  if (!match) return null
-
-  const season = parseInt(match[1], 10)
-  const episode = parseInt(match[2], 10)
+  const parsed = parser.parse(filename)
+  if (parsed.type !== 'episode' || !parsed.episode) return null
+  const season = parsed.season || 1
+  const episode = parsed.episode
   const code = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
-  const title = extractTitle(filename, match)
-
-  return { season, episode, title: title || code, code }
+  const title = extractTitle(filename) || code
+  return { season, episode, title, code }
 }
 
-// Scan a show folder and upsert episodes
 function scan(showId) {
   const s = db.shows.findById(showId)
   if (!s) return 0
@@ -150,42 +131,62 @@ function scan(showId) {
     return 0
   }
 
-  const mkvFiles = collectMkvFiles(s.media_path)
+  const files = collectMkvFiles(s.media_path)
   let count = 0
 
-  for (const [fullPath, filename] of mkvFiles) {
-    const ep = parseEpisode(filename)
-    if (!ep) continue
+  for (const [fullPath, filename] of files) {
+    const parsed = parser.parse(filename)
+    if (parsed.is_extra) continue
+    if (parsed.type !== 'episode' || !parsed.episode) continue
 
-    db.episodes.upsert({
+    const season = parsed.season || seasonFromPath(fullPath) || 1
+    const episode = parsed.episode
+    const code = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+    const title = extractTitle(filename) || code
+
+    const upserted = db.episodes.upsert({
       show_id: showId,
-      code: ep.code,
-      title: ep.title,
-      season_number: ep.season,
-      episode_number: ep.episode,
+      code,
+      title,
+      season_number: season,
+      episode_number: episode,
       file_path: fullPath,
     })
     count++
+
+    // Background probe — fire-and-forget; cached on the row when done.
+    const epId = upserted && upserted.id
+    if (epId) {
+      techProbe.probeAndCache('episodes', epId).catch(() => {})
+    }
   }
 
   console.log(`MediaScanner: scanned ${count} episodes for '${s.name}'`)
   return count
 }
 
-// Add a show from a folder path: create/find show, scan, fetch metadata
 async function addFromPath(folderPath, fetchMetadata) {
   folderPath = folderPath.trim()
-  const name = nameFromPath(folderPath)
+
+  // Local-first: NFO sidecar + filename ID extraction seed metadata
+  // before any remote API call.
+  const nfoData = nfo.readShow(folderPath) || {}
+  const filenameIds = parser.extractProviderIds(folderPath)
+  const imdbId = nfoData.imdb_id || filenameIds.imdb || null
+
+  const name = nfoData.title || nameFromPath(folderPath)
 
   let s = db.shows.findByMediaPath(folderPath)
   if (!s) {
-    s = db.shows.create({ name, media_path: folderPath })
+    s = db.shows.create({ name, media_path: folderPath, imdb_id: imdbId })
+  } else if (imdbId && !s.imdb_id) {
+    db.shows.update(s.id, { imdb_id: imdbId })
   }
 
   scan(s.id)
 
   if (fetchMetadata) {
-    await fetchMetadata(s)
+    await fetchMetadata(s, { imdbId })
   }
 
   return db.shows.findById(s.id)

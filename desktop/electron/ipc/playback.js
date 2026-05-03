@@ -42,7 +42,15 @@ function register() {
         return { error: 'File is not in a registered media directory' }
       }
 
-      const info = await transcoder.probe(filePath)
+      // Prefer cached probe data on the Episode/Movie row (written at
+      // scan time by tech-probe.js). Falls back to a live ffprobe when
+      // missing or the file size has changed.
+      const techProbe = require('../services/tech-probe')
+      const cachedRecord =
+        db.episodes.findByFilePath?.(filePath) ||
+        db.movies.findByFilePath?.(filePath)
+      const cachedInfo = cachedRecord ? await techProbe.probeFor(cachedRecord) : null
+      const info = cachedInfo || await transcoder.probe(filePath)
 
       const audioStreamIndex = selectAudioTrack(info.audioStreams, prefs)
       const sub = selectSubtitleTrack(info.subtitleStreams, prefs)
