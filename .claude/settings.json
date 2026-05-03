@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Edit|Write|MultiEdit",
+      "hooks": [{
+        "type": "command",
+        "command": "jq -r '.tool_input.file_path' | { read f; case \"$f\" in */server/*.rb) cd server && bin/rubocop -a \"$f\" >/dev/null ;; esac; }"
+      }]
+    }]
+  }
+}
