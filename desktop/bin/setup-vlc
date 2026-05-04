@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+#
+# Download libVLC + plugins from the official VideoLAN DMG and vendor them
+# into desktop/vendor/vlc-${arch}/ so the desktop app can embed playback
+# via libvlc_media_player_set_nsobject WITHOUT requiring the user to have
+# VLC.app installed on their Mac.
+#
+# Bundles into the packaged DMG via electron-builder extraResources, parallel
+# to the vendored ffmpeg binaries.
+#
+# Usage: bin/setup-vlc           # skip if already present
+#        bin/setup-vlc --force   # re-download
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+VLC_VERSION="3.0.21"
+
+ARM_DMG="https://download.videolan.org/vlc/${VLC_VERSION}/macosx/vlc-${VLC_VERSION}-arm64.dmg"
+INTEL_DMG="https://download.videolan.org/vlc/${VLC_VERSION}/macosx/vlc-${VLC_VERSION}-intel64.dmg"
+
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+    *) echo "Unknown flag: $arg (use --force)"; exit 1 ;;
+  esac
+done
+
+setup_arch() {
+  local arch="$1"   # arm64 | x64
+  local url="$2"
+  local dir="vendor/vlc-${arch}"
+  local marker="$dir/lib/libvlc.dylib"
+
+  if [ "$FORCE" = false ] && [ -e "$marker" ]; then
+    echo "libVLC (${arch}) already present at $dir"
+    return 0
+  fi
+
+  rm -rf "$dir"
+  mkdir -p "$dir"
+
+  local dmg="/tmp/vlc-${arch}.dmg"
+  echo "Downloading VLC ${VLC_VERSION} (${arch}) ..."
+  curl -fL "$url" -o "$dmg"
+  if [ ! -s "$dmg" ]; then echo "Error: empty download for $arch"; exit 1; fi
+
+  # Mount at a fixed path so we don't need to parse hdiutil's output.
+  local mount_point="/tmp/vlc-mount-${arch}"
+  rm -rf "$mount_point"
+  mkdir -p "$mount_point"
+  if ! hdiutil attach "$dmg" -nobrowse -quiet -mountpoint "$mount_point" >/dev/null; then
+    echo "Error: failed to mount $dmg at $mount_point"
+    exit 1
+  fi
+  echo "Mounted: $mount_point"
+
+  local app="$mount_point/VLC.app"
+  if [ ! -d "$app" ]; then
+    hdiutil detach "$mount_point" -quiet || true
+    echo "Error: VLC.app not found in $mount_point"
+    exit 1
+  fi
+
+  # The dylibs, the plugins (codec/demuxer/decoder modules), the lua share
+  # tree (used by some discoverers), and the headers (build-time only — they
+  # don't need to ship in the DMG, but it keeps the vendor self-contained).
+  cp -R "$app/Contents/MacOS/lib"     "$dir/lib"
+  cp -R "$app/Contents/MacOS/plugins" "$dir/plugins"
+  cp -R "$app/Contents/MacOS/share"   "$dir/share"
+  cp -R "$app/Contents/MacOS/include" "$dir/include"
+
+  hdiutil detach "$mount_point" -quiet || true
+  rm -f "$dmg"
+
+  if [ ! -e "$dir/lib/libvlc.dylib" ]; then
+    echo "Error: libvlc.dylib not extracted to $dir"
+    exit 1
+  fi
+
+  echo "Extracted libVLC ${VLC_VERSION} for ${arch}:"
+  shasum -a 256 "$dir/lib/libvlc.dylib" "$dir/lib/libvlccore.dylib" 2>/dev/null \
+    | tee "$dir/SHA256SUMS"
+}
+
+setup_arch arm64 "$ARM_DMG"
+setup_arch x64   "$INTEL_DMG"
+
+# ── Build the native libvlc-embed module against Electron's headers ────
+# The module links against vendor/vlc-${arch}/lib/libvlc.dylib via @rpath
+# and is loaded by electron/services/vlc-embed-player.js.
+echo ""
+echo "Building vlc-embed native module..."
+NATIVE_DIR="electron/native/vlc-embed"
+ELECTRON_VERSION=$(node -p "require('./node_modules/electron/package.json').version")
+HOST_ARCH=$(node -p "process.arch === 'x64' ? 'x64' : 'arm64'")
+echo "  electron=$ELECTRON_VERSION  arch=$HOST_ARCH"
+
+(
+  cd "$NATIVE_DIR"
+  if [ ! -d node_modules/node-addon-api ]; then
+    echo "  installing node-addon-api ..."
+    npm install --no-save --silent
+  fi
+  rm -rf build
+  HOME=$(mktemp -d) npx --yes node-gyp rebuild \
+    --target="$ELECTRON_VERSION" \
+    --dist-url=https://electronjs.org/headers \
+    --arch="$HOST_ARCH" \
+    --silent 2>&1 \
+    | grep -E "(CXX|SOLINK|gyp ERR|error:)" || true
+)
+if [ ! -e "$NATIVE_DIR/build/Release/vlc_embed.node" ]; then
+  echo "Error: native module build failed (check $NATIVE_DIR/build/)"
+  exit 1
+fi
+echo "  built: $NATIVE_DIR/build/Release/vlc_embed.node"
+
+echo ""
+echo "Done."
+du -sh vendor/vlc-arm64 vendor/vlc-x64

@@ -29,22 +29,41 @@ contextBridge.exposeInMainWorld('api', {
   destroyMovie: (slug) => ipcRenderer.invoke('movies:destroy', slug),
   relocateMovie: (slug, newPath) => ipcRenderer.invoke('movies:relocate', slug, newPath),
 
-  // Playback (new transcoder-based)
+  // Playback (libVLC-embedded)
   startPlayback: (filePath, startTime, prefs, options) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs, options),
   seekPlayback: (time) => ipcRenderer.invoke('playback:seek', time),
+  pausePlayback: () => ipcRenderer.invoke('playback:pause'),
+  resumePlayback: () => ipcRenderer.invoke('playback:resume'),
   stopPlayback: (finalTime, finalDuration) => ipcRenderer.invoke('playback:stop', finalTime, finalDuration),
   reportProgress: (time, duration) => ipcRenderer.invoke('playback:progress', time, duration),
   getPlaybackStatus: () => ipcRenderer.invoke('playback:status'),
   setPlaybackEpisode: (episodeId, whId) => ipcRenderer.invoke('playback:setEpisode', episodeId, whId),
   setPlaybackMovie: (movieId) => ipcRenderer.invoke('playback:setMovie', movieId),
-  switchAudio: (audioStreamIndex, currentVideoTime) => ipcRenderer.invoke('playback:switchAudio', audioStreamIndex, currentVideoTime),
-  switchSubtitle: (subtitleStreamIndex) => ipcRenderer.invoke('playback:switchSubtitle', subtitleStreamIndex),
-  switchBitmapSubtitle: (subtitleStreamIndex, currentVideoTime) => ipcRenderer.invoke('playback:switchBitmapSubtitle', subtitleStreamIndex, currentVideoTime),
+  switchAudio: (audioStreamId) => ipcRenderer.invoke('playback:switchAudio', audioStreamId),
+  switchSubtitle: (subtitleStreamId) => ipcRenderer.invoke('playback:switchSubtitle', subtitleStreamId),
+  addExternalSubtitle: (path) => ipcRenderer.invoke('playback:addExternalSubtitle', path),
+  setSubtitleAppearance: (opts) => ipcRenderer.invoke('playback:setSubtitleAppearance', opts),
   savePlaybackPreferences: (prefs) => ipcRenderer.invoke('playback:savePreferences', prefs),
   getPlaybackPreferences: (query) => ipcRenderer.invoke('playback:getPreferences', query),
   checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),
   openInVlc: (opts) => ipcRenderer.invoke('playback:openInVlc', opts),
   openInDefault: (filePath, episodeId, movieId) => ipcRenderer.invoke('playback:openInDefault', filePath, episodeId, movieId),
+  // Live state pushes from the embedded libVLC.
+  onPlaybackState: (cb) => {
+    const handler = (_e, state) => cb(state)
+    ipcRenderer.on('playback:state', handler)
+    return () => ipcRenderer.removeListener('playback:state', handler)
+  },
+  onPlaybackTracks: (cb) => {
+    const handler = (_e, tracks) => cb(tracks)
+    ipcRenderer.on('playback:tracks', handler)
+    return () => ipcRenderer.removeListener('playback:tracks', handler)
+  },
+  onPlaybackEnded: (cb) => {
+    const handler = (_e, info) => cb(info)
+    ipcRenderer.on('playback:ended', handler)
+    return () => ipcRenderer.removeListener('playback:ended', handler)
+  },
 
   // libVLC library control surface (card #60)
   vlcStatus: () => ipcRenderer.invoke('libvlc:status'),
@@ -58,12 +77,6 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('vlc-playback-ended', handler)
     return () => ipcRenderer.removeListener('vlc-playback-ended', handler)
   },
-  onSubtitlesReady: (cb) => {
-    const handler = (_e, data) => cb(data)
-    ipcRenderer.on('playback:subtitles-ready', handler)
-    return () => ipcRenderer.removeListener('playback:subtitles-ready', handler)
-  },
-
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSyncFolder: (folder) => ipcRenderer.invoke('settings:setSyncFolder', folder),

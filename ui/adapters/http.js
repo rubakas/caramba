@@ -186,6 +186,10 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNative
       if (!activeSessionId) return null
       return post('/api/playback/seek', { session: activeSessionId, seekTime })
     },
+    pausePlayback: noopAsync,
+    resumePlayback: noopAsync,
+    addExternalSubtitle: noopAsync,
+    setSubtitleAppearance: noopAsync,
     reportProgress: async (videoTime, videoDuration, context) => {
       return post('/api/playback/report_progress', {
         time: videoTime,
@@ -258,10 +262,12 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNative
     selectFolder: noopAsync,
     selectFiles: noopAsync,
 
-    // Events — no-op subscribers
+    // Events — no-op subscribers (libVLC events only fire in local mode).
     onVlcPlaybackEnded: noopUnsub,
     onMediaDownloadProgress: noopUnsub,
-    onSubtitlesReady: noopUnsub,
+    onPlaybackState: noopUnsub,
+    onPlaybackTracks: noopUnsub,
+    onPlaybackEnded: noopUnsub,
 
     // Updates — use Capacitor CarambaUpdater plugin if available, otherwise no-ops
     checkForUpdate: async () => {
@@ -335,4 +341,5 @@ export const httpCapabilities = {
   canAdmin: true,
   hasNativePlayer: false, // overridden true on Android TV when CarambaPlayer Capacitor plugin is registered
   hasVlcLibrary: false,
+  hasVlcEmbedPlayer: false,
 }

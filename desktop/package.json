@@ -29,6 +29,18 @@
         {
           "from": "vendor/ffmpeg-${arch}",
           "to": "ffmpeg"
+        },
+        {
+          "from": "vendor/vlc-${arch}/lib",
+          "to": "vlc/lib"
+        },
+        {
+          "from": "vendor/vlc-${arch}/plugins",
+          "to": "vlc/plugins"
+        },
+        {
+          "from": "vendor/vlc-${arch}/share",
+          "to": "vlc/share"
         }
       ],
       "extendInfo": {
@@ -41,10 +53,15 @@
     },
     "files": [
       "electron/**/*",
+      "!electron/native/*/node_modules/**",
+      "!electron/native/*/build/{config.gypi,*.mk,Makefile,obj.target/**,Release/.deps/**,Release/obj.target/**}",
       "dist-react/**/*",
       ".env"
     ],
-    "asar": true
+    "asar": true,
+    "asarUnpack": [
+      "electron/native/vlc-embed/build/Release/*.node"
+    ]
   },
   "dependencies": {
     "@caramba/ui": "workspace:*",

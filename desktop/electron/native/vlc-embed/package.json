@@ -1,0 +1,13 @@
+{
+  "name": "vlc-embed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native libVLC binding that embeds video playback into an Electron BrowserWindow's NSView via libvlc_media_player_set_nsobject. Built in place by bin/setup-vlc; not consumed as an npm package.",
+  "main": "index.js",
+  "scripts": {
+    "rebuild": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0"
+  }
+}

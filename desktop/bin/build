@@ -97,9 +97,11 @@ pnpm exec vite build
 # when auth token is set, but we never want maps inside the asar bundle.
 find dist-react -name '*.js.map' -delete 2>/dev/null || true
 
-# ── 5. Setup ffmpeg binaries ───────────────────────────────────────
+# ── 5. Setup ffmpeg + libVLC binaries ──────────────────────────────
 echo "Ensuring macOS ffmpeg binaries..."
 bin/setup-ffmpeg
+echo "Ensuring libVLC + native module..."
+bin/setup-vlc
 
 # ── 6. Build macOS package ─────────────────────────────────────────
 echo ""

@@ -31,19 +31,22 @@ export function createLocalAdapter() {
     relocateMovie: (slug, newPath) => api.relocateMovie(slug, newPath),
     playMovie: (slug) => api.playMovie(slug),
 
-    // Playback
+    // Playback (libVLC embedded; renders pixels into the BrowserWindow's NSView)
     startPlayback: (filePath, startTime, prefs, options) => api.startPlayback(filePath, startTime, prefs, options),
     stopPlayback: (finalTime, finalDuration, _context) => api.stopPlayback(finalTime, finalDuration),
     setPlaybackEpisode: (id, whId) => api.setPlaybackEpisode(id, whId),
     setPlaybackMovie: (id) => api.setPlaybackMovie(id),
     seekPlayback: (time) => api.seekPlayback(time),
+    pausePlayback: () => api.pausePlayback(),
+    resumePlayback: () => api.resumePlayback(),
     reportProgress: (time, duration) => api.reportProgress(time, duration),
     getPlaybackStatus: () => api.getPlaybackStatus(),
     getPlaybackPreferences: (opts) => api.getPlaybackPreferences(opts),
     savePlaybackPreferences: (prefs) => api.savePlaybackPreferences(prefs),
-    switchAudio: (index, time) => api.switchAudio(index, time),
-    switchSubtitle: (index) => api.switchSubtitle(index),
-    switchBitmapSubtitle: (index, time) => api.switchBitmapSubtitle(index, time),
+    switchAudio: (id) => api.switchAudio(id),
+    switchSubtitle: (id) => api.switchSubtitle(id),
+    addExternalSubtitle: (path) => api.addExternalSubtitle(path),
+    setSubtitleAppearance: (opts) => api.setSubtitleAppearance(opts),
 
     // VLC
     checkVlc: () => api.checkVlc(),
@@ -81,7 +84,9 @@ export function createLocalAdapter() {
     // Events (return cleanup functions)
     onVlcPlaybackEnded: (cb) => api.onVlcPlaybackEnded(cb),
     onMediaDownloadProgress: (cb) => api.onMediaDownloadProgress(cb),
-    onSubtitlesReady: (cb) => api.onSubtitlesReady?.(cb) || (() => {}),
+    onPlaybackState: (cb) => api.onPlaybackState(cb),
+    onPlaybackTracks: (cb) => api.onPlaybackTracks(cb),
+    onPlaybackEnded: (cb) => api.onPlaybackEnded(cb),
 
     // Updates
     checkForUpdate: () => api.checkForUpdate(),
@@ -117,5 +122,6 @@ export const localCapabilities = {
   hasPlayground: true,
   canAdmin: false,
   hasVlcLibrary: true,
-  hasNativePlayer: false, // Electron uses its own player; the native plugin is Android-only
+  hasNativePlayer: false, // Capacitor native plugin (Android TV only).
+  hasVlcEmbedPlayer: true, // Desktop renders pixels via embedded libVLC.
 }

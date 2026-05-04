@@ -326,25 +326,32 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     getPlaybackPreferences: withFallback(http.getPlaybackPreferences, local.getPlaybackPreferences),
     savePlaybackPreferences: withFallback(http.savePlaybackPreferences, local.savePlaybackPreferences),
 
-    switchAudio: async (index, time) => {
-      if (playbackMode === 'remote') {
-        return http.switchAudio(index, time)
-      }
-      return local.switchAudio(index, time)
+    pausePlayback: async () => {
+      if (playbackMode === 'remote') return http.pausePlayback()
+      return local.pausePlayback()
+    },
+    resumePlayback: async () => {
+      if (playbackMode === 'remote') return http.resumePlayback()
+      return local.resumePlayback()
     },
 
-    switchSubtitle: async (index) => {
-      if (playbackMode === 'remote') {
-        return http.switchSubtitle(index)
-      }
-      return local.switchSubtitle(index)
+    switchAudio: async (idOrIndex, time) => {
+      if (playbackMode === 'remote') return http.switchAudio(idOrIndex, time)
+      return local.switchAudio(idOrIndex)
     },
 
-    switchBitmapSubtitle: async (index, time) => {
-      if (playbackMode === 'remote') {
-        return http.switchBitmapSubtitle(index, time)
-      }
-      return local.switchBitmapSubtitle(index, time)
+    switchSubtitle: async (idOrIndex) => {
+      if (playbackMode === 'remote') return http.switchSubtitle(idOrIndex)
+      return local.switchSubtitle(idOrIndex)
+    },
+
+    addExternalSubtitle: async (path) => {
+      if (playbackMode === 'remote') return null
+      return local.addExternalSubtitle(path)
+    },
+    setSubtitleAppearance: async (opts) => {
+      if (playbackMode === 'remote') return null
+      return local.setSubtitleAppearance(opts)
     },
 
     // === VLC: ALWAYS local ===
@@ -383,7 +390,9 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
     // === Events: ALWAYS local ===
     onVlcPlaybackEnded: local.onVlcPlaybackEnded,
     onMediaDownloadProgress: local.onMediaDownloadProgress,
-    onSubtitlesReady: local.onSubtitlesReady,
+    onPlaybackState: local.onPlaybackState,
+    onPlaybackTracks: local.onPlaybackTracks,
+    onPlaybackEnded: local.onPlaybackEnded,
 
     // === Updates: ALWAYS local ===
     checkForUpdate: local.checkForUpdate,

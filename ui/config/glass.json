@@ -67,5 +67,9 @@
   },
   "season-tab": {
     "radius": 20
+  },
+  "ep-more": {
+    "radius": 10,
+    "bezelHeightFn": "lip"
   }
 }

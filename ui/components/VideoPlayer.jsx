@@ -6,6 +6,7 @@ import { useApi, useCapabilities } from '../context/ApiContext'
 import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
+import VlcOverlay from './VlcOverlay'
 
 // Circuit-breaker budget for hls.js fatal errors. Without a cap, fatal
 // NETWORK_ERROR → startLoad() loops indefinitely whenever the server is
@@ -379,8 +380,15 @@ function buildNativePayload(state) {
 // entirely; the WebView player only renders in browser/web mode.
 export default function VideoPlayer() {
   const capabilities = useCapabilities()
+  const { playerState } = usePlayer()
   if (capabilities.hasNativePlayer) {
     return <NativeVideoPlayer />
+  }
+  // libVLC engine when the platform exposes it AND the current session
+  // isn't a server-transcoded HLS source (hybrid-remote falls back to
+  // <video> + hls.js for the remote stream).
+  if (capabilities.hasVlcEmbedPlayer && !playerState.streamUrl) {
+    return <VlcOverlay />
   }
   return <WebVideoPlayer />
 }
