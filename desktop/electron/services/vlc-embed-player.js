@@ -18,14 +18,11 @@ const path = require('path')
 const ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
 
 function resolveNativeModule() {
-  // Packaged: asarUnpacked .node lives at app.asar.unpacked/electron/native/...
-  // Dev: source tree path
+  // Packaged: extraResources puts the .node at Resources/vlc-embed/...
+  // Dev: source tree path.
   const candidates = []
   if (process.resourcesPath) {
-    candidates.push(path.join(
-      process.resourcesPath, 'app.asar.unpacked',
-      'electron', 'native', 'vlc-embed', 'build', 'Release', 'vlc_embed.node'
-    ))
+    candidates.push(path.join(process.resourcesPath, 'vlc-embed', 'vlc_embed.node'))
   }
   candidates.push(path.join(__dirname, '..', 'native', 'vlc-embed', 'build', 'Release', 'vlc_embed.node'))
   for (const p of candidates) {

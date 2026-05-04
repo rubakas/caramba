@@ -28,7 +28,9 @@ if $BUILD_DESKTOP; then
   echo "═══════════════════════════════════════════════════════════════"
   echo "Building Desktop app..."
   echo "═══════════════════════════════════════════════════════════════"
-  desktop/bin/build $PUBLISH || echo "⚠ Desktop build failed, continuing..."
+  # Fail loud — silent fall-through previously masked a desktop build
+  # error so a `bin/build --publish` published Android only.
+  desktop/bin/build $PUBLISH
 fi
 
 if $BUILD_ANDROID_TV; then

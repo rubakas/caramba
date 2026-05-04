@@ -41,6 +41,10 @@
         {
           "from": "vendor/vlc-${arch}/share",
           "to": "vlc/share"
+        },
+        {
+          "from": "electron/native/vlc-embed/build/Release/vlc_embed.node",
+          "to": "vlc-embed/vlc_embed.node"
         }
       ],
       "extendInfo": {
@@ -53,15 +57,11 @@
     },
     "files": [
       "electron/**/*",
-      "!electron/native/*/node_modules/**",
-      "!electron/native/*/build/{config.gypi,*.mk,Makefile,obj.target/**,Release/.deps/**,Release/obj.target/**}",
+      "!electron/native/**",
       "dist-react/**/*",
       ".env"
     ],
-    "asar": true,
-    "asarUnpack": [
-      "electron/native/vlc-embed/build/Release/*.node"
-    ]
+    "asar": true
   },
   "dependencies": {
     "@caramba/ui": "workspace:*",
