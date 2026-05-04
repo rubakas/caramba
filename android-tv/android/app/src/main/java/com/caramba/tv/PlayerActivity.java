@@ -98,9 +98,8 @@ public class PlayerActivity extends Activity {
 
     // ── Debug overlay ─────────────────────────────────────────────────
     private TextView debugOverlay;
-    // Default to ON during early development so we can see what's playing
-    // without remembering an obscure key code. Toggle with INFO/YELLOW.
-    private boolean debugOverlayShown = true;
+    // On by default in debug builds, off in release. Toggle with INFO/YELLOW.
+    private boolean debugOverlayShown = BuildConfig.DEBUG;
 
     // ── Timers ────────────────────────────────────────────────────────
     private Handler progressHandler;
