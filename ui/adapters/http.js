@@ -63,8 +63,29 @@ function codecSupport() {
   return _codecSupport
 }
 
-export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
+// What ExoPlayer (Media3) can decode natively. Wider than MSE — when
+// `nativePlayer:true` is set the server skips ffmpeg entirely and just
+// serves the source file via /api/playback/file. ExoPlayer's
+// MatroskaExtractor reads MKV directly, decoding HEVC HDR + AC-3 /
+// E-AC-3 / TrueHD / DTS audio + PGS bitmap / SubRip / ASS subtitles —
+// all the codecs that would otherwise force audio_transcode or full_transcode.
+const NATIVE_PLAYER_CODEC_SUPPORT = Object.freeze({
+  h264: true,
+  hevc: true,
+  hevc10: true,
+  nativePlayer: true,
+  audio: Object.freeze({
+    aac: true, ac3: true, eac3: true, flac: true, mp3: true, opus: true,
+    // ExoPlayer's hardware decoders can usually handle these too;
+    // signaling them lets the server skip audio_transcode for
+    // multi-channel lossless streams.
+    truehd: true, dts: true, dtshd: true,
+  }),
+})
+
+export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNativePlayerCodecs = false } = {}) {
   const base = baseUrl.replace(/\/+$/, '')
+  const codecSupportForRequests = () => useNativePlayerCodecs ? NATIVE_PLAYER_CODEC_SUPPORT : codecSupport()
 
   // Active playback session ID (set by startPlayback, cleared by stopPlayback)
   let activeSessionId = null
@@ -139,7 +160,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000') {
         filePath,
         startTime,
         prefs,
-        codecSupport: codecSupport(),
+        codecSupport: codecSupportForRequests(),
         forceTranscode: !!options?.forceTranscode,
       })
       if (result && result.sessionId) {
@@ -312,5 +333,6 @@ export const httpCapabilities = {
   hasNowPlaying: false,
   hasSettings: false,
   canAdmin: true,
+  hasNativePlayer: false, // overridden true on Android TV when CarambaPlayer Capacitor plugin is registered
   hasVlcLibrary: false,
 }

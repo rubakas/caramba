@@ -225,27 +225,54 @@ class TranscoderService
     # ── Subtitle extraction ───────────────────────────────────────────
 
     def extract_subtitles(file_path, stream_index)
-      args = %w[-v quiet]
+      # -v error (was -v quiet) so the stderr we capture on failure is
+      # actually informative. Quiet suppressed even fatal errors, leaving
+      # us debugging blind.
+      #
+      # `-fflags +genpts` is harmless on subtitle-only extraction and
+      # helps when the source's subtitle PTS table is sparse (common on
+      # forced/SDH SubRip tracks where packets are minutes apart and
+      # ffmpeg's default timestamp inference produces a bad first cue).
+      args = %w[-v error -nostdin -fflags +genpts]
       args += [ "-i", file_path ]
       args += [ "-map", "0:#{stream_index}" ]
+      # -dn / -an / -vn — drop everything except the picked subtitle stream.
+      # Without these, ffmpeg sometimes errors out on unmapped video/audio
+      # codecs (e.g. attached image streams) before getting to the subtitle.
+      args += %w[-dn -an -vn]
       args += %w[-c:s webvtt -f webvtt pipe:1]
 
+      Rails.logger.info "[Subtitle] extracting stream #{stream_index} from #{File.basename(file_path)}"
       stdout, stderr, status = run_command(ffmpeg_path, args)
       unless status.success? && stdout.present?
-        Rails.logger.warn "[Subtitle] extraction failed: code=#{status.exitstatus}, stderr=#{stderr.to_s[0..300]}"
+        Rails.logger.warn "[Subtitle] extraction failed: code=#{status.exitstatus}, " \
+          "stderr=#{stderr.to_s[0..400].strip.presence || '(empty)'}, " \
+          "stdout_size=#{stdout.to_s.bytesize}"
         return nil
       end
 
+      Rails.logger.info "[Subtitle] extracted #{stdout.bytesize} bytes for stream #{stream_index}"
       stdout
     end
 
     def extract_subtitles_async(session_id, file_path, stream_index)
       kill_subtitle_extractor
 
-      args = %w[-v quiet]
+      # Mirror the sync version's args: -v error so failure stderr is real,
+      # -dn/-an/-vn to skip non-subtitle streams, +genpts for sparse PTS
+      # tables. Mark the session as extracting so the GET /subtitles
+      # endpoint knows to long-poll instead of returning empty.
+      args = %w[-v error -nostdin -fflags +genpts]
       args += [ "-i", file_path ]
       args += [ "-map", "0:#{stream_index}" ]
+      args += %w[-dn -an -vn]
       args += %w[-c:s webvtt -f webvtt pipe:1]
+
+      if @session && @session[:id] == session_id
+        @session[:subtitle_vtt] = nil
+        @session[:subtitle_extracting] = true
+        @session[:active_subtitle_index] = stream_index
+      end
 
       rd, wr = IO.pipe
       rd.binmode
@@ -273,6 +300,8 @@ class TranscoderService
             @session[:subtitle_vtt] = vtt
             @session[:active_subtitle_index] = stream_index
             Rails.logger.info "[Subtitle] Extracted #{vtt.lines.count} lines for stream #{stream_index}"
+          elsif @session && @session[:id] == session_id
+            Rails.logger.warn "[Subtitle] Async extraction produced no output for stream #{stream_index}"
           end
         rescue IOError, Errno::EPIPE => e
           Rails.logger.debug "[Subtitle] extraction stopped: #{e.class}"
@@ -280,8 +309,20 @@ class TranscoderService
           Rails.logger.error "[Subtitle] extraction error: #{e.message}"
         ensure
           @subtitle_pid = nil
+          if @session && @session[:id] == session_id
+            @session[:subtitle_extracting] = false
+          end
         end
       end
+    end
+
+    # True while extract_subtitles_async is still running for this session.
+    # The /subtitles endpoint long-polls on this so the player's HTTP fetch
+    # blocks until extraction completes (or the timeout hits) — much
+    # smoother UX than racing the player against ffmpeg startup.
+    def subtitle_extracting?(session_id)
+      return false unless @session && @session[:id] == session_id
+      !!@session[:subtitle_extracting]
     end
 
     def kill_subtitle_extractor
@@ -396,6 +437,12 @@ class TranscoderService
     # VP8/VP9 plays direct, but those codecs aren't in the direct-play list.)
     DIRECT_PLAY_CONTAINERS = %w[mp4 m4v mov mj2].freeze
 
+    # When the native player Capacitor plugin is in play, ExoPlayer reads
+    # MKV directly via Media3's MatroskaExtractor — no remux, no transcode.
+    # Adds matroska/webm to the direct-play set on top of the standard
+    # browser containers.
+    NATIVE_DIRECT_PLAY_CONTAINERS = (DIRECT_PLAY_CONTAINERS + %w[matroska webm]).freeze
+
     # 10-bit pixel formats — Chromium MSE on Electron 33 / macOS plays HEVC
     # Main-10 (4K HDR) inconsistently (segments arrive but the decoder
     # produces no frames). Force full_transcode for these.
@@ -442,6 +489,14 @@ class TranscoderService
       truthy?(codec_support[:hevc10]) || truthy?(codec_support["hevc10"])
     end
 
+    # True when the client is the native ExoPlayer Capacitor plugin. Lets
+    # us skip ffmpeg entirely (direct_play of MKV) since ExoPlayer reads
+    # the container, picks tracks, and overlays bitmap subtitles natively.
+    def native_player?(codec_support)
+      return false if codec_support.nil?
+      truthy?(codec_support[:nativePlayer]) || truthy?(codec_support["nativePlayer"])
+    end
+
     # Map ffprobe `codec_name` (lowercase) → key in codec_support[:audio].
     # ffprobe uses "ac3", "eac3", "mp3"; MSE uses "ac-3", "ec-3", "mp3".
     AUDIO_CODEC_PROBE_KEY = {
@@ -472,13 +527,27 @@ class TranscoderService
       v == true || v == "true" || v == 1 || v == "1"
     end
 
-    def direct_play_container?(format_name)
+    def direct_play_container?(format_name, codec_support = nil)
       return false if format_name.blank?
-      DIRECT_PLAY_CONTAINERS.any? { |c| format_name.include?(c) }
+      containers = native_player?(codec_support) ? NATIVE_DIRECT_PLAY_CONTAINERS : DIRECT_PLAY_CONTAINERS
+      containers.any? { |c| format_name.include?(c) }
     end
 
     # Returns one of :direct_play, :direct_stream, :audio_transcode, :full_transcode.
     def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil, force_transcode = false)
+      # Native ExoPlayer plugin shortcut: it reads MKV/MP4 directly,
+      # decodes HEVC HDR + AC-3/EAC-3/TrueHD/DTS + PGS subtitles. No
+      # ffmpeg needed. burn_subtitle_index is moot (PGS overlay happens in
+      # the player). force_transcode still wins because the user explicitly
+      # asked for re-encoding.
+      if native_player?(codec_support) && !force_transcode
+        video_codec = probe_result.dig(:video, :codec)
+        if %w[h264 hevc h265 av1 vp9].include?(video_codec) &&
+           direct_play_container?(probe_result[:formatName], codec_support)
+          return :direct_play
+        end
+      end
+
       return :full_transcode if burn_subtitle_index
       return :full_transcode if force_transcode
 
@@ -506,7 +575,7 @@ class TranscoderService
       # Codecs are compatible. If the container is also browser-friendly,
       # serve the file as-is (direct_play, no ffmpeg). Otherwise remux into
       # fMP4 via `-c copy` (direct_stream).
-      if direct_play_container?(probe_result[:formatName])
+      if direct_play_container?(probe_result[:formatName], codec_support)
         :direct_play
       else
         :direct_stream
@@ -649,10 +718,16 @@ class TranscoderService
       # Force the AAC sample rate to match the source. With 7.1 → 5.1 downmix
       # ffmpeg occasionally picks an off-by-one rate that drifts audio.
       args += [ "-ar", "48000" ]
-      # Sample-level alignment of the re-encoded audio. Conservative async=1
-      # (1 sample/sec compensation) — combined with the -copyts family at the
-      # input level, this is enough; aggressive async values caused over-
-      # compensation and audible drift on TrueHD/DTS-HD MA decoding paths.
+      # Two-layer audio sync. The global -async 1 flag (deprecated but still
+      # the canonical way to do this in ffmpeg) anchors the first audio
+      # sample to its source PTS — important when the source has a non-zero
+      # audio start_time (UHD remuxes typically have 32ms TrueHD offset),
+      # because video copy preserves that offset but a re-encoded audio
+      # stream defaults to PTS=0 and ends up that many ms ahead. Then the
+      # aresample filter handles inter-frame drift across the rest of the
+      # session. Conservative async=1 (1 sample/sec) — aggressive values
+      # caused over-compensation on TrueHD decoding paths.
+      args += [ "-async", "1" ]
       args += [ "-af", "aresample=async=1" ]
       args
     end
@@ -722,12 +797,29 @@ class TranscoderService
       # pixel in linear-light float space; 4K → 1080p is ~4× less work) and
       # the output is 8-bit SDR anyway so the extra resolution would only
       # serve to inflate the encode bitrate.
+      need_downscale = width >= 2560 && tonemap
       base_filter = "scale=iw*sar:ih:flags=lanczos,setsar=1"
-      base_filter += ",scale=-2:1080:flags=lanczos" if tonemap && width >= 2560
+      base_filter += ",scale=-2:1080:flags=lanczos" if need_downscale
       base_filter += ",#{HDR_TONEMAP_CHAIN}" if tonemap
 
       if burn_sub
-        chain = "[0:v:0][0:#{opts[:burn_subtitle_index]}]overlay,#{base_filter}"
+        # Bitmap subtitle burn-in. The naive `overlay,scale,tonemap` order
+        # runs overlay AND scale AND tonemap on full-resolution frames; on
+        # 4K HDR with CPU tonemap that's where ffmpeg falls under realtime
+        # and the player times out waiting for the first segment. Reorder
+        # to: downscale video → downscale subtitle → overlay → tonemap, so
+        # all the heavy work happens at 1080p.
+        sub = opts[:burn_subtitle_index]
+        if need_downscale
+          chain = "[0:v:0]scale=iw*sar:ih:flags=lanczos,setsar=1,scale=-2:1080:flags=lanczos[v];" \
+                  "[0:#{sub}]scale=-2:1080:flags=lanczos[s];" \
+                  "[v][s]overlay"
+          chain += ",#{HDR_TONEMAP_CHAIN}" if tonemap
+        elsif tonemap
+          chain = "[0:v:0][0:#{sub}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1,#{HDR_TONEMAP_CHAIN}"
+        else
+          chain = "[0:v:0][0:#{sub}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1"
+        end
         args += [ "-filter_complex", chain ]
         args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
       elsif strategy == :full_transcode

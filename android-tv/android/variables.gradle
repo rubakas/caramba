@@ -13,4 +13,9 @@ ext {
     androidxJunitVersion = '1.1.5'
     androidxEspressoCoreVersion = '3.5.1'
     cordovaAndroidVersion = '10.1.1'
+    // Media3 (ExoPlayer) for the native CarambaPlayer plugin. Pin to a
+    // specific patch — bumping past 1.4.x has historically moved compileSdk
+    // floors. Don't add media3-decoder-ffmpeg: it shadows the hardware
+    // decoders we're adopting Media3 to reach.
+    media3Version = '1.4.1'
 }

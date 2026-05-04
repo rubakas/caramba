@@ -185,10 +185,26 @@ class Api::PlaybackController < Api::BaseController
   # GET /api/playback/subtitles?session=X
   #
   # Serves WebVTT subtitles with timestamps shifted by the current seek
-  # offset. Returns empty VTT if not yet extracted.
+  # offset. Long-polls up to 30 seconds while extract_subtitles_async is
+  # still running so the player's HTTP fetch blocks transparently — no
+  # client-side polling needed. Returns empty VTT if extraction failed
+  # or the session was reset.
   def subtitles
     session_id = params[:session]
     vtt = TranscoderService.get_session_subtitle(session_id)
+
+    if vtt.blank? && TranscoderService.subtitle_extracting?(session_id)
+      deadline = Time.now + 30
+      while vtt.blank? &&
+            TranscoderService.subtitle_extracting?(session_id) &&
+            Time.now < deadline
+        sleep 0.5
+        vtt = TranscoderService.get_session_subtitle(session_id)
+      end
+      # One last read in case extraction finished in the gap between the
+      # loop guard and the read.
+      vtt ||= TranscoderService.get_session_subtitle(session_id)
+    end
 
     if vtt.blank?
       return render plain: "WEBVTT\n\n", content_type: "text/vtt"
@@ -249,16 +265,13 @@ class Api::PlaybackController < Api::BaseController
     end
 
     Rails.logger.info "[Subtitle] Switching to subtitle stream #{stream_index} for file: #{info[:file_path]}"
-    vtt = TranscoderService.extract_subtitles(info[:file_path], stream_index.to_i)
-    if vtt.present?
-      TranscoderService.set_session_subtitle(session_id, vtt, stream_index: stream_index.to_i)
-      subtitle_url = "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}"
-      Rails.logger.info "[Subtitle] Extracted and enabled stream #{stream_index}, VTT size: #{vtt.bytesize} bytes, #{vtt.lines.count} lines"
-      render json: { subtitleUrl: subtitle_url }
-    else
-      Rails.logger.warn "[Subtitle] Failed to extract stream #{stream_index}"
-      render json: { subtitleUrl: nil }
-    end
+    # Kick off extraction in the background and return the URL immediately.
+    # The /subtitles endpoint long-polls while ffmpeg works, so the player
+    # just waits on its HTTP fetch instead of staring at a blocked switch
+    # request for 10-15 seconds.
+    TranscoderService.extract_subtitles_async(session_id, info[:file_path], stream_index.to_i)
+    subtitle_url = "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}"
+    render json: { subtitleUrl: subtitle_url }
   rescue => e
     Rails.logger.error "[Subtitle] switch_subtitle error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
     render json: { error: e.message }, status: :internal_server_error
@@ -293,27 +306,92 @@ class Api::PlaybackController < Api::BaseController
   # ── direct_play endpoint ────────────────────────────────────────────
   #
   # GET /api/playback/file/:session_id
-  # Serves the source file as-is for sessions whose strategy resolved to
-  # :direct_play (card #55). Range support is delegated to send_file +
-  # ActionDispatch's range middleware so the browser <video> can seek by
-  # byte without us segmenting anything.
+  #
+  # Serves the source file with full HTTP byte-range support so the player
+  # (ExoPlayer / browser <video>) can seek without having to download the
+  # whole multi-gigabyte file. Rails's `send_file` did NOT honour the
+  # Range header on the test rig — every request returned 200 OK with
+  # zero or full body — so we parse the Range manually and stream the
+  # requested slice via Enumerator. ExoPlayer issues many small range
+  # requests (initial header, MKV Cues at end, then sequential reads
+  # from the playhead) and each one resolves in ~10ms.
+  CHUNK_BYTES = 64 * 1024
+  RANGE_HEADER = /\Abytes=(\d+)-(\d*)\z/
+
   def file
     session_id = params[:session_id]
     file_path = TranscoderService.direct_play_file_path(session_id)
     return head(:not_found) unless file_path
     return head(:not_found) unless File.exist?(file_path)
 
-    ext = File.extname(file_path).downcase
-    content_type =
-      case ext
-      when ".mp4", ".m4v" then "video/mp4"
-      when ".mov"         then "video/quicktime"
-      else                     "video/mp4"
-      end
+    size = File.size(file_path)
+    content_type = direct_play_content_type(file_path)
 
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Cache-Control"] = "no-store"
-    send_file file_path, type: content_type, disposition: "inline"
+    response.headers["Content-Type"] = content_type
+    response.headers["Content-Disposition"] = "inline; filename=\"#{File.basename(file_path)}\""
+
+    range_header = request.headers["Range"]
+    if range_header.present? && (m = range_header.match(RANGE_HEADER))
+      start_byte = m[1].to_i
+      end_byte = m[2].present? ? m[2].to_i : size - 1
+      end_byte = [ end_byte, size - 1 ].min
+      if start_byte > end_byte || start_byte >= size
+        response.headers["Content-Range"] = "bytes */#{size}"
+        return head(:requested_range_not_satisfiable)
+      end
+      length = end_byte - start_byte + 1
+
+      response.status = 206
+      response.headers["Content-Range"] = "bytes #{start_byte}-#{end_byte}/#{size}"
+      response.headers["Content-Length"] = length.to_s
+
+      if request.head?
+        response.body = ""
+        return
+      end
+
+      self.response_body = Enumerator.new do |yielder|
+        File.open(file_path, "rb") do |f|
+          f.seek(start_byte)
+          remaining = length
+          while remaining.positive?
+            chunk = f.read([ remaining, CHUNK_BYTES ].min)
+            break if chunk.nil? || chunk.empty?
+            yielder << chunk
+            remaining -= chunk.bytesize
+          end
+        end
+      end
+      return
+    end
+
+    response.headers["Content-Length"] = size.to_s
+    if request.head?
+      response.body = ""
+      return
+    end
+
+    self.response_body = Enumerator.new do |yielder|
+      File.open(file_path, "rb") do |f|
+        while (chunk = f.read(CHUNK_BYTES))
+          yielder << chunk
+        end
+      end
+    end
+  end
+
+  def direct_play_content_type(file_path)
+    case File.extname(file_path).downcase
+    when ".mp4", ".m4v" then "video/mp4"
+    when ".mov"         then "video/quicktime"
+    when ".mkv"         then "video/x-matroska"
+    when ".webm"        then "video/webm"
+    when ".avi"         then "video/x-msvideo"
+    when ".ts", ".m2ts" then "video/mp2t"
+    else                     "application/octet-stream"
+    end
   end
 
   # ── HLS endpoints ──────────────────────────────────────────────────
@@ -327,8 +405,14 @@ class Api::PlaybackController < Api::BaseController
     playlist_path = TranscoderService.hls_playlist_path(session_id)
     return render(plain: "Session not in HLS mode", status: :bad_request) unless playlist_path
 
-    # Wait up to 3 seconds for ffmpeg to create the playlist
-    10.times do
+    # Wait up to 12 seconds for ffmpeg to create the playlist. Cold start
+    # for a 4K HEVC HDR source under tonemap + audio_transcode (TrueHD →
+    # AAC) commonly takes 6-10 seconds before the first segment + manifest
+    # are written. 3 seconds was short enough that hls.js bailed before
+    # ffmpeg had finished warming up — the user saw "first play hangs;
+    # switch audio fixes it" because the second ffmpeg startup hit warm
+    # filesystem + library caches.
+    40.times do
       break if File.exist?(playlist_path)
       sleep 0.3
     end
@@ -444,8 +528,19 @@ class Api::PlaybackController < Api::BaseController
     in_lang = audio_streams if in_lang.empty?
 
     playable = in_lang.find { |s| TranscoderService.allowed_audio_codec?(s[:codec], codec_support) }
-    (playable || in_lang.first)[:index]
+    return playable[:index] if playable
+
+    # Even when no codec is directly playable, bias toward simple codecs
+    # that re-encode quickly. TrueHD/DTS-HD MA decoders need 1-2 seconds
+    # of warmup before producing samples; on a cold first play that pushes
+    # the first HLS segment past the client's patience window and the user
+    # sees "playback fails until I switch audio." Picking AC3/AAC/etc. as
+    # the source keeps cold start under the timeout.
+    cheap = in_lang.find { |s| CHEAP_AUDIO_CODECS.include?(s[:codec]) }
+    (cheap || in_lang.first)[:index]
   end
+
+  CHEAP_AUDIO_CODECS = %w[aac ac3 eac3 mp3 flac opus vorbis].freeze
 
   def matches_language?(stream_language, requested)
     return true if stream_language.to_s == requested.to_s

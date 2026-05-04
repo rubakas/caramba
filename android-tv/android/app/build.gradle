@@ -51,9 +51,16 @@ dependencies {
     // Capacitor
     implementation project(':capacitor-android')
     implementation project(':capacitor-cordova-android-plugins')
-    
+
     // Google Cast Framework for Chromecast
     implementation 'com.google.android.gms:play-services-cast-framework:21.3.0'
+
+    // Media3 / ExoPlayer — powers the CarambaPlayer Capacitor plugin.
+    // Hardware decoders only; do NOT add media3-decoder-ffmpeg.
+    implementation "androidx.media3:media3-exoplayer:$media3Version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
+    implementation "androidx.media3:media3-ui:$media3Version"
+    implementation "androidx.media3:media3-datasource-okhttp:$media3Version"
     
     // Test dependencies
     testImplementation "junit:junit:$junitVersion"

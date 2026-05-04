@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Native ExoPlayer surface for the Caramba CarambaPlayer plugin.
+
+    Layout mirrors the WebView TV player (`isAndroidTV` branch in
+    VideoPlayer.jsx):
+      • PlayerView fills the screen.
+      • Top-left: title + subtitle.
+      • Center: spinner while buffering / pause icon while paused.
+      • Bottom: elapsed | progress bar | remaining + key hint row.
+      • UP opens audio panel; DOWN opens subtitle panel; BACK exits.
+      • Debug overlay (top-left, off by default — toggle with INFO key).
+-->
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true">
+
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:resize_mode="fit"
+        app:show_buffering="never"
+        app:use_controller="false" />
+
+    <!-- ── Center: pause icon / buffering spinner ─────────────── -->
+    <FrameLayout
+        android:id="@+id/center_panel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/center_spinner"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <!-- Pause icon: two 9dp white bars with a 9dp gap. Earlier each bar
+             was layout_gravity=center with a 22dp margin pushing it off
+             centre, so the visible gap was 44dp — looked like "|  |"
+             instead of "||". -->
+        <LinearLayout
+            android:id="@+id/center_pause"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <View
+                android:layout_width="9dp"
+                android:layout_height="44dp"
+                android:background="@android:color/white"
+                android:alpha="0.9" />
+
+            <View
+                android:layout_width="9dp"
+                android:layout_height="44dp"
+                android:layout_marginStart="9dp"
+                android:background="@android:color/white"
+                android:alpha="0.9" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ── Top: Title block ───────────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/top_panel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginTop="32dp"
+        android:layout_marginStart="48dp"
+        android:layout_marginEnd="48dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/title_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@android:color/white"
+            android:textSize="22sp"
+            android:fontFamily="sans-serif-medium"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="2"
+            android:shadowRadius="8"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/subtitle_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#CCFFFFFF"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif"
+            android:shadowColor="#80000000"
+            android:shadowDx="0"
+            android:shadowDy="2"
+            android:shadowRadius="8"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- ── Bottom: Seek bar + hint row ────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/bottom_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginBottom="32dp"
+        android:layout_marginStart="48dp"
+        android:layout_marginEnd="48dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingBottom="16dp">
+
+            <TextView
+                android:id="@+id/elapsed_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@android:color/white"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:minWidth="64dp"
+                android:shadowColor="#80000000"
+                android:shadowDy="2"
+                android:shadowRadius="8"
+                android:text="0:00" />
+
+            <ProgressBar
+                android:id="@+id/seek_bar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="0dp"
+                android:layout_height="4dp"
+                android:layout_weight="1"
+                android:layout_marginStart="16dp"
+                android:layout_marginEnd="16dp"
+                android:max="10000"
+                android:progress="0"
+                android:progressTint="@android:color/white"
+                android:progressBackgroundTint="#33FFFFFF"
+                android:indeterminate="false" />
+
+            <TextView
+                android:id="@+id/remaining_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@android:color/white"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:minWidth="72dp"
+                android:gravity="end"
+                android:shadowColor="#80000000"
+                android:shadowDy="2"
+                android:shadowRadius="8"
+                android:text="-0:00" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/hint_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#AAFFFFFF"
+            android:textSize="12sp"
+            android:fontFamily="sans-serif"
+            android:shadowColor="#80000000"
+            android:shadowDy="2"
+            android:shadowRadius="8"
+            android:gravity="center" />
+    </LinearLayout>
+
+    <!-- ── Audio panel (UP key) ───────────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/audio_panel"
+        android:layout_width="500dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:background="#CC000000"
+        android:padding="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Audio"
+            android:textColor="#AAFFFFFF"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium"
+            android:textAllCaps="true"
+            android:letterSpacing="0.08"
+            android:paddingBottom="12dp" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxHeight="540dp"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:id="@+id/audio_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- ── Subtitle panel (DOWN key) ──────────────────────────── -->
+    <LinearLayout
+        android:id="@+id/subtitle_panel"
+        android:layout_width="500dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:background="#CC000000"
+        android:padding="24dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Subtitles"
+            android:textColor="#AAFFFFFF"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium"
+            android:textAllCaps="true"
+            android:letterSpacing="0.08"
+            android:paddingBottom="12dp" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxHeight="540dp"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:id="@+id/subtitle_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- ── Debug overlay (toggle with INFO key) ───────────────── -->
+    <TextView
+        android:id="@+id/debug_overlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="16dp"
+        android:padding="8dp"
+        android:textSize="11sp"
+        android:textColor="@android:color/white"
+        android:fontFamily="monospace"
+        android:background="#B0000000"
+        android:focusable="false"
+        android:clickable="false"
+        android:visibility="gone"
+        android:maxLines="8" />
+</FrameLayout>

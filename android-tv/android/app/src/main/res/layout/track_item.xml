@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A single row in the audio/subtitle picker. Layout mirrors the WebView
+     TV player's track-popover-item: checkmark column + label.
+     focusable=true with the track_item_background drawable so the row
+     visibly highlights when the user navigates to it with D-pad. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="12dp"
+    android:focusable="true"
+    android:clickable="true"
+    android:background="@drawable/track_item_background">
+
+    <TextView
+        android:id="@+id/track_check"
+        android:layout_width="24dp"
+        android:layout_height="wrap_content"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:fontFamily="monospace"
+        android:gravity="start" />
+
+    <TextView
+        android:id="@+id/track_label"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:fontFamily="sans-serif"
+        android:layout_marginStart="8dp"
+        android:singleLine="true"
+        android:ellipsize="end" />
+</LinearLayout>

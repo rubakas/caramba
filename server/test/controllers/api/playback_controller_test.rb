@@ -268,5 +268,27 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       result = select(streams, nil, { audio: { aac: true } })
       assert_equal 1, result
     end
+
+    test "nothing playable: prefers AC3 over TrueHD even when TrueHD is first" do
+      # On Firefox/Android-WebView (no AC3 in MSE), neither track is direct-
+      # passable but AC3 still re-encodes to AAC much faster than TrueHD.
+      # Auto-pick should bias toward AC3 to keep cold start under the wait
+      # window.
+      streams = [
+        { index: 1, codec: "truehd", channels: 8, language: "eng" },
+        { index: 2, codec: "ac3",    channels: 6, language: "eng" }
+      ]
+      result = select(streams, nil, { audio: { aac: true } })
+      assert_equal 2, result
+    end
+
+    test "nothing playable, nothing cheap: falls back to first" do
+      streams = [
+        { index: 1, codec: "truehd",  channels: 8, language: "eng" },
+        { index: 2, codec: "dts_hd",  channels: 6, language: "eng" }
+      ]
+      result = select(streams, nil, { audio: { aac: true } })
+      assert_equal 1, result
+    end
   end
 end

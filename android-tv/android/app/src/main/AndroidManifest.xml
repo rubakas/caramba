@@ -28,6 +28,16 @@
 
         </activity>
 
+        <!-- Native ExoPlayer surface launched by the CarambaPlayer plugin.
+             singleTask + clear-top so JS can call present() repeatedly without
+             stacking instances. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:launchMode="singleTask"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

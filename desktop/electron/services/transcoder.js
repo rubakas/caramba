@@ -325,10 +325,12 @@ function audioTranscodeArgs(probeResult, audioStreamIndex) {
   // Force the AAC sample rate to match the source. With 7.1 → 5.1 downmix
   // ffmpeg occasionally picks an off-by-one rate that drifts audio.
   args.push('-ar', '48000')
-  // Sample-level alignment of the re-encoded audio. Conservative async=1
-  // (1 sample/sec compensation) — combined with the -copyts family at the
-  // input level, this is enough; aggressive async values caused over-
-  // compensation and audible drift on TrueHD/DTS-HD MA decoding paths.
+  // Two-layer audio sync. -async 1 (global) anchors the first audio sample
+  // to source PTS — covers the 32ms TrueHD start_time offset that UHD
+  // remuxes typically carry, which video copy preserves but re-encoded
+  // audio loses. aresample=async=1 (filter) handles inter-frame drift.
+  // Conservative values — aggressive async caused over-compensation.
+  args.push('-async', '1')
   args.push('-af', 'aresample=async=1')
   return args
 }

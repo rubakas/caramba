@@ -18,7 +18,7 @@ import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 const isCapacitor = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform === true
 
 // Android TV capabilities - show Settings with API URL config, no file management
-const androidTvCapabilities = {
+const androidTvCapabilitiesBase = {
   ...httpCapabilities,
   hasSettings: true,
   canDownload: false,
@@ -33,14 +33,41 @@ const webCapabilities = {
   hasSettings: true,
 }
 
+// One-shot probe for the native player Capacitor plugin (Android TV builds
+// only). When present, VideoPlayer.jsx skips the WebView <video>/hls.js
+// path and lets ExoPlayer handle decode natively — bypasses all the MSE
+// codec limitations (HEVC Main 10, AC3, DTS, TrueHD) that force
+// audio_transcode/full_transcode on Android.
+async function probeNativePlayer() {
+  const has = !!window.Capacitor?.Plugins?.CarambaPlayer
+  console.log('[CarambaPlayer probe] plugins=', Object.keys(window.Capacitor?.Plugins ?? {}))
+  console.log('[CarambaPlayer probe] CarambaPlayer present?', has)
+  if (!has) return false
+  try {
+    const plugin = window.Capacitor.Plugins.CarambaPlayer
+    if (typeof plugin.isAvailable !== 'function') {
+      console.log('[CarambaPlayer probe] no isAvailable method on plugin')
+      return false
+    }
+    const { available } = await plugin.isAvailable()
+    console.log('[CarambaPlayer probe] isAvailable returned', available)
+    return !!available
+  } catch (err) {
+    console.log('[CarambaPlayer probe] isAvailable threw:', err?.message || err)
+    return false
+  }
+}
+
 export default function App() {
   const [apiUrl, setApiUrl] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isNativeApp, setIsNativeApp] = useState(false)
+  const [hasNativePlayer, setHasNativePlayer] = useState(false)
 
   // Load configurable API URL
   useEffect(() => {
     checkPlatformAndLoadUrl()
+    probeNativePlayer().then(setHasNativePlayer)
   }, [])
 
   // Add tv-mode class to body when running on Android TV
@@ -117,18 +144,27 @@ export default function App() {
     }
   }
 
-  const capabilities = isNativeApp ? androidTvCapabilities : webCapabilities
+  const capabilities = useMemo(
+    () => isNativeApp
+      ? { ...androidTvCapabilitiesBase, hasNativePlayer }
+      : { ...webCapabilities, hasNativePlayer: false },
+    [isNativeApp, hasNativePlayer]
+  )
   
-  // Create adapter with current API URL
+  // Create adapter with current API URL. When the native ExoPlayer plugin
+  // is registered, opt the adapter into the wider codec support set so the
+  // server picks direct_stream for HEVC HDR / AC3 / EAC3 sources instead of
+  // tonemap-transcoding them — those codecs hit ExoPlayer's hardware
+  // decoder directly via the native PlayerActivity.
   const adapter = useMemo(() => {
-    console.log('Creating HTTP adapter with base URL:', apiUrl)
-    const httpAdapter = createHttpAdapter(apiUrl || '')
+    console.log('Creating HTTP adapter with base URL:', apiUrl, 'nativePlayer:', hasNativePlayer)
+    const httpAdapter = createHttpAdapter(apiUrl || '', { useNativePlayerCodecs: hasNativePlayer })
     // Expose adapter as window.api for components that access it directly (e.g., UpdatePrompt)
     if (isNativeApp) {
       window.api = httpAdapter
     }
     return httpAdapter
-  }, [apiUrl, isNativeApp])
+  }, [apiUrl, isNativeApp, hasNativePlayer])
 
   if (isLoading) {
     // For native apps, show minimal loading state (no text to avoid double loading)

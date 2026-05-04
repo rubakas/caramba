@@ -27,7 +27,7 @@ import { Capacitor } from '@capacitor/core'
 const isAndroidTV = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
 
 // Android TV capabilities - show Settings with API URL config, no file management
-const androidTvCapabilities = {
+const androidTvCapabilitiesBase = {
   ...httpCapabilities,
   hasSettings: true,
   canDownload: false,
@@ -42,9 +42,37 @@ const webCapabilities = {
   hasSettings: true,
 }
 
+// One-shot probe for the native player plugin. The Capacitor plugin's
+// isAvailable() returns true on a real device with the APK installed; the
+// web fallback (CarambaPlayerWeb) returns false. Anything else (plugin
+// missing, older APK without the plugin registered) is treated as false so
+// the React layer cleanly falls back to the WebView <video> + hls.js path.
+async function probeNativePlayer() {
+  // Loud breadcrumb: prints to DevTools console + Capacitor/Console tag in
+  // adb logcat. Lets us see at a glance whether the plugin is wired up.
+  const has = !!window.Capacitor?.Plugins?.CarambaPlayer
+  console.log('[CarambaPlayer probe] plugins=', Object.keys(window.Capacitor?.Plugins ?? {}))
+  console.log('[CarambaPlayer probe] CarambaPlayer present?', has)
+  if (!has) return false
+  try {
+    const plugin = window.Capacitor.Plugins.CarambaPlayer
+    if (typeof plugin.isAvailable !== 'function') {
+      console.log('[CarambaPlayer probe] no isAvailable method on plugin')
+      return false
+    }
+    const { available } = await plugin.isAvailable()
+    console.log('[CarambaPlayer probe] isAvailable returned', available)
+    return !!available
+  } catch (err) {
+    console.log('[CarambaPlayer probe] isAvailable threw:', err?.message || err)
+    return false
+  }
+}
+
 export default function App() {
   const [apiUrl, setApiUrl] = useState(null)
   const [isLoading, setIsLoading] = useState(isAndroidTV)
+  const [hasNativePlayer, setHasNativePlayer] = useState(false)
 
   // Load configurable API URL on Android TV
   useEffect(() => {
@@ -54,6 +82,7 @@ export default function App() {
     }
 
     loadApiUrl()
+    probeNativePlayer().then(setHasNativePlayer)
   }, [])
 
   const loadApiUrl = async () => {
@@ -103,7 +132,12 @@ export default function App() {
   const apiBase = isAndroidTV && apiUrl ? apiUrl : (import.meta.env.VITE_API_BASE || '')
   
   const adapter = useMemo(() => createHttpAdapter(apiBase), [apiBase])
-  const capabilities = isAndroidTV ? androidTvCapabilities : webCapabilities
+  const capabilities = useMemo(
+    () => isAndroidTV
+      ? { ...androidTvCapabilitiesBase, hasNativePlayer }
+      : { ...webCapabilities, hasNativePlayer: false },
+    [hasNativePlayer]
+  )
 
   if (isLoading) {
     return (

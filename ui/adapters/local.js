@@ -117,4 +117,5 @@ export const localCapabilities = {
   hasPlayground: true,
   canAdmin: false,
   hasVlcLibrary: true,
+  hasNativePlayer: false, // Electron uses its own player; the native plugin is Android-only
 }

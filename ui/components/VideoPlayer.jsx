@@ -2,7 +2,7 @@ import { useRef, useState, useEffect, useCallback } from 'react'
 import Hls from 'hls.js'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
-import { useApi } from '../context/ApiContext'
+import { useApi, useCapabilities } from '../context/ApiContext'
 import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
@@ -175,7 +175,217 @@ const SUB_STYLES = [
   { id: 'transparent', label: 'Transparent', css: 'background: rgba(0,0,0,0.4); color: #fff; text-shadow: none;' },
 ]
 
+// Native player branch — when the CarambaPlayer Capacitor plugin is present
+// (Android TV native build) we skip the entire WebView <video> + hls.js path
+// and let the plugin's full-screen ExoPlayer Activity render playback. This
+// component owns nothing visible; it just shuttles lifecycle events between
+// the plugin and PlayerContext so the rest of the app keeps working as if
+// the WebView player were running.
+function NativeVideoPlayer() {
+  const { playerState, launching, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const api = useApi()
+  // Track what we last handed the plugin so we can decide between
+  // present()/updateStream()/dismiss() on each render.
+  const lastRef = useRef({ open: false, hlsUrl: null, streamUrl: null, subtitleUrl: null, seekBase: 0, activeAudioIndex: null, activeSubtitleIndex: null })
+  // Has plugin.present() been called for the current open lifecycle?
+  // Set when we fire the stub `present` on launching=true, cleared on
+  // dismiss. This lets us decide between present (first time) vs
+  // updateStream (mid-session) without depending on URL-diff heuristics.
+  const presentedRef = useRef(false)
+  // The listener callbacks below close over playerState; bounce through a
+  // ref so they always see the latest values without re-subscribing.
+  const stateRef = useRef(playerState)
+  useEffect(() => { stateRef.current = playerState }, [playerState])
+
+  const plugin = (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaPlayer) || null
+
+  // Open the Activity the *moment* `launching` flips on, before
+  // /api/playback/start has even returned. The Activity opens with its own
+  // loading spinner (no media yet) and covers the WebView right away —
+  // there's no longer a visible gap between "click play" and "Activity on
+  // screen", and no need for a React overlay.
+  useEffect(() => {
+    if (!plugin) return
+    if (launching && !presentedRef.current) {
+      const stub = { sessionId: 'pending', pending: true, strategy: 'pending' }
+      Promise.resolve(plugin.present(stub)).catch(err => console.error('[CarambaPlayer] stub present failed', err))
+      presentedRef.current = true
+    } else if (!launching && !playerState.open && presentedRef.current) {
+      // launching ended without opening (server error, user cancelled).
+      // Tear down the stub Activity.
+      Promise.resolve(plugin.dismiss()).catch(() => {})
+      presentedRef.current = false
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plugin, launching, playerState.open])
+
+  // Open / update / dismiss
+  useEffect(() => {
+    if (!plugin) return
+    const last = lastRef.current
+
+    // Promise.resolve() wraps both Promise and sync returns so .catch() is
+    // always safe — same reason as the listener-registration guard below.
+    if (!playerState.open && last.open) {
+      Promise.resolve(plugin.dismiss()).catch(() => {})
+      lastRef.current = { open: false, hlsUrl: null, streamUrl: null, subtitleUrl: null, seekBase: 0, activeAudioIndex: null, activeSubtitleIndex: null }
+      presentedRef.current = false
+      return
+    }
+    if (!playerState.open) return
+
+    const payload = buildNativePayload(playerState)
+    // The stub present() in the launching effect already opened the
+    // Activity, so subsequent calls are always updateStream — even on the
+    // first arrival of real session data. presentedRef is the source of
+    // truth for "is the Activity alive?".
+    if (!presentedRef.current) {
+      Promise.resolve(plugin.present(payload)).catch(err => console.error('[CarambaPlayer] present failed', err))
+      presentedRef.current = true
+    } else if (
+      !last.open ||
+      last.hlsUrl !== playerState.hlsUrl ||
+      last.streamUrl !== playerState.streamUrl ||
+      last.subtitleUrl !== playerState.subtitleUrl ||
+      last.seekBase !== playerState.seekBase ||
+      last.activeAudioIndex !== playerState.activeAudioIndex ||
+      last.activeSubtitleIndex !== playerState.activeSubtitleIndex
+    ) {
+      Promise.resolve(plugin.updateStream(payload)).catch(err => console.error('[CarambaPlayer] updateStream failed', err))
+    }
+
+    lastRef.current = {
+      open: true,
+      hlsUrl: playerState.hlsUrl,
+      streamUrl: playerState.streamUrl,
+      subtitleUrl: playerState.subtitleUrl,
+      seekBase: playerState.seekBase,
+      activeAudioIndex: playerState.activeAudioIndex,
+      activeSubtitleIndex: playerState.activeSubtitleIndex,
+    }
+  }, [
+    plugin,
+    playerState.open,
+    playerState.hlsUrl,
+    playerState.streamUrl,
+    playerState.subtitleUrl,
+    playerState.seekBase,
+    playerState.activeAudioIndex,
+    playerState.activeSubtitleIndex,
+  ])
+
+  // Listener wiring — set up once, kept stable via stateRef closures.
+  useEffect(() => {
+    if (!plugin) return
+    const handles = []
+    // Capacitor 6+ returns a Promise<PluginListenerHandle> from addListener,
+    // but some Capacitor builds / shims return the handle synchronously
+    // (the same defensive pattern lives in http.js for CarambaUpdater).
+    // Without this guard we'd hit "g.then is not a function" on the
+    // minified runtime.
+    const remember = (result) => {
+      if (result && typeof result.then === 'function') {
+        result.then(h => handles.push(h)).catch(() => {})
+      } else if (result) {
+        handles.push(result)
+      }
+    }
+
+    remember(plugin.addListener('progress', ({ position, duration }) => {
+      const s = stateRef.current
+      const ctx = { episodeId: s.episodeId, movieId: s.movieId }
+      api.reportProgress?.(position, duration, ctx)?.catch?.(() => {})
+    }))
+
+    remember(plugin.addListener('requestSeek', ({ absoluteTime }) => {
+      seekPlayback(absoluteTime)
+    }))
+
+    remember(plugin.addListener('requestAudioSwitch', ({ audioStreamIndex, currentVideoTime }) => {
+      // The native menu picked a track; route through PlayerContext so
+      // the saved-pref + URL-swap chain runs the same as in the WebView UI.
+      switchAudio(audioStreamIndex, currentVideoTime || 0)
+    }))
+
+    remember(plugin.addListener('requestSubtitleSwitch', ({ subtitleStreamIndex, isBitmap, currentVideoTime }) => {
+      // -1 / null both mean "Off" in PlayerContext.switchSubtitle.
+      const idx = subtitleStreamIndex == null || subtitleStreamIndex < 0 ? null : subtitleStreamIndex
+      if (isBitmap) {
+        switchBitmapSubtitle(idx, currentVideoTime || 0)
+      } else {
+        switchSubtitle(idx)
+      }
+    }))
+
+    remember(plugin.addListener('requestSubtitleAppearance', ({ subtitleSize, subtitleStyle }) => {
+      const next = {}
+      if (subtitleSize) next.subtitleSize = subtitleSize
+      if (subtitleStyle) next.subtitleStyle = subtitleStyle
+      if (Object.keys(next).length > 0) setSubtitleAppearance?.(next)
+    }))
+
+    remember(plugin.addListener('ended', ({ position, duration }) => {
+      const s = stateRef.current
+      if (s.type === 'episode') {
+        playNextEpisode()
+      } else {
+        closePlayer(position, duration)
+      }
+    }))
+
+    remember(plugin.addListener('dismissed', ({ position, duration }) => {
+      closePlayer(position, duration)
+    }))
+
+    remember(plugin.addListener('error', (e) => {
+      console.error('[CarambaPlayer] error', e)
+    }))
+
+    return () => {
+      handles.forEach(h => { try { h.remove?.() } catch {} })
+    }
+  // closePlayer/seekPlayback/playNextEpisode are stable useCallback refs from
+  // PlayerContext — safe to omit from deps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plugin])
+
+  // No React UI at all — the native Activity is on screen the whole time.
+  return null
+}
+
+function buildNativePayload(state) {
+  return {
+    sessionId: String(state.sessionId ?? ''),
+    streamUrl: state.streamUrl ?? null,
+    hlsUrl: state.hlsUrl ?? null,
+    subtitleUrl: state.subtitleUrl ?? null,
+    strategy: state.strategy ?? 'direct_stream',
+    duration: state.duration || 0,
+    startTime: state.startTime || 0,
+    seekBase: state.seekBase || 0,
+    title: state.title || '',
+    subtitle: state.subtitle || '',
+    audioStreams: state.audioStreams || [],
+    subtitleStreams: state.subtitleStreams || [],
+    activeAudioIndex: state.activeAudioIndex ?? null,
+    activeSubtitleIndex: state.activeSubtitleIndex ?? null,
+    isBitmapSubtitle: !!state.isBitmapSubtitle,
+    video: state.video ?? null,
+  }
+}
+
+// Public component exported as the player surface. When the native player
+// plugin is present (Android TV native build), delegate playback to it
+// entirely; the WebView player only renders in browser/web mode.
 export default function VideoPlayer() {
+  const capabilities = useCapabilities()
+  if (capabilities.hasNativePlayer) {
+    return <NativeVideoPlayer />
+  }
+  return <WebVideoPlayer />
+}
+
+function WebVideoPlayer() {
   const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
   const { showToast } = useToast()
@@ -343,11 +553,16 @@ export default function VideoPlayer() {
         maxBufferSize: 60 * 1024 * 1024,    // 60 MB
         backBufferLength: 15,               // seconds behind playhead
         // Transient retry — ffmpeg may lag one segment behind playback on
-        // slower encodes. Short delay + more retries beats a visible stall.
-        manifestLoadingMaxRetry: 6,
-        manifestLoadingRetryDelay: 500,
-        levelLoadingMaxRetry: 6,
-        levelLoadingRetryDelay: 500,
+        // slower encodes. Manifest retries are tuned wider than fragment
+        // retries because cold-start of a 4K HEVC HDR session under
+        // tonemap can keep the playlist file unwritten for 6-10s, and a
+        // 503 "Playlist not ready" from the server has to fall inside the
+        // client's retry budget OR the user sees "first play hangs" until
+        // they switch audio (which restarts ffmpeg with warm caches).
+        manifestLoadingMaxRetry: 12,
+        manifestLoadingRetryDelay: 1000,
+        levelLoadingMaxRetry: 8,
+        levelLoadingRetryDelay: 1000,
         fragLoadingMaxRetry: 8,
         fragLoadingRetryDelay: 500,
       })
