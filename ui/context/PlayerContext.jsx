@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { useToast } from './ToastContext'
 import { useApi, useCapabilities } from './ApiContext'
 
@@ -134,41 +135,51 @@ export function PlayerProvider({ children }) {
       // libvlc never runs, so engineReady never flips, so vlc-ready never
       // gets added and body.vlc-playing's curtain hides #root forever — the
       // HLS player below stays invisible while hls.js storms the server.
-      // Drop the curtain as soon as we know we're on the HLS path.
-      if ((result.streamUrl || result.hlsUrl) && typeof document !== 'undefined') {
+      //
+      // Mount WebVideoPlayer (its black overlay covers #root) BEFORE pulling
+      // the curtain off — otherwise there's a paint frame where the curtain
+      // is gone but WebVideoPlayer hasn't mounted, and the transparent
+      // BrowserWindow flashes through whatever route was underneath.
+      // flushSync forces React to commit the state update synchronously so
+      // the DOM has WebVideoPlayer in place when we strip the curtain class.
+      const isHls = !!(result.streamUrl || result.hlsUrl)
+
+      flushSync(() => {
+        setPlayerState({
+          open: true,
+          streamUrl: result.streamUrl ?? null,
+          hlsUrl: result.hlsUrl ?? null,
+          subtitleUrl: result.subtitleUrl ?? null,
+          duration: result.duration,
+          startTime: startTime || 0,
+          seekBase: result.seekBase ?? startTime ?? 0,
+          title: title || '',
+          subtitle: subtitle || '',
+          type,
+          episodeId: type === 'episode' ? episodeId?.id : null,
+          showId: type === 'episode' ? (showId || null) : null,
+          movieId: type === 'movie' ? movieId : null,
+          sessionId: Date.now(),
+          audioStreams: result.audioStreams || [],
+          subtitleStreams: result.subtitleStreams || [],
+          activeAudioIndex: result.activeAudioIndex ?? null,
+          activeSubtitleIndex: result.activeSubtitleIndex ?? null,
+          isBitmapSubtitle: result.isBitmapSubtitle || false,
+          strategy: result.strategy || null,
+          video: result.video || null,
+          bitrate: result.bitrate || null,
+          subtitleSize: prefs?.subtitleSize || 'medium',
+          subtitleStyle: prefs?.subtitleStyle || 'classic',
+          currentTime: startTime || 0,
+          paused: false,
+          eof: false,
+        })
+      })
+
+      if (isHls && typeof document !== 'undefined') {
         document.body.classList.remove('vlc-playing')
         document.body.classList.remove('vlc-ready')
       }
-
-      setPlayerState({
-        open: true,
-        streamUrl: result.streamUrl ?? null,
-        hlsUrl: result.hlsUrl ?? null,
-        subtitleUrl: result.subtitleUrl ?? null,
-        duration: result.duration,
-        startTime: startTime || 0,
-        seekBase: result.seekBase ?? startTime ?? 0,
-        title: title || '',
-        subtitle: subtitle || '',
-        type,
-        episodeId: type === 'episode' ? episodeId?.id : null,
-        showId: type === 'episode' ? (showId || null) : null,
-        movieId: type === 'movie' ? movieId : null,
-        sessionId: Date.now(),
-        audioStreams: result.audioStreams || [],
-        subtitleStreams: result.subtitleStreams || [],
-        activeAudioIndex: result.activeAudioIndex ?? null,
-        activeSubtitleIndex: result.activeSubtitleIndex ?? null,
-        isBitmapSubtitle: result.isBitmapSubtitle || false,
-        strategy: result.strategy || null,
-        video: result.video || null,
-        bitrate: result.bitrate || null,
-        subtitleSize: prefs?.subtitleSize || 'medium',
-        subtitleStyle: prefs?.subtitleStyle || 'classic',
-        currentTime: startTime || 0,
-        paused: false,
-        eof: false,
-      })
     } catch (err) {
       console.error('openPlayer error:', err)
       showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
