@@ -120,9 +120,24 @@ export function PlayerProvider({ children }) {
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
+        if (typeof document !== 'undefined') {
+          document.body.classList.remove('vlc-playing')
+          document.body.classList.remove('vlc-ready')
+        }
         setPlayerState(prev => ({ ...prev, open: false }))
         setLaunching(false)
         return
+      }
+
+      // Hybrid mode advertises hasVlcEmbedPlayer (inherits from local), but
+      // when the file isn't reachable locally the server streams HLS instead.
+      // libvlc never runs, so engineReady never flips, so vlc-ready never
+      // gets added and body.vlc-playing's curtain hides #root forever — the
+      // HLS player below stays invisible while hls.js storms the server.
+      // Drop the curtain as soon as we know we're on the HLS path.
+      if ((result.streamUrl || result.hlsUrl) && typeof document !== 'undefined') {
+        document.body.classList.remove('vlc-playing')
+        document.body.classList.remove('vlc-ready')
       }
 
       setPlayerState({
@@ -157,6 +172,11 @@ export function PlayerProvider({ children }) {
     } catch (err) {
       console.error('openPlayer error:', err)
       showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
+      if (typeof document !== 'undefined') {
+        document.body.classList.remove('vlc-playing')
+        document.body.classList.remove('vlc-ready')
+      }
+      setPlayerState(prev => ({ ...prev, open: false }))
     } finally {
       setLaunching(false)
     }
