@@ -1860,6 +1860,15 @@ body {
   background: #000;
   /* Suppress iOS native player UI overlay */
   -webkit-playsinline: none;
+  /* Force the video element onto its own GPU compositing layer.
+   * Without this, Chromium on some Apple Silicon GPUs (notably M2 Air's
+   * integrated GPU) decodes frames into a hardware overlay that the
+   * transparent BrowserWindow's compositor never paints — audio plays,
+   * controls render, but the video area stays black. translateZ(0) +
+   * will-change promote it to an IOSurface-backed layer that composites
+   * correctly inside the transparent window. */
+  transform: translateZ(0);
+  will-change: transform;
 }
 /* Hide all webkit media controls */
 .video-player-video::-webkit-media-controls {
