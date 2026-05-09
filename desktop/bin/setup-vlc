@@ -94,7 +94,7 @@ setup_arch x64   "$INTEL_DMG"
 echo ""
 echo "Building vlc-embed native module..."
 NATIVE_DIR="electron/native/vlc-embed"
-ELECTRON_VERSION=$(node -p "require('./node_modules/electron/package.json').version")
+ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
 HOST_ARCH=$(node -p "process.arch === 'x64' ? 'x64' : 'arm64'")
 echo "  electron=$ELECTRON_VERSION  arch=$HOST_ARCH"
 
