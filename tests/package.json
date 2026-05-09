@@ -10,6 +10,6 @@
     "test:playback": "playwright test --grep @playback"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0"
+    "@playwright/test": "^1.59.1"
   }
 }

@@ -10,16 +10,16 @@
     "clean": "npx cap doctor && rm -rf android node_modules"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.3",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/core": "^8.3.3",
+    "@capacitor/preferences": "^8.0.1",
     "@caramba/ui": "workspace:*",
-    "@capacitor/android": "^6.0.0",
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/app": "^6.0.0",
-    "@capacitor/preferences": "^6.0.0",
-    "@sentry/capacitor": "^1.0.0",
-    "@sentry/react": "^8.40.0"
+    "@sentry/capacitor": "^4.0.0",
+    "@sentry/react": "^10.52.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.0.0",
-    "typescript": "^5.0.0"
+    "@capacitor/cli": "^8.3.3",
+    "typescript": "^6.0.3"
   }
 }
