@@ -53,6 +53,11 @@ export interface PlayerPresentOptions {
   activeSubtitleIndex?: number | null;
   isBitmapSubtitle?: boolean;
   video?: { codec: string; width: number; height: number; pix_fmt?: string; color_transfer?: string | null } | null;
+  /** Rails server base URL — Activity POSTs progress directly to bypass the JS bridge. */
+  apiBase?: string;
+  episodeId?: number;
+  movieId?: number;
+  watchHistoryId?: number;
 }
 
 export interface PlayerUpdateOptions {

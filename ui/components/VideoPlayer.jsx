@@ -235,7 +235,7 @@ function NativeVideoPlayer() {
     }
     if (!playerState.open) return
 
-    const payload = buildNativePayload(playerState)
+    const payload = buildNativePayload(playerState, api.apiBase || '')
     // The stub present() in the launching effect already opened the
     // Activity, so subsequent calls are always updateStream — even on the
     // first arrival of real session data. presentedRef is the source of
@@ -294,7 +294,7 @@ function NativeVideoPlayer() {
 
     remember(plugin.addListener('progress', ({ position, duration }) => {
       const s = stateRef.current
-      const ctx = { episodeId: s.episodeId, movieId: s.movieId }
+      const ctx = { episodeId: s.episodeId, movieId: s.movieId, watchHistoryId: s.watchHistoryId }
       api.reportProgress?.(position, duration, ctx)?.catch?.(() => {})
     }))
 
@@ -354,7 +354,7 @@ function NativeVideoPlayer() {
   return null
 }
 
-function buildNativePayload(state) {
+function buildNativePayload(state, apiBase) {
   return {
     sessionId: String(state.sessionId ?? ''),
     streamUrl: state.streamUrl ?? null,
@@ -372,6 +372,13 @@ function buildNativePayload(state) {
     activeSubtitleIndex: state.activeSubtitleIndex ?? null,
     isBitmapSubtitle: !!state.isBitmapSubtitle,
     video: state.video ?? null,
+    // Direct-to-server reporting context, read by PlayerActivity.java.
+    // The Activity POSTs progress straight to Rails because the Capacitor
+    // bridge is unreliable while the WebView's MainActivity is paused.
+    apiBase: apiBase || '',
+    episodeId: state.episodeId || 0,
+    movieId: state.movieId || 0,
+    watchHistoryId: state.watchHistoryId || 0,
   }
 }
 

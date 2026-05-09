@@ -138,6 +138,11 @@ export function createHybridAdapter({ serverUrl, localPlayback = true, onConnect
   // --- Build adapter ---
 
   const adapter = {
+    // Mirror http's apiBase so any consumer (e.g. native Android player)
+    // can read it. Kept for parity even though the native player isn't used
+    // on the desktop hybrid path today.
+    apiBase: http.apiBase,
+
     // === Data operations: HTTP preferred, local fallback ===
 
     // Shows

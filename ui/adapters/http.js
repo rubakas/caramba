@@ -129,6 +129,11 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNative
   const noopUnsub = () => noop
 
   return {
+    // Server base URL — read by the Android native player so its Activity
+    // can POST progress directly to Rails (the JS bridge is unreliable while
+    // the player Activity is on top of the WebView).
+    apiBase: base,
+
     // Shows
     listShows: () => get('/api/shows'),
     getContinue: (slug) => get(`/api/shows/${slug}/continue`),
@@ -196,6 +201,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNative
         duration: videoDuration,
         episode_id: context?.episodeId,
         movie_id: context?.movieId,
+        watch_history_id: context?.watchHistoryId,
       })
     },
     getPlaybackStatus: noopAsync,

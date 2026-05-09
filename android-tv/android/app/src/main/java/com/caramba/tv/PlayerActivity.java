@@ -16,6 +16,14 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.media3.common.C;
@@ -111,9 +119,33 @@ public class PlayerActivity extends Activity {
     // ── Session state ─────────────────────────────────────────────────
     private String sessionId = "";
     private String strategy = "";
-    private double seekBase = 0d;
+    /** Where in the source the player's position 0 corresponds to.
+     *  - HLS (transcoded): the ffmpeg `-ss` offset; player position is
+     *    relative to ffmpeg's output, so add this to get source seconds.
+     *  - direct_play with a clipping config: the clip start in the source;
+     *    ExoPlayer reports getCurrentPosition() relative to the clip, so
+     *    again add this to get true source seconds.
+     *  - direct_play without a clip and no resume: 0. */
+    private double sourceOffset = 0d;
     private boolean ended = false;
     private boolean dismissedFromJs = false;
+    /** Direct-to-server reporting, bypassing the JS bridge. The Capacitor
+     *  WebView is in a paused MainActivity while PlayerActivity is foreground,
+     *  which makes notifyListeners → JS → fetch chains unreliable for long
+     *  playback sessions — events queue up or get dropped and progress never
+     *  lands on the Rails server. Posting from here is ~3 lines and 100%
+     *  reliable for the long-lived session. The JS-side listener still runs
+     *  too; duplicate updates are idempotent (last-writer-wins on a single
+     *  numeric column). */
+    private String apiBase = "";
+    private long episodeIdForServer = 0;
+    private long movieIdForServer = 0;
+    private long watchHistoryIdForServer = 0;
+    private final ExecutorService httpExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "CarambaPlayer-http");
+        t.setDaemon(true);
+        return t;
+    });
     /** Set the first time ExoPlayer hits STATE_READY for this session — used
      *  to emit a one-shot `ready` event back to JS so the React UI can
      *  dismiss its launching overlay. Reset on every loadFromPayload so
@@ -223,6 +255,12 @@ public class PlayerActivity extends Activity {
         }
 
         if (player != null) {
+            // Last chance to record where the user stopped — needed for the
+            // resume_time on next launch. The JS-side closePlayer also POSTs
+            // /api/playback/stop, but that round-trip can lose the race
+            // against the WebView re-paint when MainActivity comes back to
+            // the foreground; this direct call always lands.
+            postProgressDirect();
             if (!dismissedFromJs) {
                 emit("dismissed", buildLifecycleEvent("back"));
             }
@@ -232,6 +270,7 @@ public class PlayerActivity extends Activity {
         if (CarambaPlayerSession.current == this) {
             CarambaPlayerSession.current = null;
         }
+        httpExecutor.shutdown();
         super.onDestroy();
     }
 
@@ -317,7 +356,7 @@ public class PlayerActivity extends Activity {
     public double getCurrentSeconds() {
         if (player == null) return 0d;
         long pos = player.getCurrentPosition();
-        return seekBase + (pos > 0 ? pos / 1000d : 0d);
+        return sourceOffset + (pos > 0 ? pos / 1000d : 0d);
     }
 
     public double getDurationSeconds() {
@@ -365,10 +404,8 @@ public class PlayerActivity extends Activity {
                     ev.put("sessionId", sessionId);
                     emit("ready", ev);
                 }
-                if (state == Player.STATE_ENDED) {
-                    ended = true;
-                    stopProgressTimer();
-                    emit("ended", buildLifecycleEvent(null));
+                if (state == Player.STATE_ENDED && !ended) {
+                    handleEndOfStream();
                 }
             }
             @Override
@@ -472,7 +509,13 @@ public class PlayerActivity extends Activity {
             return;
         }
         strategy = payload.optString("strategy", "");
-        seekBase = payload.optDouble("seekBase", 0d);
+        boolean isDirectPlayStrat = "direct_play".equals(strategy);
+        // sourceOffset is set below — for direct_play we override it with
+        // the clip start (since ExoPlayer reports clip-relative position),
+        // for HLS we use the server's seekBase (ffmpeg -ss offset).
+        sourceOffset = isDirectPlayStrat
+                ? payload.optDouble("startTime", 0d)
+                : payload.optDouble("seekBase", 0d);
         // payload.duration is the full source duration from the server's
         // ffprobe (start payload). Persist it across track switches —
         // updateStream payloads don't always carry it.
@@ -480,6 +523,18 @@ public class PlayerActivity extends Activity {
         if (dur > 0d) payloadDuration = dur;
         ended = false;
         readyEmitted = false;
+
+        // Persist server-reporting context. updateStream payloads don't
+        // always carry these (track switches preserve the session), so only
+        // overwrite when the new payload provides a value.
+        String newApiBase = payload.optString("apiBase", "");
+        if (!newApiBase.isEmpty()) apiBase = newApiBase;
+        long newEp = payload.optLong("episodeId", 0L);
+        if (newEp > 0L) episodeIdForServer = newEp;
+        long newMv = payload.optLong("movieId", 0L);
+        if (newMv > 0L) movieIdForServer = newMv;
+        long newWh = payload.optLong("watchHistoryId", 0L);
+        if (newWh > 0L) watchHistoryIdForServer = newWh;
 
         // Title block
         String title = payload.optString("title", "");
@@ -1055,6 +1110,21 @@ public class PlayerActivity extends Activity {
         applyTimeUiNow();
         double dur = getDurationSeconds();
 
+        // Fallback end-of-stream detection. Player.STATE_ENDED is the
+        // primary signal, but for HLS event playlists ExoPlayer occasionally
+        // stalls at the last segment instead of transitioning — the player
+        // is no longer playing, no longer buffering, and the position is
+        // pinned at duration. Treat that as ended so the auto-close /
+        // play-next paths still fire.
+        if (!ended && dur > 0d) {
+            int state = player.getPlaybackState();
+            boolean nearEnd = getCurrentSeconds() >= dur - 0.75d;
+            boolean idle = state != Player.STATE_BUFFERING && !player.isPlaying();
+            if (nearEnd && idle) {
+                handleEndOfStream();
+            }
+        }
+
         // Auto-hide controls in seek mode while playing.
         if (tvMode == TvMode.SEEK) {
             boolean shouldShow = controlsVisible();
@@ -1140,6 +1210,38 @@ public class PlayerActivity extends Activity {
         return null;
     }
 
+    /**
+     * Called once when playback hits the end of the stream — either via
+     * Player.STATE_ENDED (normal path for direct_play and well-terminated
+     * HLS event playlists) or the position-vs-duration fallback in
+     * {@link #onUiTick} (covers HLS sessions where ENDLIST hasn't been
+     * appended yet but the player has clearly run off the end).
+     *
+     * Movies self-finish after a short delay so the user lands back on the
+     * MovieShow page even when the JS bridge is slow to deliver the
+     * `ended` event. Episodes stay alive — JS responds to `ended` by
+     * starting the next episode and calling updateStream() in-place.
+     */
+    private void handleEndOfStream() {
+        if (ended) return;
+        ended = true;
+        stopProgressTimer();
+        // Final position write (mark-watched path on the server).
+        postProgressDirect();
+        emit("ended", buildLifecycleEvent(null));
+
+        boolean isMovie = movieIdForServer > 0L && episodeIdForServer == 0L;
+        if (isMovie) {
+            // Short delay so the JS bridge can also propagate `ended` →
+            // closePlayer → setPlayerState(open=false) before the Activity
+            // finishes; otherwise the WebView may briefly see a stale "open"
+            // state and re-trigger the curtain when MainActivity resumes.
+            uiHandler.postDelayed(() -> {
+                if (!isFinishing()) finish();
+            }, 1500L);
+        }
+    }
+
     // ── progress timer (10s for JS reportProgress) ───────────────────
 
     private void startProgressTimer() {
@@ -1157,9 +1259,67 @@ public class PlayerActivity extends Activity {
         ev.put("duration", getDurationSeconds());
         ev.put("isPlaying", player.isPlaying());
         emit("progress", ev);
+        postProgressDirect();
         if (player.isPlaying()) {
             progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS);
         }
+    }
+
+    /**
+     * POST current position to /api/playback/report_progress directly,
+     * bypassing the JS bridge. See the comment on {@link #apiBase} for why.
+     */
+    private void postProgressDirect() {
+        if (apiBase == null || apiBase.isEmpty()) return;
+        if (episodeIdForServer <= 0L && movieIdForServer <= 0L) return;
+        final long position = (long) getCurrentSeconds();
+        final long duration = (long) getDurationSeconds();
+        if (duration <= 0L) return;
+
+        final String base = apiBase;
+        final long ep = episodeIdForServer;
+        final long mv = movieIdForServer;
+        final long wh = watchHistoryIdForServer;
+
+        httpExecutor.submit(() -> {
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(base + "/api/playback/report_progress");
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+
+                JSONObject body = new JSONObject();
+                body.put("time", position);
+                body.put("duration", duration);
+                if (ep > 0L) body.put("episode_id", ep);
+                if (mv > 0L) body.put("movie_id", mv);
+                if (wh > 0L) body.put("watch_history_id", wh);
+
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                int code = conn.getResponseCode();
+                // Drain body so the underlying socket can be reused.
+                try (InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream()) {
+                    if (is != null) {
+                        byte[] buf = new byte[1024];
+                        while (is.read(buf) != -1) { /* discard */ }
+                    }
+                }
+                if (code >= 400) {
+                    Log.w(TAG, "report_progress HTTP " + code);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "report_progress failed: " + e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        });
     }
 
     // ── event emit ────────────────────────────────────────────────────

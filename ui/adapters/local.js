@@ -6,6 +6,10 @@ export function createLocalAdapter() {
   const api = window.api
 
   return {
+    // No HTTP base in pure-local mode — the native Android player adapter
+    // doesn't run here. Kept for adapter parity with http/hybrid.
+    apiBase: '',
+
     // Shows
     listShows: () => api.listShows(),
     getContinue: (slug) => api.getContinue(slug),
