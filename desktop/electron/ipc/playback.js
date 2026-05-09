@@ -8,7 +8,7 @@
 // External VLC control (the "Open in VLC" feature) still lives here and is
 // delegated to libvlc-player.js (subprocess + HTTP control).
 
-const { ipcMain, shell, BrowserWindow } = require('electron')
+const { ipcMain, shell, BrowserWindow, powerSaveBlocker } = require('electron')
 const fs = require('fs')
 const db = require('../db')
 const vlcEmbed = require('../services/vlc-embed-player')
@@ -32,6 +32,25 @@ let currentFilePath = null
 let lastReportedTime = 0
 let lastProbeAudio = []
 let lastProbeSubtitle = []
+
+// Active powerSaveBlocker id while playback is running. Without this,
+// macOS App Nap / display-sleep eventually throttles Electron + libvlc
+// after a few minutes of no UI input, draining the decoder buffer and
+// causing periodic pause-and-load stalls mid-playback. Web/Android don't
+// hit this because the browser auto-asserts power on a playing <video>.
+let powerBlockerId = null
+
+function startPowerBlocker() {
+  if (powerBlockerId != null && powerSaveBlocker.isStarted(powerBlockerId)) return
+  try { powerBlockerId = powerSaveBlocker.start('prevent-display-sleep') }
+  catch (err) { console.warn('powerSaveBlocker start failed:', err.message) }
+}
+function stopPowerBlocker() {
+  if (powerBlockerId == null) return
+  try { if (powerSaveBlocker.isStarted(powerBlockerId)) powerSaveBlocker.stop(powerBlockerId) }
+  catch {}
+  powerBlockerId = null
+}
 
 function broadcast(channel, payload) {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -144,6 +163,7 @@ function register(mainWindow) {
 
       await ensureInit()
       await vlcEmbed.start(filePath, startTime)
+      startPowerBlocker()
       currentFilePath = filePath
       lastReportedTime = startTime
 
@@ -228,6 +248,7 @@ function register(mainWindow) {
 
   ipcMain.handle('playback:stop', async (_e, finalTime, finalDuration) => {
     try { await vlcEmbed.stop() } catch {}
+    stopPowerBlocker()
     if (finalTime != null && finalDuration != null) saveProgress(finalTime, finalDuration)
 
     const result = { episodeId: currentEpisodeId, movieId: currentMovieId }

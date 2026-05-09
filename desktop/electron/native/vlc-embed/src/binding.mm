@@ -68,6 +68,13 @@ static Napi::Value VlcInit(const Napi::CallbackInfo& info) {
 
     // Run libvlc in quiet mode (--quiet) and keep the host responsible for
     // window/keyboard handling — no VLC HUD, no keyboard shortcut grabbing.
+    //
+    // Caching: libvlc's defaults (file=300ms, live=300ms, network=1000ms) are
+    // far too small for the high-bitrate sources Caramba plays (4K HEVC remux
+    // can spike past 80 Mbps). On a NAS share or under macOS App Nap, even
+    // brief I/O hiccups drain the buffer and stall playback mid-stream. 5s
+    // is large enough to absorb those hiccups but small enough that seeks
+    // refill quickly. Mirrors the buffering hls.js gives the web/android path.
     const char* args[] = {
         "--quiet",
         "--no-video-title-show",
@@ -76,6 +83,10 @@ static Napi::Value VlcInit(const Napi::CallbackInfo& info) {
         "--no-stats",
         "--no-keyboard-events",
         "--no-mouse-events",
+        "--file-caching=5000",
+        "--live-caching=5000",
+        "--network-caching=5000",
+        "--disc-caching=5000",
     };
     int argc = sizeof(args) / sizeof(args[0]);
     gVlc = libvlc_new(argc, args);
