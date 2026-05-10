@@ -1,3 +1,30 @@
 #!/usr/bin/env bash
 # Start Rails API server + desktop app (Vite + Electron) via foreman.
-exec bin/foreman start -f Procfile.desktop "$@"
+#
+# Foreman doesn't reliably kill the Rails server when Electron exits — Puma gets
+# reparented to launchd and the server.pid sticks around, blocking the next run.
+# Clean up before start and on exit so a stale puma never wedges the next launch.
+
+cd "$(dirname "$0")/.."
+
+PID_FILE="server/tmp/pids/server.pid"
+
+cleanup_rails() {
+  [ -f "$PID_FILE" ] || return 0
+  local pid
+  pid=$(cat "$PID_FILE" 2>/dev/null)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -KILL "$pid" 2>/dev/null
+  fi
+  rm -f "$PID_FILE"
+}
+
+cleanup_rails
+trap cleanup_rails EXIT INT TERM
+
+bin/foreman start -f Procfile.desktop "$@"
