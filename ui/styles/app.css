@@ -1480,6 +1480,81 @@ body {
 
 .settings-form .field { margin-bottom: 16px; }
 
+.settings-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  letter-spacing: -.01em;
+}
+
+.settings-select-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+}
+
+.settings-select-wrap::after {
+  /* Custom chevron — replaces the native OS dropdown arrow that ignores
+     our background and clashes with the dark surface. */
+  content: '';
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-top: -7px;
+  border-right: 2px solid var(--text-secondary);
+  border-bottom: 2px solid var(--text-secondary);
+  transform: rotate(45deg);
+  pointer-events: none;
+  transition: border-color .15s;
+}
+
+.settings-select-wrap:hover::after { border-color: var(--text-primary); }
+
+.settings-select {
+  width: 100%;
+  background: rgba(255,255,255,.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 40px 10px 14px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: none;
+  transition: border-color .15s, background .15s;
+}
+
+.settings-select:hover {
+  background: rgba(255,255,255,.07);
+  border-color: var(--border-focus);
+}
+
+.settings-select:focus {
+  border-color: var(--accent);
+  background: rgba(10,132,255,.06);
+}
+
+.settings-select:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* The native <option> popup is rendered by the OS — we can only hint at
+   colors. macOS honours background-color on options in dark mode. */
+.settings-select option {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
 .settings-actions {
   display: flex;
   gap: 12px;
@@ -1665,6 +1740,79 @@ body {
 
 .discovery-manual {
   margin-top: 4px;
+}
+
+/* -- Server Setup screen ------------------------------------------- */
+/* Full-screen first-run / disconnected view. Renders against the
+   transparent BrowserWindow, so it owns its own opaque background.
+   Top drag region clears the macOS traffic lights. */
+.server-setup {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at 30% 0%, rgba(10, 132, 255, .14), transparent 55%),
+    radial-gradient(circle at 80% 90%, rgba(48, 209, 88, .08), transparent 60%),
+    var(--bg);
+  color: var(--text-primary);
+  overflow: auto;
+}
+
+.server-setup-titlebar {
+  flex: 0 0 auto;
+  height: 48px;
+  -webkit-app-region: drag;
+}
+
+.server-setup-body {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 48px 64px;
+}
+
+.server-setup-card {
+  width: 100%;
+  max-width: 560px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 36px 36px 28px;
+  box-shadow: var(--glass-shadow-lg);
+}
+
+.server-setup-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 0 0 8px;
+}
+
+.server-setup-sub {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 0 0 24px;
+}
+
+.server-setup-manual {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.server-setup-manual .api-mode-url-input {
+  flex: 1;
+}
+
+/* Inputs and buttons inside the setup card must override the drag region
+   so click/focus still works. */
+.server-setup-card,
+.server-setup-card * {
+  -webkit-app-region: no-drag;
 }
 
 /* -- Sync Status Grid --------------------------------------------- */

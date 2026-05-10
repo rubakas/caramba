@@ -150,16 +150,18 @@ export default function Settings({
             {isDesktopMode && onPlayerEngineChange && (
               <div className="field" style={{ marginTop: 16 }}>
                 <label htmlFor="player-engine" className="settings-label">Player engine</label>
-                <select
-                  id="player-engine"
-                  className="api-mode-url-input"
-                  value={playerEngine || 'hlsjs'}
-                  onChange={(e) => onPlayerEngineChange(e.target.value)}
-                >
-                  <option value="hlsjs">Browser (hls.js)</option>
-                  <option value="libvlc">Embedded VLC</option>
-                </select>
-                <p className="settings-hint" style={{ marginTop: 4 }}>
+                <div className="settings-select-wrap">
+                  <select
+                    id="player-engine"
+                    className="settings-select"
+                    value={playerEngine || 'hlsjs'}
+                    onChange={(e) => onPlayerEngineChange(e.target.value)}
+                  >
+                    <option value="hlsjs">Browser (hls.js)</option>
+                    <option value="libvlc">Embedded VLC</option>
+                  </select>
+                </div>
+                <p className="settings-hint" style={{ marginTop: 6 }}>
                   Embedded VLC paints into the desktop window using libVLC. Use the browser engine for the simplest setup.
                 </p>
               </div>

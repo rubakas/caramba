@@ -60,36 +60,41 @@ export default function ServerSetup({
 
   return (
     <div className="server-setup">
-      <div className="server-setup-card">
-        <h1 className="server-setup-title">Connect to your Caramba server</h1>
-        <p className="server-setup-sub">
-          {reason || 'Caramba desktop talks to a Rails server over your network. Pick one below or enter a URL.'}
-        </p>
+      {/* Draggable strip at the top so the user can move the window;
+          height clears the macOS traffic lights at (16,16). */}
+      <div className="server-setup-titlebar" />
+      <div className="server-setup-body">
+        <div className="server-setup-card">
+          <h1 className="server-setup-title">Connect to your Caramba server</h1>
+          <p className="server-setup-sub">
+            {reason || 'Caramba desktop talks to a Rails server over your network. Pick one below or enter a URL.'}
+          </p>
 
-        <ServerDiscovery
-          discover={discoverFn}
-          onSelect={(url) => tryUrl(url)}
-          currentUrl={initialUrl || null}
-          connected={null}
-          manualFallback={
-            <form onSubmit={handleManualSubmit} className="server-setup-manual">
-              <input
-                type="url"
-                className="api-mode-url-input"
-                value={manualUrl}
-                onChange={e => setManualUrl(e.target.value)}
-                placeholder="http://192.168.1.10:3001"
-                spellCheck={false}
-                disabled={checking}
-              />
-              <button type="submit" className="btn-primary" disabled={checking}>
-                {checking ? 'Connecting…' : 'Connect'}
-              </button>
-            </form>
-          }
-        />
+          <ServerDiscovery
+            discover={discoverFn}
+            onSelect={(url) => tryUrl(url)}
+            currentUrl={initialUrl || null}
+            connected={null}
+            manualFallback={
+              <form onSubmit={handleManualSubmit} className="server-setup-manual">
+                <input
+                  type="url"
+                  className="api-mode-url-input"
+                  value={manualUrl}
+                  onChange={e => setManualUrl(e.target.value)}
+                  placeholder="http://192.168.1.10:3001"
+                  spellCheck={false}
+                  disabled={checking}
+                />
+                <button type="submit" className="btn-primary" disabled={checking}>
+                  {checking ? 'Connecting…' : 'Connect'}
+                </button>
+              </form>
+            }
+          />
 
-        {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+          {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+        </div>
       </div>
     </div>
   )
