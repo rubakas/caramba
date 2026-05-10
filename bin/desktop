@@ -5,17 +5,18 @@
 # reparented to launchd and the server.pid sticks around, blocking the next run.
 # Clean up before start and on exit so a stale puma never wedges the next launch.
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 PID_FILE="server/tmp/pids/server.pid"
 
 cleanup_rails() {
   [ -f "$PID_FILE" ] || return 0
   local pid
-  pid=$(cat "$PID_FILE" 2>/dev/null)
+  pid=$(<"$PID_FILE")
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
+    # Wait up to 2s for graceful shutdown before SIGKILL.
+    for _ in $(seq 10); do
       kill -0 "$pid" 2>/dev/null || break
       sleep 0.2
     done
@@ -25,6 +26,6 @@ cleanup_rails() {
 }
 
 cleanup_rails
-trap cleanup_rails EXIT INT TERM
+trap cleanup_rails EXIT
 
 bin/foreman start -f Procfile.desktop "$@"
