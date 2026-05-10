@@ -27,10 +27,6 @@
       "icon": "../ui/public/icon.icns",
       "extraResources": [
         {
-          "from": "vendor/ffmpeg-${arch}",
-          "to": "ffmpeg"
-        },
-        {
           "from": "vendor/vlc-${arch}/lib",
           "to": "vlc/lib"
         },
@@ -48,11 +44,7 @@
         }
       ],
       "extendInfo": {
-        "NSDesktopFolderUsageDescription": "Caramba reads media files you place on your Desktop so it can play and transcode them.",
-        "NSDocumentsFolderUsageDescription": "Caramba reads media files you place in Documents so it can play and transcode them.",
-        "NSDownloadsFolderUsageDescription": "Caramba reads media files you place in Downloads so it can play and transcode them.",
-        "NSRemovableVolumesUsageDescription": "Caramba reads media files from external drives so it can play and transcode them.",
-        "NSNetworkVolumesUsageDescription": "Caramba reads media files from network shares so it can play and transcode them."
+        "NSDownloadsFolderUsageDescription": "Caramba writes downloaded episodes and movies to your Downloads folder."
       }
     },
     "files": [
@@ -72,7 +64,6 @@
     "@sentry-internal/replay-canvas": "^10.50.0",
     "@sentry/browser": "^10.50.0",
     "@sentry/electron": "^7.13.0",
-    "better-sqlite3": "^12.9.0",
     "bonjour-service": "^1.3.0",
     "debug": "^4.4.3",
     "module-details-from-path": "^1.0.4",

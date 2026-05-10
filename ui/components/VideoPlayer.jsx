@@ -489,11 +489,9 @@ function WebVideoPlayer() {
   }, [playerState.open])
 
   // ── Source attachment ─────────────────────────────────────────────
-  // All platforms are fed an HLS manifest:
+  // All platforms are fed an HLS manifest from the Rails server:
   //   - Safari / iOS — native HLS via <video src="…m3u8">
-  //   - Chromium / Firefox / Android WebView — hls.js
-  // Desktop Electron serves the same manifest via the stream:// protocol;
-  // the fetch/playback code path is identical.
+  //   - Chromium / Firefox / Android WebView / Electron — hls.js
   const hlsRef = useRef(null)
   const fatalAttemptsRef = useRef(0)
   const fatalTimerRef = useRef(null)

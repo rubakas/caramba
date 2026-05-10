@@ -1,4 +1,4 @@
-// IPC handlers for native OS dialogs (folder/file pickers)
+// IPC handler for the native folder picker (downloads destination only).
 
 const { ipcMain, dialog } = require('electron')
 
@@ -9,17 +9,6 @@ function register(mainWindow) {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
-  })
-
-  ipcMain.handle('dialog:selectFiles', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile', 'multiSelections'],
-      filters: [
-        { name: 'Video Files', extensions: ['mkv', 'mp4', 'avi', 'mov', 'm4v'] },
-      ],
-    })
-    if (result.canceled || result.filePaths.length === 0) return []
-    return result.filePaths
   })
 }
 

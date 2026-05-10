@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import { refractive } from '../config/refractive'
+import { useApi, useCapabilities } from '../context/ApiContext'
 import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function UpdatePrompt() {
+  const api = useApi()
+  const { hasUpdater } = useCapabilities()
   const [phase, setPhase] = useState('idle') // idle | available | downloading | ready
   const [info, setInfo] = useState(null)
   const [progress, setProgress] = useState(0)
@@ -11,8 +14,9 @@ export default function UpdatePrompt() {
   const updatePromptGlass = useGlassConfig('update-prompt')
 
   useEffect(() => {
+    if (!hasUpdater || !api.checkForUpdate) return
     // Pull: check if an update was already found before this component mounted
-    window.api.checkForUpdate().then(info => {
+    api.checkForUpdate().then(info => {
       if (info && !info.error) {
         setInfo(info)
         setPhase('available')
@@ -20,24 +24,24 @@ export default function UpdatePrompt() {
     })
 
     // Push: catch updates found after this component mounted
-    const unsubAvailable = window.api.onUpdateAvailable((updateInfo) => {
+    const unsubAvailable = api.onUpdateAvailable((updateInfo) => {
       setInfo(updateInfo)
       setPhase('available')
     })
-    const unsubProgress = window.api.onDownloadProgress(({ percent }) => {
+    const unsubProgress = api.onDownloadProgress(({ percent }) => {
       setProgress(percent)
     })
     return () => {
-      unsubAvailable()
-      unsubProgress()
+      unsubAvailable?.()
+      unsubProgress?.()
     }
-  }, [])
+  }, [hasUpdater, api])
 
   const handleUpdate = async () => {
     setPhase('downloading')
     setProgress(0)
     setError(null)
-    const result = await window.api.downloadUpdate()
+    const result = await api.downloadUpdate()
     if (result.error) {
       setError(result.error)
       setPhase('available')
@@ -49,7 +53,7 @@ export default function UpdatePrompt() {
   const handleInstall = async () => {
     setInstalling(true)
     setError(null)
-    const result = await window.api.installUpdate()
+    const result = await api.installUpdate()
     // Real macOS install quits the app — we only get here for simulation or errors
     if (result?.error) {
       setError(result.error)
@@ -66,6 +70,7 @@ export default function UpdatePrompt() {
     setError(null)
   }
 
+  if (!hasUpdater) return null
   if (phase === 'idle') return null
 
   return (

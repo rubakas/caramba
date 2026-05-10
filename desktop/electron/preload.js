@@ -1,54 +1,29 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+// The desktop renderer talks to the Rails server over HTTP for everything
+// data-related. The bridge below is just the electron-only surface:
+// dialogs, downloads, libVLC, mDNS, updater, prefs.
 contextBridge.exposeInMainWorld('api', {
-  // Shows
-  listShows: () => ipcRenderer.invoke('shows:list'),
-  getShowSummary: (slug) => ipcRenderer.invoke('shows:get', slug),
-  getShow: (slug) => ipcRenderer.invoke('shows:show', slug),
-  getShowEpisodes: (slug) => ipcRenderer.invoke('shows:getEpisodes', slug),
-  getShowSeasons: (slug) => ipcRenderer.invoke('shows:getSeasons', slug),
-  getContinue: (slug) => ipcRenderer.invoke('shows:getContinue', slug),
-  addShow: (folderPath) => ipcRenderer.invoke('shows:add', folderPath),
-  scanShow: (slug) => ipcRenderer.invoke('shows:scan', slug),
-  refreshShowMetadata: (slug) => ipcRenderer.invoke('shows:refreshMetadata', slug),
-  destroyShow: (slug) => ipcRenderer.invoke('shows:destroy', slug),
-  relocateShow: (slug, newPath) => ipcRenderer.invoke('shows:relocate', slug, newPath),
+  // Server URL + app preferences
+  getServerConfig: () => ipcRenderer.invoke('settings:getServerConfig'),
+  setServerConfig: (cfg) => ipcRenderer.invoke('settings:setServerConfig', cfg),
+  getPreferences: () => ipcRenderer.invoke('settings:getPreferences'),
+  setPreferences: (patch) => ipcRenderer.invoke('settings:setPreferences', patch),
 
-  // Episodes
-  playEpisode: (episodeId) => ipcRenderer.invoke('episodes:play', episodeId),
-  toggleEpisode: (episodeId) => ipcRenderer.invoke('episodes:toggle', episodeId),
-  getNextEpisode: (episodeId) => ipcRenderer.invoke('episodes:getNext', episodeId),
+  // Folder picker (downloads destination)
+  selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
 
-  // Movies
-  listMovies: () => ipcRenderer.invoke('movies:list'),
-  getMovie: (slug) => ipcRenderer.invoke('movies:get', slug),
-  addMovies: (filePaths) => ipcRenderer.invoke('movies:add', filePaths),
-  playMovie: (slug) => ipcRenderer.invoke('movies:play', slug),
-  toggleMovie: (slug) => ipcRenderer.invoke('movies:toggle', slug),
-  refreshMovieMetadata: (slug) => ipcRenderer.invoke('movies:refreshMetadata', slug),
-  destroyMovie: (slug) => ipcRenderer.invoke('movies:destroy', slug),
-  relocateMovie: (slug, newPath) => ipcRenderer.invoke('movies:relocate', slug, newPath),
+  // mDNS discovery
+  discoverServers: () => ipcRenderer.invoke('discovery:scan'),
 
-  // Playback (libVLC-embedded)
-  startPlayback: (filePath, startTime, prefs, options) => ipcRenderer.invoke('playback:start', filePath, startTime, prefs, options),
-  seekPlayback: (time) => ipcRenderer.invoke('playback:seek', time),
-  pausePlayback: () => ipcRenderer.invoke('playback:pause'),
-  resumePlayback: () => ipcRenderer.invoke('playback:resume'),
-  stopPlayback: (finalTime, finalDuration) => ipcRenderer.invoke('playback:stop', finalTime, finalDuration),
-  reportProgress: (time, duration) => ipcRenderer.invoke('playback:progress', time, duration),
-  getPlaybackStatus: () => ipcRenderer.invoke('playback:status'),
-  setPlaybackEpisode: (episodeId, whId) => ipcRenderer.invoke('playback:setEpisode', episodeId, whId),
-  setPlaybackMovie: (movieId) => ipcRenderer.invoke('playback:setMovie', movieId),
-  switchAudio: (audioStreamId) => ipcRenderer.invoke('playback:switchAudio', audioStreamId),
-  switchSubtitle: (subtitleStreamId) => ipcRenderer.invoke('playback:switchSubtitle', subtitleStreamId),
-  addExternalSubtitle: (path) => ipcRenderer.invoke('playback:addExternalSubtitle', path),
-  setSubtitleAppearance: (opts) => ipcRenderer.invoke('playback:setSubtitleAppearance', opts),
-  savePlaybackPreferences: (prefs) => ipcRenderer.invoke('playback:savePreferences', prefs),
-  getPlaybackPreferences: (query) => ipcRenderer.invoke('playback:getPreferences', query),
-  checkVlc: () => ipcRenderer.invoke('playback:checkVlc'),
-  openInVlc: (opts) => ipcRenderer.invoke('playback:openInVlc', opts),
-  openInDefault: (filePath, episodeId, movieId) => ipcRenderer.invoke('playback:openInDefault', filePath, episodeId, movieId),
-  // Live state pushes from the embedded libVLC.
+  // Embedded libVLC playback engine
+  startEmbedVlc: (url, opts) => ipcRenderer.invoke('vlc:embedStart', url, opts),
+  stopEmbedVlc: () => ipcRenderer.invoke('vlc:embedStop'),
+  embedSeek: (seconds) => ipcRenderer.invoke('vlc:embedSeek', seconds),
+  embedPause: () => ipcRenderer.invoke('vlc:embedPause'),
+  embedResume: () => ipcRenderer.invoke('vlc:embedResume'),
+  embedSwitchAudio: (id) => ipcRenderer.invoke('vlc:embedSwitchAudio', id),
+  embedSwitchSubtitle: (id) => ipcRenderer.invoke('vlc:embedSwitchSubtitle', id),
   onPlaybackState: (cb) => {
     const handler = (_e, state) => cb(state)
     ipcRenderer.on('playback:state', handler)
@@ -65,33 +40,38 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('playback:ended', handler)
   },
 
-  // libVLC library control surface (card #60)
-  vlcStatus: () => ipcRenderer.invoke('libvlc:status'),
-  vlcPause: () => ipcRenderer.invoke('libvlc:pause'),
-  vlcResume: () => ipcRenderer.invoke('libvlc:resume'),
-  vlcStop: () => ipcRenderer.invoke('libvlc:stop'),
-  vlcSeek: (seconds) => ipcRenderer.invoke('libvlc:seek', seconds),
-  vlcSetVolume: (level) => ipcRenderer.invoke('libvlc:setVolume', level),
+  // External VLC subprocess
+  checkVlc: () => ipcRenderer.invoke('vlc:checkInstalled'),
+  openInVlc: (payload) => ipcRenderer.invoke('vlc:openInVlc', payload),
+  openInDefault: (payload) => ipcRenderer.invoke('vlc:openInDefault', payload),
+  getPlaybackStatus: () => ipcRenderer.invoke('vlc:status'),
   onVlcPlaybackEnded: (cb) => {
     const handler = () => cb()
     ipcRenderer.on('vlc-playback-ended', handler)
     return () => ipcRenderer.removeListener('vlc-playback-ended', handler)
   },
-  // Settings
-  getSettings: () => ipcRenderer.invoke('settings:get'),
-  setSyncFolder: (folder) => ipcRenderer.invoke('settings:setSyncFolder', folder),
-  syncNow: () => ipcRenderer.invoke('settings:syncNow'),
-  loadFromSync: () => ipcRenderer.invoke('settings:loadFromSync'),
-  getApiMode: () => ipcRenderer.invoke('settings:getApiMode'),
-  setApiMode: (opts) => ipcRenderer.invoke('settings:setApiMode', opts),
-  fileExists: (path) => ipcRenderer.invoke('fs:exists', path),
 
-  // Dialogs
-  selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
-  selectFiles: () => ipcRenderer.invoke('dialog:selectFiles'),
+  // External VLC library control (NowPlaying scrubber)
+  vlcStatus: () => ipcRenderer.invoke('vlc:libStatus'),
+  vlcPause: () => ipcRenderer.invoke('vlc:libPause'),
+  vlcResume: () => ipcRenderer.invoke('vlc:libResume'),
+  vlcStop: () => ipcRenderer.invoke('vlc:libStop'),
+  vlcSeek: (seconds) => ipcRenderer.invoke('vlc:libSeek', seconds),
+  vlcSetVolume: (level) => ipcRenderer.invoke('vlc:libVolume', level),
 
-  // Server discovery
-  discoverServers: () => ipcRenderer.invoke('discovery:scan'),
+  // Downloads
+  downloadEpisode: (payload) => ipcRenderer.invoke('downloads:episode', payload),
+  deleteDownloadEpisode: (payload) => ipcRenderer.invoke('downloads:deleteEpisode', payload),
+  downloadMovie: (payload) => ipcRenderer.invoke('downloads:movie', payload),
+  deleteDownloadMovie: (payload) => ipcRenderer.invoke('downloads:deleteMovie', payload),
+  cancelDownload: (payload) => ipcRenderer.invoke('downloads:cancel', payload),
+  getDownloadStatus: (payload) => ipcRenderer.invoke('downloads:status', payload),
+  listDownloads: () => ipcRenderer.invoke('downloads:list'),
+  onMediaDownloadProgress: (cb) => {
+    const handler = (_e, data) => cb(data)
+    ipcRenderer.on('downloads:progress', handler)
+    return () => ipcRenderer.removeListener('downloads:progress', handler)
+  },
 
   // Updater
   checkForUpdate: () => ipcRenderer.invoke('updater:check'),
@@ -108,24 +88,6 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('updater:download-progress', handler)
   },
 
-  // Dev-only: save glass config (playground → glass.json)
+  // Dev-only: save glass config to ui/config/glass.json (Playground page)
   saveGlassConfig: (config) => ipcRenderer.invoke('dev:saveGlassConfig', config),
-
-  // Downloads (offline media cache)
-  downloadEpisode: (arg) => ipcRenderer.invoke('downloads:episode', arg),
-  downloadSeason: (arg) => ipcRenderer.invoke('downloads:season', arg),
-  downloadMovie: (arg) => ipcRenderer.invoke('downloads:movie', arg),
-  cancelDownload: (downloadId) => ipcRenderer.invoke('downloads:cancel', downloadId),
-  deleteDownloadEpisode: (arg) => ipcRenderer.invoke('downloads:deleteEpisode', arg),
-  deleteDownloadSeason: (arg) => ipcRenderer.invoke('downloads:deleteSeason', arg),
-  deleteDownloadMovie: (arg) => ipcRenderer.invoke('downloads:deleteMovie', arg),
-  listDownloads: () => ipcRenderer.invoke('downloads:list'),
-  getStorageInfo: () => ipcRenderer.invoke('downloads:storageInfo'),
-  getDownloadStatusByFilePaths: (filePaths) => ipcRenderer.invoke('downloads:statusByFilePaths', filePaths),
-  getMovieDownloadStatusByFilePath: (filePath) => ipcRenderer.invoke('downloads:movieStatusByFilePath', filePath),
-  onMediaDownloadProgress: (cb) => {
-    const handler = (_e, data) => cb(data)
-    ipcRenderer.on('downloads:progress', handler)
-    return () => ipcRenderer.removeListener('downloads:progress', handler)
-  },
 })

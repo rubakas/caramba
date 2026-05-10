@@ -1,95 +1,145 @@
 import { HashRouter, Routes, Route } from 'react-router-dom'
-import { lazy, Suspense, useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useMemo, useCallback } from 'react'
 import { ApiProvider } from '@caramba/ui/context/ApiContext'
-import { createLocalAdapter, localCapabilities } from '@caramba/ui/adapters/local'
-import { createHybridAdapter } from '@caramba/ui/adapters/hybrid'
+import { createDesktopAdapter, getDesktopCapabilities } from '@caramba/ui/adapters/desktop'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
 import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
 import VideoPlayer from '@caramba/ui/components/VideoPlayer'
+import ServerSetup from '@caramba/ui/components/ServerSetup'
 import Shows from '@caramba/ui/pages/Shows'
 import Show from '@caramba/ui/pages/Show'
-import ShowNew from '@caramba/ui/pages/ShowNew'
 import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
-import MoviesNew from '@caramba/ui/pages/MoviesNew'
 import Settings from '@caramba/ui/pages/Settings'
 import Admin from '@caramba/ui/pages/Admin'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
-// Dev-only: lazy-load playground so it's tree-shaken from production builds
 const Playground = import.meta.env.DEV ? lazy(() => import('@caramba/ui/pages/Playground')) : null
 
+// Phases of bootstrap:
+//   - 'loading': reading saved server URL + probing /api/health
+//   - 'setup':   no saved URL, or saved URL is unreachable; show ServerSetup
+//   - 'ready':   adapter wired, render the app
+async function probeHealth(url) {
+  if (!url) return false
+  try {
+    const res = await fetch(`${url.replace(/\/+$/, '')}/api/health`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) return false
+    const json = await res.json().catch(() => ({}))
+    return json?.status === 'ok'
+  } catch {
+    return false
+  }
+}
+
 export default function App() {
-  const [apiMode, setApiMode] = useState(null)   // null = loading, { enabled, server_url }
-  const [apiConnected, setApiConnected] = useState(false)
-  const hybridRef = useRef(null)
+  const [phase, setPhase] = useState('loading')
+  const [serverUrl, setServerUrl] = useState(null)
+  const [setupReason, setSetupReason] = useState(null)
+  const [useEmbedVlc, setUseEmbedVlc] = useState(false)
 
-  // Load API mode config on mount
+  // Initial bootstrap: load saved server URL + probe health.
   useEffect(() => {
-    window.api.getApiMode().then(config => {
-      setApiMode(config || { enabled: false, server_url: null })
-    }).catch(() => {
-      setApiMode({ enabled: false, server_url: null })
-    })
-  }, [])
-
-  // Called from Settings when API mode changes
-  const handleApiModeChange = useCallback((newConfig) => {
-    setApiMode(newConfig)
-  }, [])
-
-  // Create adapter based on API mode config
-  const { adapter, capabilities } = useMemo(() => {
-    // Clean up previous hybrid adapter
-    if (hybridRef.current) {
-      hybridRef.current.destroy()
-      hybridRef.current = null
-    }
-
-    if (!apiMode || !apiMode.enabled || !apiMode.server_url) {
-      return { adapter: createLocalAdapter(), capabilities: localCapabilities }
-    }
-
-    const hybrid = createHybridAdapter({
-      serverUrl: apiMode.server_url,
-      localPlayback: apiMode.local_playback !== false,
-      onConnectionChange: (connected) => setApiConnected(connected),
-    })
-    hybridRef.current = hybrid
-    return { adapter: hybrid.adapter, capabilities: hybrid.capabilities }
-  }, [apiMode])
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (hybridRef.current) {
-        hybridRef.current.destroy()
-        hybridRef.current = null
+    let cancelled = false
+    ;(async () => {
+      try {
+        const cfg = await window.api.getServerConfig()
+        const prefs = await window.api.getPreferences().catch(() => null)
+        if (cancelled) return
+        const url = cfg?.serverUrl || ''
+        const engine = prefs?.playerEngine || 'hlsjs'
+        setUseEmbedVlc(engine === 'libvlc')
+        if (!url) {
+          setSetupReason('First launch — let’s find your Caramba server.')
+          setPhase('setup')
+          return
+        }
+        const healthy = await probeHealth(url)
+        if (cancelled) return
+        if (!healthy) {
+          setServerUrl(url)
+          setSetupReason('That server is unreachable. Pick another or fix the URL.')
+          setPhase('setup')
+          return
+        }
+        setServerUrl(url)
+        setPhase('ready')
+      } catch (err) {
+        if (cancelled) return
+        console.warn('[App] bootstrap failed:', err)
+        setSetupReason('Couldn’t read saved settings. Pick a server to continue.')
+        setPhase('setup')
       }
-    }
+    })()
+    return () => { cancelled = true }
   }, [])
 
-  // Don't render until we know the API mode config
-  if (!apiMode) return null
+  const handleConnected = useCallback(async (url) => {
+    try {
+      await window.api.setServerConfig({ serverUrl: url })
+    } catch (err) {
+      console.warn('[App] failed to persist server URL:', err)
+    }
+    setServerUrl(url)
+    setSetupReason(null)
+    setPhase('ready')
+  }, [])
+
+  const handleChangeServer = useCallback(() => {
+    setSetupReason('Pick a different server.')
+    setPhase('setup')
+  }, [])
+
+  const handlePlayerEngineChange = useCallback(async (engine) => {
+    try {
+      await window.api.setPreferences({ playerEngine: engine })
+    } catch {}
+    setUseEmbedVlc(engine === 'libvlc')
+  }, [])
+
+  const adapterAndCaps = useMemo(() => {
+    if (phase !== 'ready' || !serverUrl) return null
+    return {
+      adapter: createDesktopAdapter(serverUrl, { useEmbedVlc }),
+      capabilities: getDesktopCapabilities({ useEmbedVlc }),
+    }
+  }, [phase, serverUrl, useEmbedVlc])
+
+  if (phase === 'loading') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#000' }} />
+    )
+  }
+
+  if (phase === 'setup' || !adapterAndCaps) {
+    return (
+      <ServerSetup
+        initialUrl={serverUrl || ''}
+        onConnected={handleConnected}
+        reason={setupReason}
+      />
+    )
+  }
 
   return (
-    <ApiProvider adapter={adapter} capabilities={capabilities}>
+    <ApiProvider adapter={adapterAndCaps.adapter} capabilities={adapterAndCaps.capabilities}>
       <ToastProvider>
         <PlayerProvider>
           <HashRouter>
             <Routes>
               <Route path="/" element={<Shows />} />
-              <Route path="/shows/new" element={<ShowNew />} />
               <Route path="/shows/:slug" element={<Show />} />
               <Route path="/movies" element={<Movies />} />
-              <Route path="/movies/new" element={<MoviesNew />} />
               <Route path="/movies/:slug" element={<MovieShow />} />
               <Route path="/settings" element={
                 <Settings
-                  apiMode={apiMode}
-                  apiConnected={apiConnected}
-                  onApiModeChange={handleApiModeChange}
+                  serverUrl={serverUrl}
+                  onChangeServer={handleChangeServer}
+                  playerEngine={useEmbedVlc ? 'libvlc' : 'hlsjs'}
+                  onPlayerEngineChange={handlePlayerEngineChange}
                 />
               } />
               <Route path="/admin" element={<Admin />} />

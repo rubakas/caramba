@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
+import { useApi } from '../context/ApiContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
 
 export default function NowPlaying() {
   const { playerState } = usePlayer()
+  const api = useApi()
   const [vlcStatus, setVlcStatus] = useState(null)
   const nowPlayingGlass = useGlassConfig('now-playing')
 
@@ -16,11 +18,12 @@ export default function NowPlaying() {
       setVlcStatus(null)
       return
     }
+    if (!api.getPlaybackStatus) return
 
     let active = true
     const poll = async () => {
       try {
-        const status = await window.api.getPlaybackStatus()
+        const status = await api.getPlaybackStatus()
         if (!active) return
         if (status?.playing && status.source === 'vlc') {
           setVlcStatus(status)
@@ -35,13 +38,14 @@ export default function NowPlaying() {
     poll()
     const timer = setInterval(poll, 3000)
     return () => { active = false; clearInterval(timer) }
-  }, [playerState.open])
+  }, [playerState.open, api])
 
   // Listen for vlc-playback-ended to clear immediately
   useEffect(() => {
-    const unsub = window.api.onVlcPlaybackEnded(() => setVlcStatus(null))
+    if (!api.onVlcPlaybackEnded) return
+    const unsub = api.onVlcPlaybackEnded(() => setVlcStatus(null))
     return unsub
-  }, [])
+  }, [api])
 
   // In-app player NowPlaying
   if (playerState.open) {

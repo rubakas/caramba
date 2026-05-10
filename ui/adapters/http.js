@@ -348,4 +348,8 @@ export const httpCapabilities = {
   hasNativePlayer: false, // overridden true on Android TV when CarambaPlayer Capacitor plugin is registered
   hasVlcLibrary: false,
   hasVlcEmbedPlayer: false,
+  // Desktop-only flags — declared here as `false` so every consumer can read
+  // `capabilities.hasUpdater` etc without an undefined check.
+  hasUpdater: false,
+  hasServerDiscovery: false,
 }

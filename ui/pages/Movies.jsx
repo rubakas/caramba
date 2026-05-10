@@ -17,7 +17,7 @@ const CameraIcon = () => (
 export default function Movies() {
   const navigate = useNavigate()
   const api = useApi()
-  const { canAdd, hasNowPlaying } = useCapabilities()
+  const { canAdd, canAdmin, hasNowPlaying } = useCapabilities()
   const [movies, setMovies] = useState([])
   const [loading, setLoading] = useState(true)
   const navActionGlass = useGlassConfig('nav-action')
@@ -68,6 +68,11 @@ export default function Movies() {
             <>
               <p>Add a movie by selecting an MKV file from your Mac.</p>
               <refractive.a className="btn-primary" onClick={() => navigate('/movies/new')} refraction={primaryBtnGlass}>Add Your First Movie</refractive.a>
+            </>
+          ) : canAdmin ? (
+            <>
+              <p>Add media folders on the server to populate your library.</p>
+              <refractive.a className="btn-primary" onClick={() => navigate('/admin')} refraction={primaryBtnGlass}>Open Admin</refractive.a>
             </>
           ) : (
             <p>No movies have been added yet.</p>

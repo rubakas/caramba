@@ -1,27 +1,29 @@
 /**
  * LAN discovery of Caramba API servers.
  *
- * - electronDiscover: mDNS via the Electron main-process preload
- *   (bonjour-service). Precise but only usable from Electron.
- * - subnetDiscover:   HTTP scan of `/api/health` on the default Rails
- *   ports across the local subnet(s). Works anywhere `fetch` does:
- *   browsers, Android WebView, the Electron renderer, Node.
+ * - mDNS via the adapter's `discoverServers` (Electron only). Precise but
+ *   only available when an adapter exposes the method.
+ * - subnetDiscover: HTTP scan of `/api/health` on the default Rails ports
+ *   across the local subnet(s). Works anywhere `fetch` does.
  *
- * On Electron we run both in parallel and merge — mDNS can miss a
- * server (multicast filtering, slow responder) that the subnet scan
- * finds, and vice versa.
+ * On Electron we run both in parallel and merge — mDNS can miss a server
+ * (multicast filtering, slow responder) that the subnet scan finds, and
+ * vice versa.
  */
 
 import { detectLocalSubnets, subnetScan } from './subnet-scan.js'
 
-/** Electron desktop — delegates to main process via preload. */
-export async function electronDiscover() {
-  if (!window.api?.discoverServers) return []
+/**
+ * Adapter-driven mDNS discovery. Pass the API adapter; if it exposes
+ * `discoverServers` (desktop only) we use it, otherwise return [].
+ */
+export async function adapterDiscover(api) {
+  if (!api?.discoverServers) return []
   try {
-    const servers = await window.api.discoverServers()
+    const servers = await api.discoverServers()
     return Array.isArray(servers) ? servers : []
   } catch (err) {
-    console.warn('[discovery] electronDiscover failed:', err)
+    console.warn('[discovery] adapterDiscover failed:', err)
     return []
   }
 }
@@ -33,16 +35,21 @@ export async function subnetDiscover({ currentUrl = null, timeoutMs, concurrency
 }
 
 /**
- * Returned function accepts an options bag so callers can pass
- * `currentUrl`. Electron runs both paths and merges; everything else
- * runs subnet scan only.
+ * Builds a discover function. When `api.discoverServers` is available,
+ * runs both mDNS and subnet scan and merges; otherwise subnet scan only.
+ *
+ * Without `api`, falls back to `window.api` directly. This is the
+ * documented bootstrap escape hatch for the desktop ServerSetup screen,
+ * which runs BEFORE the API adapter exists. In-app callers (after the
+ * adapter is wired) should always pass `api`.
  */
-export function defaultDiscover() {
+export function defaultDiscover(api = null) {
   if (typeof window === 'undefined') return async () => []
-  if (window.api?.discoverServers) {
+  const probe = api || (typeof window !== 'undefined' ? window.api : null)
+  if (probe?.discoverServers) {
     return async (opts) => {
       const [mdns, subnet] = await Promise.all([
-        electronDiscover(),
+        adapterDiscover(probe),
         subnetDiscover(opts),
       ])
       return dedupeBestPerServer([...mdns, ...subnet])

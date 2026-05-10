@@ -22,7 +22,7 @@ const FilmIcon = () => (
 export default function Shows() {
   const navigate = useNavigate()
   const api = useApi()
-  const { canAdd, hasNowPlaying } = useCapabilities()
+  const { canAdd, canAdmin, hasNowPlaying } = useCapabilities()
   const [showsList, setShowsList] = useState([])
   const [loading, setLoading] = useState(true)
   const navActionGlass = useGlassConfig('nav-action')
@@ -73,6 +73,11 @@ export default function Shows() {
             <>
               <p>Add a show by pointing to a media folder on your Mac.</p>
               <refractive.a className="btn-primary" onClick={() => navigate('/shows/new')} refraction={primaryBtnGlass}>Add Your First Show</refractive.a>
+            </>
+          ) : canAdmin ? (
+            <>
+              <p>Add media folders on the server to populate your library.</p>
+              <refractive.a className="btn-primary" onClick={() => navigate('/admin')} refraction={primaryBtnGlass}>Open Admin</refractive.a>
             </>
           ) : (
             <p>No shows have been added yet.</p>
