@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+#
+# Maintainer one-shot script: builds a self-contained libmpv distribution
+# for macOS, ready to upload as a Caramba GitHub release artifact.
+#
+# Caramba's setup-mpv (run by every developer) downloads the resulting
+# tarball — mirroring how setup-vlc downloads VideoLAN's signed VLC DMG.
+# End users never run this script; only the release maintainer does.
+#
+# Usage:
+#   desktop/bin/build-libmpv                           # build host arch
+#   desktop/bin/build-libmpv --version 0.40.0          # pin mpv version
+#   desktop/bin/build-libmpv --force                   # rebuild from clean
+#
+# Output:
+#   desktop/dist/mpv-${MPV_VERSION}-${arch}.tar.gz
+#
+# After building, publish:
+#   gh release create libmpv-v${MPV_VERSION} \
+#     --title "libmpv ${MPV_VERSION}" \
+#     desktop/dist/mpv-${MPV_VERSION}-arm64.tar.gz
+#
+# Requires (build-time only, on the maintainer's Mac):
+#   brew install meson ninja pkgconf nasm dylibbundler \
+#                ffmpeg libplacebo libass luajit zimg \
+#                little-cms2 libunibreak fontconfig
+#
+# At runtime (end-user Mac), no Homebrew is required — every dependency
+# is bundled into the tarball with @loader_path linkage so the libmpv
+# distribution is self-contained.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+MPV_VERSION="${MPV_VERSION:-0.41.0}"
+ARCH="${ARCH:-$(uname -m | sed 's/^arm64$/arm64/;s/^x86_64$/x64/')}"
+FORCE=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version) MPV_VERSION="$2"; shift 2 ;;
+    --force)   FORCE=true; shift ;;
+    *)         echo "Unknown flag: $1"; exit 1 ;;
+  esac
+done
+
+WORK="$PWD/build/libmpv"
+SRC="$WORK/mpv-${MPV_VERSION}"
+OUT="$WORK/out-${ARCH}"
+DIST="$PWD/dist"
+
+# ── 1. Verify Homebrew build deps ────────────────────────────────────
+need_brew() {
+  command -v brew >/dev/null || {
+    echo "error: Homebrew required for build-time deps."
+    echo "Install from https://brew.sh, then rerun this script."
+    exit 1
+  }
+  local pkgs=(meson ninja pkgconf nasm dylibbundler
+              ffmpeg libplacebo libass luajit zimg
+              little-cms2 libunibreak fontconfig)
+  local missing=()
+  for p in "${pkgs[@]}"; do
+    brew list --formula "$p" >/dev/null 2>&1 || missing+=("$p")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "Missing Homebrew packages: ${missing[*]}"
+    echo "Install: brew install ${missing[*]}"
+    exit 1
+  fi
+}
+need_brew
+
+# ── 2. Fetch mpv source at the pinned tag ────────────────────────────
+mkdir -p "$WORK"
+if [ "$FORCE" = true ]; then rm -rf "$SRC" "$OUT"; fi
+
+if [ ! -f "$SRC/meson.build" ]; then
+  rm -rf "$SRC"
+  echo "Cloning mpv-player/mpv at v${MPV_VERSION}..."
+  git clone --depth 1 --branch "v${MPV_VERSION}" \
+    https://github.com/mpv-player/mpv.git "$SRC"
+fi
+
+# ── 3. Configure + build libmpv as shared lib ────────────────────────
+# -Dcplayer=false   → don't build the mpv binary (libmpv only)
+# -Dlibmpv=true     → produce the libmpv shared library
+# -Dlua=enabled     → on-screen overlays / subtitle scripts (mpv-default)
+# -Djavascript=disabled → no JS scripting (drops mujs dep)
+# -Dmanpage-build/-Dhtml-build=disabled → skip docs
+echo "Configuring libmpv ${MPV_VERSION}..."
+(
+  cd "$SRC"
+  rm -rf build
+  PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+    meson setup build \
+      --buildtype=release \
+      --default-library=shared \
+      -Dcplayer=false \
+      -Dlibmpv=true \
+      -Dlua=enabled \
+      -Djavascript=disabled \
+      -Dmanpage-build=disabled \
+      -Dhtml-build=disabled \
+      -Dtests=false
+  meson compile -C build
+)
+
+# ── 4. Stage libmpv + transitive deps + headers ──────────────────────
+rm -rf "$OUT"
+mkdir -p "$OUT/lib" "$OUT/include/mpv"
+
+cp -L "$SRC/build/libmpv.2.dylib" "$OUT/lib/"
+ln -sf libmpv.2.dylib "$OUT/lib/libmpv.dylib"
+cp "$SRC/include/mpv/"*.h "$OUT/include/mpv/"
+
+# ── 5. Bundle transitive deps into the output dir ────────────────────
+# dylibbundler walks the dylib's load commands, copies every
+# Homebrew/non-system dep into $OUT/lib, and rewrites all references to
+# @loader_path/<libname> so the bundle is location-independent.
+echo "Bundling transitive deps with dylibbundler..."
+dylibbundler -of -b -x "$OUT/lib/libmpv.2.dylib" \
+  -d "$OUT/lib" \
+  -p "@loader_path/" \
+  -s "$(brew --prefix)/lib" \
+  -s /opt/homebrew/lib \
+  -s /usr/local/lib
+
+# Set libmpv's install_name to @rpath/ so consumers (the mpv_embed.node
+# native module) resolve it via their own LC_RPATH entries. binding.gyp
+# bakes in the rpath chain pointing to vendor/mpv-${arch}/lib. The
+# alternative (@loader_path/) wouldn't work because the loader path is
+# the consumer's directory, which doesn't sit next to libmpv.dylib.
+install_name_tool -id "@rpath/libmpv.2.dylib" \
+  "$OUT/lib/libmpv.2.dylib"
+
+# dylibbundler appends @loader_path/ to LC_RPATH for every transitive
+# dep it processes — which leaves duplicate entries on the same dylib.
+# Apple's linker rejects duplicates when our native module links against
+# libmpv ("ld: duplicate LC_RPATH"). Dedupe down to one entry per dylib.
+echo "Deduplicating @loader_path rpath entries..."
+for dylib in "$OUT/lib/"*.dylib; do
+  [ -f "$dylib" ] || continue
+  # Count current @loader_path/ rpaths
+  count=$(otool -l "$dylib" 2>/dev/null | awk '/LC_RPATH/{r=1} r && /path @loader_path\/ /{print; r=0}' | wc -l | tr -d ' ')
+  while [ "$count" -gt 1 ]; do
+    install_name_tool -delete_rpath "@loader_path/" "$dylib" 2>/dev/null || break
+    count=$((count - 1))
+  done
+done
+
+# install_name_tool and dylibbundler both invalidate the dylibs' code
+# signatures (every load-command edit changes the binary). Gatekeeper
+# SIGKILLs any process loading a tampered-but-unsigned dylib, so we
+# re-sign each one ad-hoc. End users get the same ad-hoc identity; the
+# DMG-wide signing/notarization (electron-builder) wraps everything
+# again at packaging time.
+echo "Re-signing dylibs (ad-hoc) after install_name_tool edits..."
+for dylib in "$OUT/lib/"*.dylib; do
+  [ -f "$dylib" ] || continue
+  codesign --force --sign - "$dylib" >/dev/null 2>&1
+done
+
+# ── 6. Verify nothing references absolute /opt/homebrew or /usr/local ─
+echo ""
+echo "--- libmpv.2.dylib linkage ---"
+otool -L "$OUT/lib/libmpv.2.dylib"
+
+if otool -L "$OUT/lib/libmpv.2.dylib" | \
+     grep -E '^\s+(/opt/homebrew|/usr/local|/Users/)' >/dev/null; then
+  echo ""
+  echo "ERROR: libmpv.2.dylib still references absolute paths."
+  echo "       dylibbundler must rewrite every dep to @loader_path."
+  exit 1
+fi
+
+# Spot-check a copied dep to confirm it was relocated too.
+SAMPLE_DEP=$(ls "$OUT/lib/" | grep -v 'libmpv\.' | head -1)
+if [ -n "$SAMPLE_DEP" ]; then
+  echo ""
+  echo "--- $SAMPLE_DEP linkage (sample copied dep) ---"
+  otool -L "$OUT/lib/$SAMPLE_DEP" | head -10
+fi
+
+# ── 7. Tarball ───────────────────────────────────────────────────────
+mkdir -p "$DIST"
+TARBALL="$DIST/mpv-${MPV_VERSION}-${ARCH}.tar.gz"
+rm -f "$TARBALL"
+
+# Tar the contents of $OUT as the inner directory "mpv-${ARCH}" — same
+# shape the setup-mpv extractor expects.
+STAGE="$WORK/stage-${ARCH}"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -R "$OUT" "$STAGE/mpv-${ARCH}"
+tar -czf "$TARBALL" -C "$STAGE" "mpv-${ARCH}"
+
+SHA=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
+SIZE=$(du -h "$TARBALL" | awk '{print $1}')
+
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "Built libmpv ${MPV_VERSION} for ${ARCH}"
+echo "  file:   $TARBALL"
+echo "  size:   $SIZE"
+echo "  sha256: $SHA"
+echo ""
+echo "Update desktop/bin/setup-mpv with the SHA above, then publish:"
+echo ""
+echo "  gh release create libmpv-v${MPV_VERSION} \\"
+echo "    --title 'libmpv ${MPV_VERSION}' \\"
+echo "    --notes 'libmpv ${MPV_VERSION} bundled for macOS, self-contained.' \\"
+echo "    \"$TARBALL\""
+echo "════════════════════════════════════════════════════════════════"

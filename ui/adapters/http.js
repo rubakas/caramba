@@ -171,7 +171,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
     openInVlc: noopAsync,
     openInDefault: noopAsync,
 
-    // libVLC library control (card #60) — no-ops in pure HTTP mode
+    // external VLC library control — no-ops in pure HTTP mode
     vlcStatus: noopAsync,
     vlcPause: noopAsync,
     vlcResume: noopAsync,
@@ -197,7 +197,7 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
     selectFolder: noopAsync,
     selectFiles: noopAsync,
 
-    // Events — no-op subscribers (libVLC events only fire in local mode).
+    // Events — no-op subscribers (embed engine events only fire in local mode).
     onVlcPlaybackEnded: noopUnsub,
     onMediaDownloadProgress: noopUnsub,
     onPlaybackState: noopUnsub,
@@ -276,7 +276,7 @@ export const httpCapabilities = {
   canAdmin: true,
   hasNativePlayer: false, // overridden true on Android TV when CarambaPlayer Capacitor plugin is registered
   hasVlcLibrary: false,
-  hasVlcEmbedPlayer: false,
+  hasMpvEmbedPlayer: false,
   // Desktop-only flags — declared here as `false` so every consumer can read
   // `capabilities.hasUpdater` etc without an undefined check.
   hasUpdater: false,

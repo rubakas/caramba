@@ -115,61 +115,161 @@ export function buildBrowserProfile() {
 }
 
 /**
- * Desktop profile. Picks browser/libvlc/libmpv variant based on the active
- * playback engine. The libvlc/libmpv variants advertise broader codec
- * coverage so the server skips transcode for files the engine can decode.
+ * Desktop profile. Picks browser/libmpv variant based on the active
+ * playback engine. The libmpv variant advertises broad codec coverage
+ * (HEVC HDR, lossless audio, PGS subs) so the server skips transcode
+ * for files the engine can decode.
  *
  * @param {Object} [opts]
- * @param {'browser'|'libvlc'|'libmpv'} [opts.engine='browser']
+ * @param {'browser'|'libmpv'} [opts.engine='browser']
+ * @param {Object} [opts.capabilities] Decoders+demuxers reported by
+ *   libmpv via window.api.getMpvCapabilities(). When omitted, the libmpv
+ *   variant falls back to a conservative hardcoded profile so playback
+ *   keeps working before the IPC reply arrives.
  */
-export function buildDesktopProfile({ engine = 'browser' } = {}) {
-  if (engine === 'libvlc') return buildLibVlcProfile()
-  if (engine === 'libmpv') return buildLibMpvProfile()
+export function buildDesktopProfile({ engine = 'browser', capabilities } = {}) {
+  if (engine === 'libmpv') return buildLibMpvProfile(capabilities)
   return buildBrowserProfile()
 }
 
-function buildLibVlcProfile() {
-  // Conservative profile reflecting libVLC's coverage in Caramba. libVLC
-  // decodes a wide range of codecs; we list the common ones and lean on
-  // the server's transcode for everything else.
-  return {
-    Name: 'caramba-desktop-libvlc',
+// ffprobe → Jellyfin rename tables. Copied from JMP's device_profile.cpp.
+// Server (server/app/services/device_profile.rb) applies the same maps,
+// so the client emitting either side is sufficient.
+const CONTAINER_RENAMES = {
+  matroska:  'mkv',
+  mpegts:    'ts',
+  mpegvideo: 'mpeg',
+}
+
+const SUBTITLE_RENAMES = {
+  subrip:            'srt',
+  ass:               'ssa',
+  hdmv_pgs_subtitle: 'PGSSUB',
+  dvd_subtitle:      'DVDSUB',
+  dvb_subtitle:      'DVBSUB',
+  dvb_teletext:      'DVBTXT',
+}
+
+// Classification for libmpv's decoder-list (a flat list of ffmpeg codec
+// names). mpv doesn't tag entries with media kind, so we partition by a
+// known-set heuristic. Anything not in these sets is dropped.
+const VIDEO_CODECS = new Set([
+  'h264', 'hevc', 'h265', 'av1', 'vp9', 'vp8',
+  'mpeg4', 'mpeg2video', 'mpeg1video', 'mjpeg', 'h263',
+  'theora', 'wmv1', 'wmv2', 'wmv3', 'vc1', 'cavs',
+])
+const AUDIO_CODECS = new Set([
+  'aac', 'ac3', 'eac3', 'mp3', 'mp2', 'flac', 'opus',
+  'vorbis', 'truehd', 'dts', 'pcm_s16le', 'pcm_s24le',
+  'pcm_s16be', 'pcm_s24be', 'pcm_f32le', 'wmav1', 'wmav2',
+  'alac', 'wmapro', 'cook', 'mlp',
+])
+const SUBTITLE_CODECS = new Set([
+  'srt', 'subrip', 'ass', 'ssa', 'webvtt', 'mov_text',
+  'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle',
+  'pgssub', 'xsub', 'microdvd', 'jacosub', 'sami',
+])
+
+function expandWithRenames(names, renames) {
+  const seen = new Set()
+  const out = []
+  for (const name of names) {
+    if (!name) continue
+    if (!seen.has(name)) { seen.add(name); out.push(name) }
+    const renamed = renames[name]
+    if (renamed && !seen.has(renamed)) { seen.add(renamed); out.push(renamed) }
+  }
+  return out
+}
+
+function buildLibMpvProfile(capabilities) {
+  // Conservative fallback when capabilities haven't loaded yet — kicks
+  // in for the first session opened before window.api.getMpvCapabilities()
+  // resolves. Mirrors the codec floor of a build-libmpv produced bundle.
+  if (!capabilities) {
+    return {
+      Name: 'caramba-desktop-libmpv-fallback',
+      MaxStaticBitrate: 1_000_000_000,
+      DirectPlayProfiles: [
+        { Container: 'mkv,mp4,m4v,mov,webm,avi,ts,m2ts,matroska',
+          Type: 'Video',
+          VideoCodec: 'h264,hevc,h265,av1,vp9,vp8,mpeg4,mpeg2video',
+          AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,truehd,dts,vorbis,pcm_s16le,pcm_s24le' },
+        { Container: 'mp4,m4v,mp3,flac,ogg,m4a',
+          Type: 'Audio',
+          AudioCodec: 'aac,ac3,eac3,flac,mp3,opus' },
+      ],
+      TranscodingProfiles: [
+        { Container: TRANSCODE_TARGET_CONTAINER, Type: 'Video', Protocol: 'hls',
+          VideoCodec: TRANSCODE_TARGET_VIDEO, AudioCodec: 'aac,ac3,eac3',
+          MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
+      ],
+      SubtitleProfiles: [
+        { Format: 'srt', Method: 'External' },
+        { Format: 'subrip', Method: 'External' },
+        { Format: 'ssa', Method: 'External' },
+        { Format: 'ass', Method: 'External' },
+        { Format: 'vtt', Method: 'External' },
+        { Format: 'PGSSUB', Method: 'Embed' },
+        { Format: 'hdmv_pgs_subtitle', Method: 'Embed' },
+        { Format: 'DVDSUB', Method: 'Embed' },
+        { Format: 'dvd_subtitle', Method: 'Embed' },
+      ],
+      CodecProfiles: [],
+      ContainerProfiles: [],
+    }
+  }
+
+  // Classify mpv's flat decoder list into video/audio/subtitle by name.
+  const decoders = capabilities.decoders || []
+  const videoDecoders = decoders.filter(c => VIDEO_CODECS.has(c))
+  const audioDecoders = decoders.filter(c => AUDIO_CODECS.has(c))
+  const subDecoders = decoders.filter(c => SUBTITLE_CODECS.has(c))
+
+  // Demuxer list: ffmpeg's lavf names with the raw + renamed form so
+  // the server matches either.
+  const containers = expandWithRenames(capabilities.demuxers || [], CONTAINER_RENAMES)
+  const subFormats = expandWithRenames(subDecoders, SUBTITLE_RENAMES)
+
+  const profile = {
+    Name: 'caramba-desktop-libmpv',
     MaxStaticBitrate: 1_000_000_000,
-    DirectPlayProfiles: [
-      { Container: 'mkv,mp4,m4v,mov,webm,avi,ts,m2ts',
-        Type: 'Video',
-        VideoCodec: 'h264,hevc,h265,vp9,av1,mpeg4,mpeg2video',
-        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,truehd,dts,vorbis,pcm_s16le,pcm_s24le' },
-      { Container: 'mp4,m4v,mp3,flac,ogg,m4a',
-        Type: 'Audio',
-        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus' },
-    ],
+    DirectPlayProfiles: [],
     TranscodingProfiles: [
       { Container: TRANSCODE_TARGET_CONTAINER, Type: 'Video', Protocol: 'hls',
         VideoCodec: TRANSCODE_TARGET_VIDEO, AudioCodec: 'aac,ac3,eac3',
         MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
     ],
-    SubtitleProfiles: [
-      { Format: 'srt', Method: 'External' },
-      { Format: 'subrip', Method: 'External' },
-      { Format: 'ssa', Method: 'External' },
-      { Format: 'ass', Method: 'External' },
-      { Format: 'vtt', Method: 'External' },
-      { Format: 'PGSSUB', Method: 'Embed' },
-      { Format: 'hdmv_pgs_subtitle', Method: 'Embed' },
-      { Format: 'DVDSUB', Method: 'Embed' },
-      { Format: 'dvd_subtitle', Method: 'Embed' },
-    ],
+    SubtitleProfiles: [],
     CodecProfiles: [],
     ContainerProfiles: [],
   }
-}
 
-function buildLibMpvProfile() {
-  // Placeholder until Deliverable B (libVLC → libmpv swap) lands. Will be
-  // generated from mpv_get_property("decoder-list" / "demuxer-lavf-list").
-  // Today returns the libVLC profile so the engine stays operational.
-  return buildLibVlcProfile()
+  if (videoDecoders.length > 0) {
+    profile.DirectPlayProfiles.push({
+      Container: containers.join(','),
+      Type: 'Video',
+      VideoCodec: videoDecoders.join(','),
+      AudioCodec: audioDecoders.join(','),
+    })
+  }
+  if (audioDecoders.length > 0) {
+    profile.DirectPlayProfiles.push({
+      Container: containers.join(','),
+      Type: 'Audio',
+      AudioCodec: audioDecoders.join(','),
+    })
+  }
+
+  for (const fmt of subFormats) {
+    // mpv renders both embed and external subtitle streams natively
+    // (libass for ASS/SSA, native PGS bitmap overlay). Server can serve
+    // either form.
+    profile.SubtitleProfiles.push({ Format: fmt, Method: 'Embed' })
+    profile.SubtitleProfiles.push({ Format: fmt, Method: 'External' })
+  }
+
+  return profile
 }
 
 /**

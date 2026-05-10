@@ -1,14 +1,14 @@
 {
   "targets": [
     {
-      "target_name": "vlc_embed",
+      "target_name": "mpv_embed",
       "sources": [ "src/binding.mm" ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "<(module_root_dir)/../../../vendor/vlc-<!@(node -p \"process.arch === 'x64' ? 'x64' : 'arm64'\")/include"
+        "<(module_root_dir)/../../../vendor/mpv-<!@(node -p \"process.arch === 'x64' ? 'x64' : 'arm64'\")/include"
       ],
       "libraries": [
-        "<(module_root_dir)/../../../vendor/vlc-<!@(node -p \"process.arch === 'x64' ? 'x64' : 'arm64'\")/lib/libvlc.dylib"
+        "<(module_root_dir)/../../../vendor/mpv-<!@(node -p \"process.arch === 'x64' ? 'x64' : 'arm64'\")/lib/libmpv.dylib"
       ],
       "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
       "cflags!": [ "-fno-exceptions" ],
@@ -20,9 +20,9 @@
         "CLANG_CXX_LANGUAGE_STANDARD": "c++17",
         "OTHER_CFLAGS": [ "-fobjc-arc" ],
         "OTHER_LDFLAGS": [
-          "-Wl,-rpath,@loader_path/../../../../../vendor/vlc-arm64/lib",
-          "-Wl,-rpath,@loader_path/../../../../../vendor/vlc-x64/lib",
-          "-Wl,-rpath,@executable_path/../Resources/vlc/lib"
+          "-Wl,-rpath,@loader_path/../../../../../vendor/mpv-arm64/lib",
+          "-Wl,-rpath,@loader_path/../../../../../vendor/mpv-x64/lib",
+          "-Wl,-rpath,@executable_path/../Resources/mpv/lib"
         ]
       },
       "link_settings": {

@@ -123,15 +123,15 @@ export default function Settings({
                 <select
                   id="player-engine"
                   className="settings-select"
-                  value={playerEngine || 'hlsjs'}
+                  value={playerEngine || 'libmpv'}
                   onChange={(e) => onPlayerEngineChange(e.target.value)}
                 >
+                  <option value="libmpv">Embedded mpv</option>
                   <option value="hlsjs">Browser (hls.js)</option>
-                  <option value="libvlc">Embedded VLC</option>
                 </select>
               </div>
               <p className="settings-hint" style={{ marginTop: 6 }}>
-                Embedded VLC paints into the desktop window using libVLC. Use the browser engine for the simplest setup.
+                Embedded mpv paints into the desktop window using libmpv directly. Handles HEVC HDR, lossless audio, and bitmap subtitles without server-side transcoding. The browser engine is a fallback if the embed module has issues.
               </p>
             </div>
           </div>

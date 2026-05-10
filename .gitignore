@@ -8,12 +8,17 @@ dist
 # Storage (user data)
 desktop/storage
 
-# Bundled binaries (downloaded by bin/setup-ffmpeg, bin/setup-vlc)
+# Bundled binaries (downloaded by bin/setup-ffmpeg, bin/setup-mpv)
 desktop/vendor/ffmpeg*
 desktop/vendor/vlc*
+desktop/vendor/mpv*
+
+# Maintainer-only build output (desktop/bin/build-libmpv)
+desktop/dist
 
 # Native module build output
 desktop/electron/native/*/build
+desktop/build
 
 # OS
 .DS_Store

@@ -2,12 +2,13 @@ const Sentry = require('./sentry')
 const { app, BrowserWindow, shell, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const vlcEmbed = require('./services/vlc-embed-player')
+const mpvEmbed = require('./services/mpv-embed-player')
 
 // IPC modules — server-only desktop. No SQLite, no library scanning, no
 // metadata fetching, no transcoder; the Rails server owns all of that.
 const settingsIpc = require('./ipc/settings')
 const dialogsIpc = require('./ipc/dialogs')
+const mpvEmbedIpc = require('./ipc/mpv-embed')
 const vlcIpc = require('./ipc/vlc')
 const updaterIpc = require('./ipc/updater')
 const downloadsIpc = require('./ipc/downloads')
@@ -40,10 +41,11 @@ function createWindow() {
 
   mainWindow = new BrowserWindow(windowOpts)
 
-  // Register IPC handlers. Some need the window: dialogs (to anchor the
-  // sheet) and vlc (to grab the NSView handle for libVLC).
+  // Register IPC handlers. mpv-embed needs the window for getNativeWindowHandle();
+  // dialogs needs it to anchor the file-picker sheet.
   settingsIpc.register()
   dialogsIpc.register(mainWindow)
+  mpvEmbedIpc.register(mainWindow)
   vlcIpc.register(mainWindow)
   updaterIpc.register(mainWindow)
   downloadsIpc.register()
@@ -118,19 +120,19 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  vlcEmbed.stop().catch(() => {})
+  mpvEmbed.stop().catch(() => {})
   app.quit()
 })
 
-// Ensure libvlc is shut down on abrupt exit too.
-process.on('exit', () => { try { vlcEmbed.stop() } catch {} })
+// Ensure libmpv is shut down on abrupt exit too.
+process.on('exit', () => { try { mpvEmbed.stop() } catch {} })
 
 let isQuitting = false
 app.on('before-quit', (e) => {
   if (isQuitting) return
   isQuitting = true
   e.preventDefault()
-  vlcEmbed.stop().catch(() => {}).finally(() => app.quit())
+  mpvEmbed.stop().catch(() => {}).finally(() => app.quit())
 })
 
 module.exports = {}

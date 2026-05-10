@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#
+# Download a self-contained libmpv bundle from the Caramba GitHub release
+# and vendor it into desktop/vendor/mpv-${arch}/. Mirrors setup-vlc.
+#
+# The bundle is built once by `desktop/bin/build-libmpv` and uploaded to
+#   https://github.com/rubakas/caramba/releases/tag/libmpv-vX.Y.Z
+# End-user developers run only this script — no Homebrew or build tools
+# required, just a working network connection.
+#
+# After extracting the tarball, this script also rebuilds the native
+# embed module (electron/native/vlc-embed) against Electron's headers so
+# the JS layer can require it.
+#
+# Usage: bin/setup-mpv           # skip if libmpv already vendored
+#        bin/setup-mpv --force   # re-download and rebuild
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# ── Pinned libmpv release ─────────────────────────────────────────────
+# Bump MPV_VERSION when upgrading; produce a new tarball via build-libmpv,
+# upload it to a libmpv-v${MPV_VERSION} GitHub release, then update the
+# SHA256 below from the tarball's `shasum -a 256` output.
+MPV_VERSION="0.41.0"
+RELEASE_TAG="libmpv-v${MPV_VERSION}"
+BASE_URL="https://github.com/rubakas/caramba/releases/download/${RELEASE_TAG}"
+
+# Fill these in after running build-libmpv on each architecture and
+# uploading the artifacts to the release.
+ARM64_SHA256="320872aa3478e1df0d46f5007d822cefea361272f8417882de82d9e0da8c6289"
+X64_SHA256=""
+
+FORCE=false
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=true ;;
+    *) echo "Unknown flag: $arg (use --force)"; exit 1 ;;
+  esac
+done
+
+setup_arch() {
+  local arch="$1"   # arm64 | x64
+  local expected_sha="$2"
+  local dir="vendor/mpv-${arch}"
+  local marker="$dir/lib/libmpv.dylib"
+
+  if [ "$FORCE" = false ] && [ -e "$marker" ]; then
+    echo "libmpv (${arch}) already present at $dir"
+    return 0
+  fi
+
+  rm -rf "$dir"
+  mkdir -p "vendor"
+
+  local tar="/tmp/mpv-${MPV_VERSION}-${arch}.tar.gz"
+  local url="${BASE_URL}/mpv-${MPV_VERSION}-${arch}.tar.gz"
+  echo "Downloading libmpv ${MPV_VERSION} (${arch})..."
+  if ! curl -fL "$url" -o "$tar"; then
+    echo "Error: download failed from $url"
+    echo ""
+    echo "If this is a fresh setup and the release isn't published yet:"
+    echo "  1. brew install meson ninja pkgconf nasm dylibbundler ffmpeg \\"
+    echo "       libplacebo libass luajit zimg little-cms2 libunibreak fontconfig"
+    echo "  2. desktop/bin/build-libmpv"
+    echo "  3. gh release create ${RELEASE_TAG} desktop/dist/mpv-${MPV_VERSION}-${arch}.tar.gz"
+    echo "  4. Update desktop/bin/setup-mpv with the SHA256 from build-libmpv output"
+    echo "  5. Re-run desktop/bin/setup-mpv"
+    exit 1
+  fi
+  if [ ! -s "$tar" ]; then echo "Error: empty download for $arch"; exit 1; fi
+
+  # SHA verification — required when expected_sha is non-empty. Skip
+  # gracefully on first-time bootstrap (release not yet pinned).
+  if [ -n "$expected_sha" ]; then
+    local got
+    got=$(shasum -a 256 "$tar" | awk '{print $1}')
+    if [ "$got" != "$expected_sha" ]; then
+      echo "Error: SHA256 mismatch for $arch"
+      echo "  expected: $expected_sha"
+      echo "  got:      $got"
+      exit 1
+    fi
+  else
+    echo "Warning: no SHA256 pinned for $arch — skipping verification."
+  fi
+
+  tar -xzf "$tar" -C vendor
+  rm -f "$tar"
+
+  if [ ! -e "$marker" ]; then
+    echo "Error: libmpv.dylib not extracted to $dir"
+    exit 1
+  fi
+
+  echo "Extracted libmpv ${MPV_VERSION} for ${arch}:"
+  shasum -a 256 "$dir/lib/libmpv.2.dylib" 2>/dev/null \
+    | tee "$dir/SHA256SUMS"
+}
+
+setup_arch arm64 "$ARM64_SHA256"
+# Intel builds lag on stolendata; build x64 on demand by running
+# build-libmpv on an Intel Mac (or a CI x86_64 runner).
+if [ -n "$X64_SHA256" ]; then
+  setup_arch x64 "$X64_SHA256"
+fi
+
+# ── Rebuild the native embed module against Electron's headers ────────
+# The module loads libmpv via @rpath; rpaths are baked into binding.gyp
+# pointing at vendor/mpv-${arch}/lib.
+echo ""
+echo "Building libmpv-embed native module..."
+NATIVE_DIR="electron/native/vlc-embed"
+ELECTRON_VERSION=$(node -p "require('electron/package.json').version")
+HOST_ARCH=$(node -p "process.arch === 'x64' ? 'x64' : 'arm64'")
+echo "  electron=$ELECTRON_VERSION  arch=$HOST_ARCH"
+
+(
+  cd "$NATIVE_DIR"
+  if [ ! -d node_modules/node-addon-api ]; then
+    echo "  installing node-addon-api ..."
+    npm install --no-save --silent
+  fi
+  rm -rf build
+  HOME=$(mktemp -d) npx --yes node-gyp rebuild \
+    --target="$ELECTRON_VERSION" \
+    --dist-url=https://electronjs.org/headers \
+    --arch="$HOST_ARCH" \
+    --silent 2>&1 \
+    | grep -E "(CXX|SOLINK|gyp ERR|error:)" || true
+)
+if [ ! -e "$NATIVE_DIR/build/Release/vlc_embed.node" ]; then
+  echo "Error: native module build failed (check $NATIVE_DIR/build/)"
+  exit 1
+fi
+echo "  built: $NATIVE_DIR/build/Release/vlc_embed.node"
+
+echo ""
+echo "Done."
+du -sh vendor/mpv-arm64 2>/dev/null || true
+du -sh vendor/mpv-x64   2>/dev/null || true

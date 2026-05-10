@@ -39,7 +39,8 @@ export default function App() {
   const [phase, setPhase] = useState('loading')
   const [serverUrl, setServerUrl] = useState(null)
   const [setupReason, setSetupReason] = useState(null)
-  const [useEmbedVlc, setUseEmbedVlc] = useState(false)
+  const [useEmbedMpv, setUseEmbedMpv] = useState(true)
+  const [mpvCapabilities, setMpvCapabilities] = useState(null)
 
   // Initial bootstrap: load saved server URL + probe health.
   useEffect(() => {
@@ -50,8 +51,22 @@ export default function App() {
         const prefs = await window.api.getPreferences().catch(() => null)
         if (cancelled) return
         const url = cfg?.serverUrl || ''
-        const engine = prefs?.playerEngine || 'hlsjs'
-        setUseEmbedVlc(engine === 'libvlc')
+        // libmpv is the default desktop engine — broader codec coverage,
+        // no MSE codec quirks. Only fall back to hls.js when the user
+        // explicitly picks it in Settings.
+        const engine = prefs?.playerEngine || 'libmpv'
+        setUseEmbedMpv(engine === 'libmpv')
+
+        // Fetch the engine's decoder + demuxer lists so the device
+        // profile reflects this specific libmpv build, not the
+        // hardcoded fallback. Best-effort — the profile builder falls
+        // back gracefully if this fails (e.g. native module not built).
+        if (engine === 'libmpv') {
+          try {
+            const caps = await window.api.getMpvCapabilities()
+            if (!cancelled && caps && !caps.error) setMpvCapabilities(caps)
+          } catch {}
+        }
         if (!url) {
           setSetupReason('First launch — let’s find your Caramba server.')
           setPhase('setup')
@@ -97,16 +112,16 @@ export default function App() {
     try {
       await window.api.setPreferences({ playerEngine: engine })
     } catch {}
-    setUseEmbedVlc(engine === 'libvlc')
+    setUseEmbedMpv(engine === 'libmpv')
   }, [])
 
   const adapterAndCaps = useMemo(() => {
     if (phase !== 'ready' || !serverUrl) return null
     return {
-      adapter: createDesktopAdapter(serverUrl, { useEmbedVlc }),
-      capabilities: getDesktopCapabilities({ useEmbedVlc }),
+      adapter: createDesktopAdapter(serverUrl, { useEmbedMpv, mpvCapabilities }),
+      capabilities: getDesktopCapabilities({ useEmbedMpv }),
     }
-  }, [phase, serverUrl, useEmbedVlc])
+  }, [phase, serverUrl, useEmbedMpv, mpvCapabilities])
 
   if (phase === 'loading') {
     return (
@@ -138,7 +153,7 @@ export default function App() {
                 <Settings
                   serverUrl={serverUrl}
                   onChangeServer={handleChangeServer}
-                  playerEngine={useEmbedVlc ? 'libvlc' : 'hlsjs'}
+                  playerEngine={useEmbedMpv ? 'libmpv' : 'hlsjs'}
                   onPlayerEngineChange={handlePlayerEngineChange}
                 />
               } />

@@ -16,7 +16,7 @@ const FILENAME = 'preferences.json'
 const DEFAULTS = {
   serverUrl: null,
   theme: 'dark',
-  playerEngine: 'hlsjs',     // 'hlsjs' | 'libvlc'
+  playerEngine: 'hlsjs',     // 'hlsjs' | 'libmpv'
   downloadsFolder: null,     // null = userData/downloads
 }
 

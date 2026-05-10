@@ -58,7 +58,7 @@
 html { scroll-behavior: smooth; }
 
 body {
-  /* Transparent body so the desktop app's libVLC NSView (rendering behind
+  /* Transparent body so the desktop app's libmpv NSView (rendering behind
    * Chromium's WebContents) is visible when the player is open. Browse-UI
    * opaqueness is provided by #root's background below. */
   background: transparent;
@@ -3363,19 +3363,19 @@ body.tv-mode *:focus {
 }
 
 
-/* When the desktop libVLC engine is the active playback path, body gets
- * .vlc-playing — applied synchronously by PlayerContext.openPlayer so the
+/* When the desktop libmpv engine is the active playback path, body gets
+ * .engine-playing — applied synchronously by PlayerContext.openPlayer so the
  * transparency takes effect on the first paint, not a tick later via a
  * useEffect-injected stylesheet. */
-body.vlc-playing,
-body.vlc-playing html { background: transparent !important; overflow: hidden !important; }
-body.vlc-playing #root { background: transparent !important; visibility: hidden !important; }
-body.vlc-playing .video-player-overlay { background: transparent !important; }
+body.engine-playing,
+body.engine-playing html { background: transparent !important; overflow: hidden !important; }
+body.engine-playing #root { background: transparent !important; visibility: hidden !important; }
+body.engine-playing .video-player-overlay { background: transparent !important; }
 
 /* Loading curtain. CSS-pseudo so it exists on the same frame as
- * .vlc-playing — no React-render lag. .vlc-ready hides it once libvlc
+ * .engine-playing — no React-render lag. .engine-ready hides it once libvlc
  * has emitted its first state push past the requested startTime. */
-body.vlc-playing::before {
+body.engine-playing::before {
   content: '';
   position: fixed;
   inset: 0;
@@ -3383,7 +3383,7 @@ body.vlc-playing::before {
   background: #000;
   pointer-events: none;
 }
-body.vlc-playing::after {
+body.engine-playing::after {
   content: '';
   position: fixed;
   top: 50%;
@@ -3398,8 +3398,8 @@ body.vlc-playing::after {
   animation: vlc-curtain-spin 0.8s linear infinite;
   pointer-events: none;
 }
-body.vlc-playing.vlc-ready::before,
-body.vlc-playing.vlc-ready::after {
+body.engine-playing.engine-ready::before,
+body.engine-playing.engine-ready::after {
   display: none;
 }
 @keyframes vlc-curtain-spin { to { transform: rotate(360deg); } }

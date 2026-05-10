@@ -1,11 +1,11 @@
-// Desktop player UI when libVLC is the engine. Renders the same controls
+// Desktop player UI when libmpv is the engine. Renders the same controls
 // the web/HLS WebVideoPlayer renders — refractive glass close button, skip
 // circles, play/pause, utility pill (volume + settings + fullscreen), and
 // the track popover for audio/subtitle selection. Only difference: there's
-// no <video> element. libVLC draws into the BrowserWindow's NSView behind
+// no <video> element. libmpv draws into the BrowserWindow's NSView behind
 // Chromium; this component is the React overlay on top.
 //
-// Track stream identifier: libVLC tracks come back with `id`, HLS uses
+// Track stream identifier: embed engine tracks come back with `id`, HLS uses
 // `index`. We use `s.id ?? s.index` so the same JSX works either way.
 
 import { useEffect, useRef, useState, useCallback } from 'react'
@@ -154,7 +154,7 @@ function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
   )
 }
 
-export default function VlcOverlay() {
+export default function MpvOverlay() {
   const { playerState, closePlayer, seekPlayback, switchAudio, switchSubtitle } = usePlayer()
   const api = useApi()
 
@@ -199,7 +199,7 @@ export default function VlcOverlay() {
   // While the player is open, make the rest of the React app see-through
   // so libvlc's NSView (rendering behind Chromium) is visible. The overlay
   // itself is portaled into <body> so it stays composited.
-  // Transparency CSS lives in app.css (body.vlc-playing) and is toggled
+  // Transparency CSS lives in app.css (body.engine-playing) and is toggled
   // synchronously by PlayerContext.openPlayer / closePlayer, so the
   // see-through transition happens on the same frame as the click.
 
@@ -249,7 +249,7 @@ export default function VlcOverlay() {
   const handleVolumeChange = useCallback((e) => {
     const v = Number(e.target.value)
     setVolume(v)
-    // libVLC volume isn't wired to the native module yet; stub here so the
+    // embed engine volume isn't wired to the native module yet; stub here so the
     // slider's UI still tracks. Setting api volume can be added later via
     // a vlcSetVolume binding.
   }, [])
@@ -311,7 +311,7 @@ export default function VlcOverlay() {
         audioStream={activeAudio}
       />
 
-      {/* Loading curtain is provided by the body.vlc-playing CSS pseudo-
+      {/* Loading curtain is provided by the body.engine-playing CSS pseudo-
        * element so it exists from the same frame the click was handled —
        * no React-render lag visible as a transparent flash. */}
 

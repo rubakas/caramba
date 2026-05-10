@@ -12,18 +12,18 @@ const PlayerContext = createContext(null)
 //      or audio-switch restarts the server transcoder; the renderer reloads
 //      the <video> source.
 //
-//   2. Embedded libVLC (desktop/local + hybrid-local), driven by the native
-//      vlc-embed module that renders into the BrowserWindow's NSView.
+//   2. Embedded libmpv (desktop/local + hybrid-local), driven by the native
+//      mpv-embed module that renders into the BrowserWindow's NSView.
 //      State comes from periodic 'playback:state' IPC pushes; seek/track
 //      switches are property sets — no URL change.
 //
 // Both modes write into the same PlayerContext shape so consumers
-// (NowPlayingBar, VideoPlayer, VlcOverlay) read state uniformly.
+// (NowPlayingBar, VideoPlayer, MpvOverlay) read state uniformly.
 export function PlayerProvider({ children }) {
   const { showToast } = useToast()
   const api = useApi()
   const capabilities = useCapabilities()
-  const usingVlc = !!capabilities?.hasVlcEmbedPlayer
+  const usingEmbedEngine = !!capabilities?.hasMpvEmbedPlayer
   const [launching, setLaunching] = useState(false)
   const [playerState, setPlayerState] = useState({
     open: false,
@@ -51,7 +51,7 @@ export function PlayerProvider({ children }) {
     bitrate: null,
     subtitleSize: 'medium',
     subtitleStyle: 'classic',
-    // Engine-pushed state (libVLC mode only).
+    // Engine-pushed state (embed engine mode only).
     currentTime: 0,
     paused: false,
     eof: false,
@@ -63,12 +63,12 @@ export function PlayerProvider({ children }) {
   const openPlayer = useCallback(async ({ type, episodeId, showId, movieId, title, subtitle, filePath, startTime }) => {
     setLaunching(true)
 
-    // libVLC mode: apply the body-level transparency synchronously so the
+    // embed engine mode: apply the body-level transparency synchronously so the
     // window goes see-through on the same frame the user clicked Play.
-    // Doing this in VlcOverlay's useEffect lagged a frame behind the React
+    // Doing this in MpvOverlay's useEffect lagged a frame behind the React
     // re-render, leaving a flash of the opaque browse UI.
-    if (usingVlc && typeof document !== 'undefined') {
-      document.body.classList.add('vlc-playing')
+    if (usingEmbedEngine && typeof document !== 'undefined') {
+      document.body.classList.add('engine-playing')
     }
 
     // Optimistic open: set playerState.open = true immediately so the
@@ -116,18 +116,18 @@ export function PlayerProvider({ children }) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
         if (typeof document !== 'undefined') {
-          document.body.classList.remove('vlc-playing')
-          document.body.classList.remove('vlc-ready')
+          document.body.classList.remove('engine-playing')
+          document.body.classList.remove('engine-ready')
         }
         setPlayerState(prev => ({ ...prev, open: false }))
         setLaunching(false)
         return
       }
 
-      // Hybrid mode advertises hasVlcEmbedPlayer (inherits from local), but
+      // Hybrid mode advertises hasMpvEmbedPlayer (inherits from local), but
       // when the file isn't reachable locally the server streams HLS instead.
       // libvlc never runs, so engineReady never flips, so vlc-ready never
-      // gets added and body.vlc-playing's curtain hides #root forever — the
+      // gets added and body.engine-playing's curtain hides #root forever — the
       // HLS player below stays invisible while hls.js storms the server.
       //
       // Mount WebVideoPlayer (its black overlay covers #root) BEFORE pulling
@@ -172,15 +172,15 @@ export function PlayerProvider({ children }) {
       })
 
       if (isHls && typeof document !== 'undefined') {
-        document.body.classList.remove('vlc-playing')
-        document.body.classList.remove('vlc-ready')
+        document.body.classList.remove('engine-playing')
+        document.body.classList.remove('engine-ready')
       }
     } catch (err) {
       console.error('openPlayer error:', err)
       showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
       if (typeof document !== 'undefined') {
-        document.body.classList.remove('vlc-playing')
-        document.body.classList.remove('vlc-ready')
+        document.body.classList.remove('engine-playing')
+        document.body.classList.remove('engine-ready')
       }
       setPlayerState(prev => ({ ...prev, open: false }))
     } finally {
@@ -204,8 +204,8 @@ export function PlayerProvider({ children }) {
       }
     })
     if (typeof document !== 'undefined') {
-      document.body.classList.remove('vlc-playing')
-      document.body.classList.remove('vlc-ready')
+      document.body.classList.remove('engine-playing')
+      document.body.classList.remove('engine-ready')
     }
     window.dispatchEvent(new Event('playback-stopped'))
     api.stopPlayback(finalTime, finalDuration, context).catch(() => {})
@@ -371,25 +371,25 @@ export function PlayerProvider({ children }) {
       savePreferences(next, { subtitleSize: next.subtitleSize, subtitleStyle: next.subtitleStyle })
       return next
     })
-    if (usingVlc && api.setSubtitleAppearance) {
+    if (usingEmbedEngine && api.setSubtitleAppearance) {
       api.setSubtitleAppearance({ size: subtitleSize, style: subtitleStyle }).catch(() => {})
     }
-  }, [savePreferences, api, usingVlc])
+  }, [savePreferences, api, usingEmbedEngine])
 
-  // Toggle the body.vlc-ready class so the CSS-pseudo-element curtain
+  // Toggle the body.engine-ready class so the CSS-pseudo-element curtain
   // disappears the instant libvlc reports its first frame.
   useEffect(() => {
     if (typeof document === 'undefined') return
     if (playerState.open && playerState.engineReady) {
-      document.body.classList.add('vlc-ready')
+      document.body.classList.add('engine-ready')
     } else {
-      document.body.classList.remove('vlc-ready')
+      document.body.classList.remove('engine-ready')
     }
   }, [playerState.open, playerState.engineReady])
 
-  // libVLC mode: subscribe to live state pushes.
+  // embed engine mode: subscribe to live state pushes.
   useEffect(() => {
-    if (!usingVlc || !api.onPlaybackState) return
+    if (!usingEmbedEngine || !api.onPlaybackState) return
     const unsub = api.onPlaybackState(state => {
       setPlayerState(prev => {
         if (!prev.open) return prev
@@ -408,10 +408,10 @@ export function PlayerProvider({ children }) {
       })
     })
     return unsub
-  }, [usingVlc, api])
+  }, [usingEmbedEngine, api])
 
   useEffect(() => {
-    if (!usingVlc || !api.onPlaybackTracks) return
+    if (!usingEmbedEngine || !api.onPlaybackTracks) return
     const unsub = api.onPlaybackTracks(tracks => {
       setPlayerState(prev => {
         if (!prev.open) return prev
@@ -425,17 +425,17 @@ export function PlayerProvider({ children }) {
       })
     })
     return unsub
-  }, [usingVlc, api])
+  }, [usingEmbedEngine, api])
 
   useEffect(() => {
-    if (!usingVlc || !api.onPlaybackEnded) return
+    if (!usingEmbedEngine || !api.onPlaybackEnded) return
     const unsub = api.onPlaybackEnded(() => {
       const cur = stateRef.current
       if (cur.type === 'episode') playNextEpisode()
       else closePlayer(cur.currentTime, cur.duration)
     })
     return unsub
-  }, [usingVlc, api, playNextEpisode, closePlayer])
+  }, [usingEmbedEngine, api, playNextEpisode, closePlayer])
 
   const contextValue = useMemo(() => ({
     playerState, launching, openPlayer, closePlayer, playNextEpisode,
