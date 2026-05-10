@@ -21,14 +21,13 @@ function register() {
     return { ok: true, serverUrl: preferences.get('serverUrl') }
   })
 
-  // App preferences (theme, player engine, downloads folder, force-transcode).
+  // App preferences (theme, player engine, downloads folder).
   ipcMain.handle('settings:getPreferences', () => {
     const all = preferences.getAll()
     return {
       theme: all.theme,
       playerEngine: all.playerEngine,
       downloadsFolder: preferences.downloadsFolder(),
-      forceTranscode: !!all.forceTranscode,
     }
   })
 
@@ -37,7 +36,6 @@ function register() {
     if (patch.theme !== undefined) allowed.theme = patch.theme
     if (patch.playerEngine !== undefined) allowed.playerEngine = patch.playerEngine
     if (patch.downloadsFolder !== undefined) allowed.downloadsFolder = patch.downloadsFolder
-    if (patch.forceTranscode !== undefined) allowed.forceTranscode = !!patch.forceTranscode
     preferences.set(allowed)
     return { ok: true }
   })

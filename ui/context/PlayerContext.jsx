@@ -3,14 +3,6 @@ import { flushSync } from 'react-dom'
 import { useToast } from './ToastContext'
 import { useApi, useCapabilities } from './ApiContext'
 
-function readForceTranscode() {
-  try {
-    return typeof window !== 'undefined' && window.localStorage?.getItem('caramba.forceTranscode') === 'true'
-  } catch {
-    return false
-  }
-}
-
 const PlayerContext = createContext(null)
 
 // PlayerContext serves two playback engines:
@@ -119,7 +111,7 @@ export function PlayerProvider({ children }) {
         prefs = await Promise.race([prefPromise, timeout])
       } catch {}
 
-      const result = await api.startPlayback(filePath, startTime || 0, prefs, { forceTranscode: readForceTranscode() })
+      const result = await api.startPlayback(filePath, startTime || 0, prefs)
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })

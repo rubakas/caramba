@@ -140,16 +140,41 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     assert_equal "fre", pref.audio_language
   end
 
-  # select_subtitle_track guards against auto-picking bitmap (PGS/VOBSUB)
-  # tracks. Auto-burn forces full_transcode → encode <1× realtime on 4K → the
-  # client sees a request storm.
+  # select_subtitle_track returns [stream_index, burn_required]. The
+  # burn-required flag is true when the file's subtitle format is NOT in
+  # the client's SubtitleProfiles — server must burn it in via overlay
+  # filter. Otherwise false: server delivers via VTT sidecar (External)
+  # or leaves it muxed (Embed).
   class SubtitleSelectionTest < ActiveSupport::TestCase
     setup do
       @controller = Api::PlaybackController.new
     end
 
-    def select(streams, prefs = nil)
-      @controller.send(:select_subtitle_track, streams, prefs)
+    def select(streams, prefs = nil, profile = browser_profile)
+      @controller.send(:select_subtitle_track, streams, prefs, profile)
+    end
+
+    # Browser profile: VTT External only. Bitmap subs require burn-in.
+    def browser_profile
+      {
+        "DirectPlayProfiles" => [],
+        "TranscodingProfiles" => [],
+        "SubtitleProfiles" => [ { "Format" => "vtt", "Method" => "External" } ],
+        "CodecProfiles" => []
+      }
+    end
+
+    # Native-player profile: PGSSUB Embed + srt External.
+    def native_profile
+      {
+        "DirectPlayProfiles" => [],
+        "TranscodingProfiles" => [],
+        "SubtitleProfiles" => [
+          { "Format" => "PGSSUB", "Method" => "Embed" },
+          { "Format" => "srt", "Method" => "External" }
+        ],
+        "CodecProfiles" => []
+      }
     end
 
     test "returns [nil, false] when no streams" do
@@ -158,59 +183,91 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
 
     test "returns [nil, false] when only bitmap streams and no prefs" do
       streams = [
-        { index: 2, language: "eng", isText: false }
+        { index: 2, codec: "hdmv_pgs_subtitle", language: "eng", isText: false }
       ]
+      # No prefs and no text sub → pick_subtitle_track returns nil →
+      # nothing selected. Auto-skip remains for the no-pref + no-text case.
       assert_equal [ nil, false ], select(streams)
     end
 
-    test "returns [nil, false] when only bitmap streams and subtitleOff" do
+    test "returns [nil, false] when subtitleOff is set" do
       streams = [
-        { index: 2, language: "eng", isText: false }
+        { index: 2, codec: "subrip", language: "eng", isText: true }
       ]
       assert_equal [ nil, false ], select(streams, { subtitleOff: true })
     end
 
     test "auto-picks text subtitle when both text and bitmap exist" do
       streams = [
-        { index: 2, language: "eng", isText: false },
-        { index: 3, language: "eng", isText: true }
+        { index: 2, codec: "hdmv_pgs_subtitle", language: "eng", isText: false },
+        { index: 3, codec: "subrip", language: "eng", isText: true }
       ]
-      assert_equal [ 3, false ], select(streams)
+      # Browser profile: srt is NOT in SubtitleProfiles → burn_required=true.
+      assert_equal [ 3, true ], select(streams)
     end
 
-    test "honors saved bitmap preference when language matches" do
+    test "auto-picked srt → burn_required=false on native profile (srt External)" do
       streams = [
-        { index: 4, language: "eng", isText: false }
+        { index: 3, codec: "subrip", language: "eng", isText: true }
+      ]
+      assert_equal [ 3, false ], select(streams, nil, native_profile)
+    end
+
+    test "saved bitmap preference + browser profile → bitmap selected, burn_required=true" do
+      streams = [
+        { index: 4, codec: "hdmv_pgs_subtitle", language: "eng", isText: false }
       ]
       assert_equal [ 4, true ], select(streams, { subtitleLanguage: "eng" })
     end
 
-    test "saved text preference wins over bitmap of same language" do
+    test "saved bitmap preference + native profile (PGSSUB Embed) → bitmap selected, burn_required=false" do
       streams = [
-        { index: 5, language: "eng", isText: false },
-        { index: 6, language: "eng", isText: true }
+        { index: 4, codec: "hdmv_pgs_subtitle", language: "eng", isText: false }
       ]
-      assert_equal [ 6, false ], select(streams, { subtitleLanguage: "eng" })
+      assert_equal [ 4, false ], select(streams, { subtitleLanguage: "eng" }, native_profile)
     end
 
-    test "saved language with only bitmap streams selects bitmap" do
+    test "saved text preference wins over bitmap of same language" do
       streams = [
-        { index: 7, language: "fre", isText: false }
+        { index: 5, codec: "hdmv_pgs_subtitle", language: "eng", isText: false },
+        { index: 6, codec: "subrip", language: "eng", isText: true }
       ]
-      assert_equal [ 7, true ], select(streams, { subtitleLanguage: "fre" })
+      # Native profile: srt External → no burn.
+      assert_equal [ 6, false ], select(streams, { subtitleLanguage: "eng" }, native_profile)
     end
   end
 
   # select_audio_track has to disambiguate same-language tracks (TrueHD eng
   # + AC3 eng on UHD remuxes) and even same-language same-codec tracks
-  # (AAC stereo + AAC 5.1 from a single source). Three-key match.
+  # (AAC stereo + AAC 5.1 from a single source). Three-key match. The
+  # "supported codec" check now consults the client's DeviceProfile.
   class AudioSelectionTest < ActiveSupport::TestCase
     setup do
       @controller = Api::PlaybackController.new
     end
 
-    def select(streams, prefs = nil, codec_support = nil)
-      @controller.send(:select_audio_track, streams, prefs, codec_support)
+    def select(streams, prefs = nil, profile = aac_only_profile)
+      @controller.send(:select_audio_track, streams, prefs, profile)
+    end
+
+    # Profile with only AAC in DirectPlayProfiles.AudioCodec.
+    def aac_only_profile
+      {
+        "DirectPlayProfiles" => [ {
+          "Container" => "mp4", "Type" => "Video",
+          "VideoCodec" => "h264", "AudioCodec" => "aac"
+        } ]
+      }
+    end
+
+    # Profile that lists AC3 as direct-playable.
+    def ac3_profile
+      {
+        "DirectPlayProfiles" => [ {
+          "Container" => "mp4,mkv", "Type" => "Video",
+          "VideoCodec" => "h264", "AudioCodec" => "aac,ac3"
+        } ]
+      }
     end
 
     def aac_streams
@@ -233,8 +290,6 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     end
 
     test "saved (lang, codec) without channels falls back to first language+codec match" do
-      # Both qualify; we accept whichever ffprobe lists first since we have no
-      # channel hint. This is the legacy pre-channels behavior.
       assert_equal 1, select(aac_streams, { audioLanguage: "eng", audioCodec: "aac" })
     end
 
@@ -243,21 +298,18 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
         { index: 1, codec: "truehd", channels: 8, language: "eng" },
         { index: 2, codec: "ac3",    channels: 6, language: "eng" }
       ]
-      # User saved AAC stereo last time; this source has neither. Fall through
-      # to lang+codec → still no match → fall further to lang + playable.
       result = select(streams, {
         audioLanguage: "eng", audioCodec: "aac", audioChannels: 2
-      }, { audio: { ac3: true } })
-      assert_equal 2, result, "should land on the AC3 track because client decodes it"
+      }, ac3_profile)
+      assert_equal 2, result, "should land on the AC3 track because profile decodes it"
     end
 
-    test "no saved prefs: prefers a client-decodable codec in the desired language" do
+    test "no saved prefs: prefers a profile-decodable codec in the desired language" do
       streams = [
         { index: 1, codec: "truehd", channels: 8, language: "eng" },
         { index: 2, codec: "ac3",    channels: 6, language: "eng" }
       ]
-      result = select(streams, nil, { audio: { ac3: true } })
-      assert_equal 2, result
+      assert_equal 2, select(streams, nil, ac3_profile)
     end
 
     test "no saved prefs and nothing playable: first language match wins" do
@@ -265,21 +317,18 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
         { index: 1, codec: "truehd", channels: 8, language: "eng" },
         { index: 2, codec: "dts",    channels: 6, language: "eng" }
       ]
-      result = select(streams, nil, { audio: { aac: true } })
-      assert_equal 1, result
+      assert_equal 1, select(streams, nil, aac_only_profile)
     end
 
     test "nothing playable: prefers AC3 over TrueHD even when TrueHD is first" do
-      # On Firefox/Android-WebView (no AC3 in MSE), neither track is direct-
-      # passable but AC3 still re-encodes to AAC much faster than TrueHD.
-      # Auto-pick should bias toward AC3 to keep cold start under the wait
-      # window.
+      # On a profile with only AAC, neither track is direct-passable but
+      # AC3 still re-encodes to AAC much faster than TrueHD. Auto-pick
+      # should bias toward AC3 to keep cold start under the wait window.
       streams = [
         { index: 1, codec: "truehd", channels: 8, language: "eng" },
         { index: 2, codec: "ac3",    channels: 6, language: "eng" }
       ]
-      result = select(streams, nil, { audio: { aac: true } })
-      assert_equal 2, result
+      assert_equal 2, select(streams, nil, aac_only_profile)
     end
 
     test "nothing playable, nothing cheap: falls back to first" do
@@ -287,8 +336,7 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
         { index: 1, codec: "truehd",  channels: 8, language: "eng" },
         { index: 2, codec: "dts_hd",  channels: 6, language: "eng" }
       ]
-      result = select(streams, nil, { audio: { aac: true } })
-      assert_equal 1, result
+      assert_equal 1, select(streams, nil, aac_only_profile)
     end
   end
 end

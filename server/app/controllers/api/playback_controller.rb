@@ -60,14 +60,13 @@ class Api::PlaybackController < Api::BaseController
   # ── Streaming endpoints ─────────────────────────────────────────────
 
   # POST /api/playback/start
-  # Body: { filePath, startTime, prefs, codecSupport: { h264, hevc }, forceTranscode }
+  # Body: { filePath, startTime, prefs, deviceProfile }
   # Returns: { hlsUrl, sessionId, duration, startTime, seekBase, strategy, ... }
   def start
     file_path = params[:filePath]
     start_time = (params[:startTime] || 0).to_f
     prefs = params[:prefs]
-    codec_support = params[:codecSupport] # { h264: bool, hevc: bool }
-    force_transcode = ActiveModel::Type::Boolean.new.cast(params[:forceTranscode])
+    device_profile = parse_device_profile(params[:deviceProfile])
 
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
     return render(json: { error: "File not found: #{file_path}" }, status: :unprocessable_entity) unless File.exist?(file_path)
@@ -77,8 +76,8 @@ class Api::PlaybackController < Api::BaseController
     record = find_record_for(file_path)
     info = (record && TechProbeService.probe_for(record)) || TranscoderService.probe(file_path)
 
-    audio_stream_index = select_audio_track(info[:audioStreams], prefs, codec_support)
-    subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs)
+    audio_stream_index = select_audio_track(info[:audioStreams], prefs, device_profile)
+    subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs, device_profile)
 
     session_id = SecureRandom.hex(8)
 
@@ -87,8 +86,7 @@ class Api::PlaybackController < Api::BaseController
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
       subtitle_stream_index: subtitle_stream_index,
       duration: info[:duration],
-      codec_support: codec_support,
-      force_transcode: force_transcode)
+      device_profile: device_profile)
 
     session[:playback_session_id] = session_id
 
@@ -236,7 +234,7 @@ class Api::PlaybackController < Api::BaseController
       audio_stream_index: audio_index,
       burn_subtitle_index: info[:burn_subtitle_index],
       duration: info[:duration],
-      force_transcode: info[:force_transcode])
+      device_profile: info[:device_profile])
 
     if had_subtitle && active_sub_index
       vtt = TranscoderService.extract_subtitles(info[:file_path], active_sub_index)
@@ -295,7 +293,7 @@ class Api::PlaybackController < Api::BaseController
       audio_stream_index: info[:audio_stream_index],
       burn_subtitle_index: burn_index,
       duration: info[:duration],
-      force_transcode: info[:force_transcode])
+      device_profile: info[:device_profile])
 
     hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
     render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
@@ -496,11 +494,12 @@ class Api::PlaybackController < Api::BaseController
   #   1. Saved (language, codec, channels) — disambiguates AAC stereo vs
   #      AAC 5.1 from the same source where lang+codec are identical.
   #   2. Saved (language, codec) — handles TrueHD eng + AC3 eng pairs.
-  #   3. Saved language alone — prefer a client-decodable codec to stay
+  #   3. Saved language alone — prefer a profile-decodable codec to stay
   #      direct_stream / direct_play.
   #   4. English with same playable preference.
-  #   5. First available track.
-  def select_audio_track(audio_streams, prefs, codec_support = nil)
+  #   5. First available track (biased to cheap-to-transcode codecs to
+  #      keep cold-start under the player's patience window).
+  def select_audio_track(audio_streams, prefs, device_profile)
     return nil if audio_streams.empty?
 
     saved_lang     = prefs && prefs[:audioLanguage].presence
@@ -527,10 +526,11 @@ class Api::PlaybackController < Api::BaseController
     in_lang = audio_streams.select { |s| matches_language?(s[:language], desired_lang) }
     in_lang = audio_streams if in_lang.empty?
 
-    playable = in_lang.find { |s| TranscoderService.allowed_audio_codec?(s[:codec], codec_support) }
+    profile = DeviceProfile.new(device_profile)
+    playable = in_lang.find { |s| profile.audio_codec_supported?(s[:codec]) }
     return playable[:index] if playable
 
-    # Even when no codec is directly playable, bias toward simple codecs
+    # Even when no codec is direct-playable, bias toward simple codecs
     # that re-encode quickly. TrueHD/DTS-HD MA decoders need 1-2 seconds
     # of warmup before producing samples; on a cold first play that pushes
     # the first HLS segment past the client's patience window and the user
@@ -549,29 +549,50 @@ class Api::PlaybackController < Api::BaseController
       requested == "en" && stream_language.to_s == "eng"
   end
 
-  def select_subtitle_track(subtitle_streams, prefs)
+  # Pick a subtitle track and decide whether the server must burn it in.
+  # Returns [stream_index, burn_required].
+  #
+  # Burn-required flag: true when the file's subtitle format is NOT in the
+  # client's SubtitleProfiles (so the client can't render it). Otherwise
+  # false — server either serves it as External (text → VTT sidecar) or
+  # leaves it Embed (mpv/ExoPlayer-class clients render embedded subs).
+  def select_subtitle_track(subtitle_streams, prefs, device_profile)
     return [ nil, false ] if subtitle_streams.empty?
+    return [ nil, false ] if prefs && prefs[:subtitleOff]
 
-    if prefs && prefs[:subtitleOff]
-      return [ nil, false ]
-    end
+    profile = DeviceProfile.new(device_profile)
+    picked = pick_subtitle_track(subtitle_streams, prefs)
+    return [ nil, false ] unless picked
 
+    method = profile.subtitle_method_for(picked[:codec])
+    burn_required = method.nil?
+    [ picked[:index], burn_required ]
+  end
+
+  # Saved language → text first, then bitmap. No preference → first text
+  # track. Bitmap-only catalogs return the first stream so the player has
+  # something to render (server will burn it if the profile doesn't list
+  # the bitmap format).
+  def pick_subtitle_track(streams, prefs)
     if prefs && prefs[:subtitleLanguage].present?
-      saved_text = subtitle_streams.find { |s| s[:isText] && s[:language] == prefs[:subtitleLanguage] }
-      return [ saved_text[:index], false ] if saved_text
-
-      saved_bitmap = subtitle_streams.find { |s| !s[:isText] && s[:language] == prefs[:subtitleLanguage] }
-      return [ saved_bitmap[:index], true ] if saved_bitmap
+      lang = prefs[:subtitleLanguage]
+      text_match = streams.find { |s| s[:isText] && s[:language] == lang }
+      return text_match if text_match
+      bitmap_match = streams.find { |s| !s[:isText] && s[:language] == lang }
+      return bitmap_match if bitmap_match
     end
+    streams.find { |s| s[:isText] }
+  end
 
-    # No saved preference: only auto-pick a text subtitle. Auto-burning a
-    # bitmap (PGS/VOBSUB) track forces full_transcode and pushes encode speed
-    # below 1× realtime on 4K sources, which the player then reads as a
-    # network error storm. Require an explicit user choice for bitmap subs.
-    text_sub = subtitle_streams.find { |s| s[:isText] }
-    return [ text_sub[:index], false ] if text_sub
-
-    [ nil, false ]
+  # Accept the deviceProfile param either as a parsed Hash (Rails
+  # auto-parses JSON request bodies) or as a JSON string (defensive).
+  def parse_device_profile(raw)
+    return nil if raw.nil?
+    return raw.to_unsafe_h if raw.respond_to?(:to_unsafe_h)
+    return raw if raw.is_a?(Hash)
+    JSON.parse(raw.to_s)
+  rescue JSON::ParserError
+    nil
   end
 
   def api_base_url

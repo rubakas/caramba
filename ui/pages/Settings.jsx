@@ -38,11 +38,6 @@ export default function Settings({
   const [androidApiUrlInput, setAndroidApiUrlInput] = useState(apiUrl || 'http://localhost:3001')
   const [androidApiSaving, setAndroidApiSaving] = useState(false)
 
-  // Force transcode (per-device, persisted in localStorage)
-  const [forceTranscode, setForceTranscode] = useState(() => {
-    try { return typeof window !== 'undefined' && window.localStorage?.getItem('caramba.forceTranscode') === 'true' } catch { return false }
-  })
-
   // Desktop: downloads folder (read once via adapter)
   const [downloadsFolder, setDownloadsFolder] = useState(null)
   useEffect(() => {
@@ -91,13 +86,6 @@ export default function Settings({
     }
   }
 
-  const handleForceTranscodeToggle = () => {
-    const next = !forceTranscode
-    setForceTranscode(next)
-    try { window.localStorage.setItem('caramba.forceTranscode', next ? 'true' : 'false') } catch {}
-    showToast(next ? 'Always transcode enabled. Applies on next playback.' : 'Always transcode disabled. Applies on next playback.')
-  }
-
   const handleChooseDownloadsFolder = async () => {
     if (!api.selectFolder) return
     const path = await api.selectFolder()
@@ -123,51 +111,32 @@ export default function Settings({
         {message && <div className="alert alert--success">{message}</div>}
         {error && <div className="alert">{error}</div>}
 
-        {/* Playback — all modes */}
+        {/* Playback — desktop only (player engine choice) */}
+        {isDesktopMode && onPlayerEngineChange && (
         <section className="settings-section">
           <h2 className="settings-section-title">Playback</h2>
-          <p className="settings-help">
-            Force video to be re-encoded to H.264 for maximum compatibility.
-            Enable this if you see buffering or audio/video sync issues on some files.
-            Uses more CPU on the server.
-          </p>
 
           <div className="settings-form">
-            <div className="api-mode-toggle" style={{ marginBottom: 0 }}>
-              <span className="api-mode-toggle-label">Always transcode video</span>
-              <label className="toggle-switch">
-                <input
-                  type="checkbox"
-                  checked={forceTranscode}
-                  onChange={handleForceTranscodeToggle}
-                />
-                <span className="toggle-switch-track" />
-                <span className="toggle-switch-thumb" />
-              </label>
-            </div>
-
-            {/* Desktop: player engine choice */}
-            {isDesktopMode && onPlayerEngineChange && (
-              <div className="field" style={{ marginTop: 16 }}>
-                <label htmlFor="player-engine" className="settings-label">Player engine</label>
-                <div className="settings-select-wrap">
-                  <select
-                    id="player-engine"
-                    className="settings-select"
-                    value={playerEngine || 'hlsjs'}
-                    onChange={(e) => onPlayerEngineChange(e.target.value)}
-                  >
-                    <option value="hlsjs">Browser (hls.js)</option>
-                    <option value="libvlc">Embedded VLC</option>
-                  </select>
-                </div>
-                <p className="settings-hint" style={{ marginTop: 6 }}>
-                  Embedded VLC paints into the desktop window using libVLC. Use the browser engine for the simplest setup.
-                </p>
+            <div className="field">
+              <label htmlFor="player-engine" className="settings-label">Player engine</label>
+              <div className="settings-select-wrap">
+                <select
+                  id="player-engine"
+                  className="settings-select"
+                  value={playerEngine || 'hlsjs'}
+                  onChange={(e) => onPlayerEngineChange(e.target.value)}
+                >
+                  <option value="hlsjs">Browser (hls.js)</option>
+                  <option value="libvlc">Embedded VLC</option>
+                </select>
               </div>
-            )}
+              <p className="settings-hint" style={{ marginTop: 6 }}>
+                Embedded VLC paints into the desktop window using libVLC. Use the browser engine for the simplest setup.
+              </p>
+            </div>
           </div>
         </section>
+        )}
 
         {/* Android TV API URL */}
         {isAndroidTvMode && (

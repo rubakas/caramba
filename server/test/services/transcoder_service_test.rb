@@ -19,168 +19,213 @@ class TranscoderServiceTest < ActiveSupport::TestCase
     }
   end
 
+  # ── DeviceProfile fixtures ────────────────────────────────────────
+  #
+  # Browser MSE profile, parametrized for the codec axes that drive strategy
+  # decisions. `audio_codecs` is the comma-joined audio CSV; `hevc10` toggles
+  # the CodecProfile bit-depth cap that the http.js builder adds when the
+  # client (e.g. Electron 33) can't decode HEVC Main 10.
+  def browser_profile(hevc10: true, audio_codecs: %w[aac], video_codecs: %w[h264 hevc h265])
+    profile = {
+      "Name" => "browser-test",
+      "DirectPlayProfiles" => [
+        {
+          "Container" => "mp4,m4v,mov,mj2",
+          "Type" => "Video",
+          "VideoCodec" => video_codecs.join(","),
+          "AudioCodec" => audio_codecs.join(",")
+        }
+      ],
+      "TranscodingProfiles" => [
+        { "Container" => "mp4", "Type" => "Video", "Protocol" => "hls",
+          "VideoCodec" => "h264", "AudioCodec" => "aac" }
+      ],
+      "SubtitleProfiles" => [ { "Format" => "vtt", "Method" => "External" } ],
+      "CodecProfiles" => []
+    }
+    unless hevc10
+      profile["CodecProfiles"] << {
+        "Type" => "Video",
+        "Codec" => "hevc,h265",
+        "Conditions" => [
+          { "Property" => "VideoBitDepth", "Condition" => "LessThanEqual",
+            "Value" => "8", "IsRequired" => true }
+        ]
+      }
+    end
+    profile
+  end
+
+  # ExoPlayer / native player. MKV in DirectPlayProfile.Container, broad
+  # codec coverage, PGSSUB + ASS in SubtitleProfiles with Embed.
+  def native_player_profile
+    {
+      "Name" => "native-player",
+      "DirectPlayProfiles" => [ {
+        "Container" => "mkv,webm,mp4,m4v,mov,ts,m2ts,avi",
+        "Type" => "Video",
+        "VideoCodec" => "h264,hevc,h265,vp9,av1",
+        "AudioCodec" => "aac,ac3,eac3,truehd,dts,flac,mp3,opus"
+      } ],
+      "TranscodingProfiles" => [
+        { "Container" => "mp4", "Type" => "Video", "Protocol" => "hls",
+          "VideoCodec" => "h264", "AudioCodec" => "aac" }
+      ],
+      "SubtitleProfiles" => [
+        { "Format" => "PGSSUB", "Method" => "Embed" },
+        { "Format" => "ssa", "Method" => "Embed" },
+        { "Format" => "vtt", "Method" => "External" }
+      ],
+      "CodecProfiles" => []
+    }
+  end
+
+  # ── Strategy selection ────────────────────────────────────────────
+
   test "direct_play when h264 + aac inside a browser-friendly container" do
     assert_equal :direct_play,
       TranscoderService.transcode_strategy(
-        probe_result(format_name: "mov,mp4,m4a,3gp,3g2,mj2"), 1, nil
+        probe_result(format_name: "mov,mp4,m4a,3gp,3g2,mj2"), 1, nil, browser_profile
       )
   end
 
   test "direct_stream when codecs OK but container needs remuxing (MKV)" do
     assert_equal :direct_stream,
       TranscoderService.transcode_strategy(
-        probe_result(format_name: "matroska,webm"), 1, nil
+        probe_result(format_name: "matroska,webm"), 1, nil, browser_profile
       )
   end
 
   test "audio_transcode when hevc video and ac3 audio (no client AC3 support)" do
     assert_equal :audio_transcode,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "ac3"), 1, nil
+        probe_result(video_codec: "hevc", audio_codec: "ac3"), 1, nil, browser_profile
       )
   end
 
-  # ── Audio direct-pass when client supports the codec ──────────────
-
-  test "AC3 audio + client reports audio.ac3 → direct_stream (audio passes through)" do
+  test "AC3 audio + profile lists ac3 → direct_stream (audio passes through)" do
     assert_equal :direct_stream,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "h264", audio_codec: "ac3", format_name: "matroska,webm"),
-        1, nil, { h264: true, audio: { ac3: true } }
+        1, nil, browser_profile(audio_codecs: %w[aac ac3])
       )
   end
 
-  test "EAC3 audio + client reports audio.eac3 → direct_play (browser-friendly container)" do
+  test "EAC3 audio + profile lists eac3 + browser-friendly container → direct_play" do
     assert_equal :direct_play,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "h264", audio_codec: "eac3",
                      format_name: "mov,mp4,m4a,3gp,3g2,mj2"),
-        1, nil, { h264: true, audio: { eac3: true } }
+        1, nil, browser_profile(audio_codecs: %w[aac eac3])
       )
   end
 
-  test "TrueHD audio is never direct-passable (no MSE support exists)" do
+  test "TrueHD audio is never direct-passable in browser profiles → audio_transcode" do
     assert_equal :audio_transcode,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "h264", audio_codec: "truehd"),
-        1, nil, { h264: true, audio: { aac: true, ac3: true, eac3: true } }
+        probe_result(video_codec: "h264", audio_codec: "truehd"), 1, nil,
+        browser_profile(audio_codecs: %w[aac ac3 eac3])
       )
   end
 
-  test "AAC always direct-passable even when codec_support has no audio map" do
+  test "AAC always direct-passable when profile is the basic browser default" do
+    # Default browser profile lists AAC; mkv+h264+aac → direct_stream
     assert_equal :direct_stream,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "h264", audio_codec: "aac"),
-        1, nil, { h264: true }
+        probe_result(video_codec: "h264", audio_codec: "aac"), 1, nil, browser_profile
       )
   end
 
-  test "allowed_audio_codec?: nil codec_name returns false" do
-    refute TranscoderService.send(:allowed_audio_codec?, nil, { audio: { ac3: true } })
-  end
-
-  test "full_transcode when burn_subtitle_index present" do
+  test "full_transcode when burn_subtitle_index present (overrides profile match)" do
     assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(probe_result, 1, 3)
+      TranscoderService.transcode_strategy(probe_result, 1, 3, browser_profile)
   end
 
-  test "force_transcode overrides everything" do
-    assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(probe_result, 1, nil, nil, true)
-  end
-
-  test "force_transcode overrides hevc direct_play too" do
-    assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac", format_name: "mov,mp4,m4a,3gp,3g2,mj2"),
-        1, nil, nil, true
-      )
-  end
-
-  test "hevc + aac in mp4 → direct_play (no transcode)" do
+  test "hevc + aac in mp4 → direct_play" do
     assert_equal :direct_play,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac", format_name: "mov,mp4,m4a,3gp,3g2,mj2"),
-        1, nil
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a,3gp,3g2,mj2"),
+        1, nil, browser_profile
       )
   end
 
-  # Pinned by the @smoke electron Playwright test on Aladdin (4K HEVC HDR).
-  # Chromium MSE on Electron 33 accepts the codec string for HEVC Main 10 but
-  # stalls on the decode itself. Re-encode to 8-bit H.264.
-  test "10-bit HEVC (Main 10) → full_transcode regardless of container" do
-    assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac",
-                     format_name: "matroska,webm", pix_fmt: "yuv420p10le"),
-        1, nil
-      )
+  # ── HEVC 10-bit (bit-depth CodecProfile) ──────────────────────────
 
-    assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac",
-                     format_name: "mov,mp4,m4a,3gp,3g2,mj2", pix_fmt: "yuv420p10le"),
-        1, nil
-      )
+  test "10-bit HEVC → full_transcode when profile caps HEVC at 8-bit (Electron MSE)" do
+    [ "matroska,webm", "mov,mp4,m4a,3gp,3g2,mj2" ].each do |container|
+      assert_equal :full_transcode,
+        TranscoderService.transcode_strategy(
+          probe_result(video_codec: "hevc", audio_codec: "aac",
+                       format_name: container, pix_fmt: "yuv420p10le"),
+          1, nil, browser_profile(hevc10: false)
+        ),
+        "expected full_transcode for 10-bit hevc in #{container} when hevc10 capped at 8-bit"
+    end
   end
 
-  test "10-bit HEVC + non-aac audio → full_transcode (10-bit guard wins over audio_transcode)" do
+  test "10-bit HEVC + non-aac audio → full_transcode (bit-depth cap wins over audio)" do
     assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "truehd", pix_fmt: "yuv420p10le"),
-        1, nil
+        1, nil, browser_profile(hevc10: false)
       )
   end
 
-  # ── HDR direct-stream when client supports 10-bit HEVC MSE ────────
-
-  test "10-bit HEVC + hevc10 client support → direct_stream (HDR direct stream)" do
+  test "10-bit HEVC + profile without bit-depth cap + mkv → direct_stream" do
     assert_equal :direct_stream,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "aac",
                      format_name: "matroska,webm", pix_fmt: "yuv420p10le"),
-        1, nil, { h264: true, hevc: true, hevc10: true }
+        1, nil, browser_profile(hevc10: true)
       )
   end
 
-  test "10-bit HEVC in mp4 + hevc10 client support → direct_play (no encoder, no segmentation)" do
+  test "10-bit HEVC + profile without bit-depth cap + mp4 → direct_play" do
     assert_equal :direct_play,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "aac",
                      format_name: "mov,mp4,m4a,3gp,3g2,mj2", pix_fmt: "yuv420p10le"),
-        1, nil, { h264: true, hevc: true, hevc10: true }
+        1, nil, browser_profile(hevc10: true)
       )
   end
 
-  test "10-bit HEVC + hevc10 false → still full_transcode (Electron / older browsers)" do
+  test "bit-depth cap does not bypass burn_subtitle_index" do
     assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "aac", pix_fmt: "yuv420p10le"),
-        1, nil, { h264: true, hevc: true, hevc10: false }
+        1, 3, browser_profile(hevc10: true)
       )
   end
 
-  test "10-bit HEVC + hevc10 absent → still full_transcode (default-deny)" do
-    assert_equal :full_transcode,
+  # ── Native-player profile (ExoPlayer-class) ───────────────────────
+
+  test "native-player profile + mkv + hevc + truehd → direct_play (broad codec coverage)" do
+    assert_equal :direct_play,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac", pix_fmt: "yuv420p10le"),
-        1, nil, { h264: true, hevc: true }
+        probe_result(video_codec: "hevc", audio_codec: "truehd",
+                     format_name: "matroska,webm", pix_fmt: "yuv420p10le"),
+        1, nil, native_player_profile
       )
   end
 
-  test "hevc10 support does not bypass force_transcode" do
-    assert_equal :full_transcode,
-      TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac", pix_fmt: "yuv420p10le"),
-        1, nil, { h264: true, hevc: true, hevc10: true }, true
-      )
-  end
+  # ── Default profile (no client-supplied profile) ──────────────────
 
-  test "hevc10 support does not bypass burn_subtitle_index" do
+  test "missing profile falls back to default (h264 + aac + mp4 only)" do
+    # h264/aac/mp4 → direct_play under the default
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(format_name: "mov,mp4,m4a"), 1, nil, nil
+      )
+    # h264/aac/mkv → direct_stream (container mismatch only)
+    assert_equal :direct_stream,
+      TranscoderService.transcode_strategy(
+        probe_result(format_name: "matroska,webm"), 1, nil, nil
+      )
+    # hevc/aac → full_transcode (default doesn't list hevc)
     assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
-        probe_result(video_codec: "hevc", audio_codec: "aac", pix_fmt: "yuv420p10le"),
-        1, 3, { h264: true, hevc: true, hevc10: true }
+        probe_result(video_codec: "hevc", audio_codec: "aac"), 1, nil, nil
       )
   end
 

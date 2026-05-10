@@ -125,8 +125,7 @@ class TranscoderService
           subtitle_stream_index: subtitle_stream_index,
           subtitle_vtt: nil,
           hls_dir: File.join(TMP_ROOT, "hls", session_id),
-          codec_support: opts[:codec_support],
-          force_transcode: !!opts[:force_transcode],
+          device_profile: opts[:device_profile],
           strategy: nil,
           started_at: Time.current
         }
@@ -140,8 +139,7 @@ class TranscoderService
           probe_result,
           opts[:audio_stream_index],
           opts[:burn_subtitle_index],
-          opts[:codec_support],
-          !!opts[:force_transcode]
+          opts[:device_profile]
         )
 
         if decided == :direct_play
@@ -179,8 +177,7 @@ class TranscoderService
           @session[:file_path],
           seek_time.to_f,
           audio_stream_index: @session[:audio_stream_index],
-          burn_subtitle_index: @session[:burn_subtitle_index],
-          force_transcode: @session[:force_transcode]
+          burn_subtitle_index: @session[:burn_subtitle_index]
         )
 
         Rails.logger.info "[Transcoder] seek session #{session_id} to #{seek_time}s, strategy=#{@session[:strategy]}"
@@ -423,36 +420,6 @@ class TranscoderService
 
     # ── Strategy selection (public for controller/tests) ──────────────
 
-    # Client-supplied MSE codec capabilities trump our fixed list, because
-    # MSE HEVC support varies wildly: present on Chromium/macOS and Safari,
-    # but often missing in Android WebView (including Android TV WebView on
-    # many system images) even when the device can hardware-decode HEVC
-    # elsewhere. Fallback defaults assume a modern Chromium desktop — HEVC
-    # allowed — which covers Electron and desktop browsers.
-    DEFAULT_CLIENT_DIRECT_PLAY_CODECS = %w[h264 hevc h265].freeze
-
-    # Container families a browser <video> can demux directly. ffprobe's
-    # format_name is comma-joined (e.g. "mov,mp4,m4a,3gp,3g2,mj2"); we
-    # substring-match. MKV/AVI/TS/WebM(*) require remuxing. (* WebM with
-    # VP8/VP9 plays direct, but those codecs aren't in the direct-play list.)
-    DIRECT_PLAY_CONTAINERS = %w[mp4 m4v mov mj2].freeze
-
-    # When the native player Capacitor plugin is in play, ExoPlayer reads
-    # MKV directly via Media3's MatroskaExtractor — no remux, no transcode.
-    # Adds matroska/webm to the direct-play set on top of the standard
-    # browser containers.
-    NATIVE_DIRECT_PLAY_CONTAINERS = (DIRECT_PLAY_CONTAINERS + %w[matroska webm]).freeze
-
-    # 10-bit pixel formats — Chromium MSE on Electron 33 / macOS plays HEVC
-    # Main-10 (4K HDR) inconsistently (segments arrive but the decoder
-    # produces no frames). Force full_transcode for these.
-    TEN_BIT_PIX_FMTS = %w[
-      yuv420p10le yuv420p10be
-      yuv422p10le yuv422p10be
-      yuv444p10le yuv444p10be
-      p010le p010be
-    ].freeze
-
     # HDR transfer characteristics — sources tagged with these need an explicit
     # PQ/HLG → linear → BT.709 SDR conversion. Without it, naive 8-bit output
     # crushes mid-tones and produces visible banding on subtle gradients.
@@ -475,111 +442,36 @@ class TranscoderService
       -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv
     ].freeze
 
-    def allowed_direct_play_codecs(codec_support)
-      return DEFAULT_CLIENT_DIRECT_PLAY_CODECS if codec_support.nil?
-      allowed = []
-      allowed += %w[h264] if truthy?(codec_support[:h264]) || truthy?(codec_support["h264"])
-      allowed += %w[hevc h265] if truthy?(codec_support[:hevc]) || truthy?(codec_support["hevc"])
-      # If client reported nothing, assume baseline H.264 (universal).
-      allowed.empty? ? %w[h264] : allowed
-    end
-
-    def hevc10_supported?(codec_support)
-      return false if codec_support.nil?
-      truthy?(codec_support[:hevc10]) || truthy?(codec_support["hevc10"])
-    end
-
-    # True when the client is the native ExoPlayer Capacitor plugin. Lets
-    # us skip ffmpeg entirely (direct_play of MKV) since ExoPlayer reads
-    # the container, picks tracks, and overlays bitmap subtitles natively.
-    def native_player?(codec_support)
-      return false if codec_support.nil?
-      truthy?(codec_support[:nativePlayer]) || truthy?(codec_support["nativePlayer"])
-    end
-
-    # Map ffprobe `codec_name` (lowercase) → key in codec_support[:audio].
-    # ffprobe uses "ac3", "eac3", "mp3"; MSE uses "ac-3", "ec-3", "mp3".
-    AUDIO_CODEC_PROBE_KEY = {
-      "aac"  => :aac,
-      "ac3"  => :ac3,
-      "eac3" => :eac3,
-      "flac" => :flac,
-      "mp3"  => :mp3,
-      "opus" => :opus
-    }.freeze
-
-    # Whether the client can decode this audio codec in an MSE fMP4 segment.
-    # AAC is unconditionally allowed (every MSE-capable client supports it,
-    # and our segmenter falls back to AAC whenever it can't pass through).
-    # Other codecs require an explicit signal in `codec_support[:audio]`.
-    def allowed_audio_codec?(codec_name, codec_support)
-      return false if codec_name.blank?
-      return true if codec_name == "aac"
-      return false unless codec_support
-      audio_caps = codec_support[:audio] || codec_support["audio"]
-      return false unless audio_caps
-      key = AUDIO_CODEC_PROBE_KEY[codec_name]
-      return false unless key
-      truthy?(audio_caps[key]) || truthy?(audio_caps[key.to_s])
-    end
-
-    def truthy?(v)
-      v == true || v == "true" || v == 1 || v == "1"
-    end
-
-    def direct_play_container?(format_name, codec_support = nil)
-      return false if format_name.blank?
-      containers = native_player?(codec_support) ? NATIVE_DIRECT_PLAY_CONTAINERS : DIRECT_PLAY_CONTAINERS
-      containers.any? { |c| format_name.include?(c) }
-    end
-
+    # Pick a strategy by matching the file against the client's DeviceProfile.
     # Returns one of :direct_play, :direct_stream, :audio_transcode, :full_transcode.
-    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, codec_support = nil, force_transcode = false)
-      # Native ExoPlayer plugin shortcut: it reads MKV/MP4 directly,
-      # decodes HEVC HDR + AC-3/EAC-3/TrueHD/DTS + PGS subtitles. No
-      # ffmpeg needed. burn_subtitle_index is moot (PGS overlay happens in
-      # the player). force_transcode still wins because the user explicitly
-      # asked for re-encoding.
-      if native_player?(codec_support) && !force_transcode
-        video_codec = probe_result.dig(:video, :codec)
-        if %w[h264 hevc h265 av1 vp9].include?(video_codec) &&
-           direct_play_container?(probe_result[:formatName], codec_support)
-          return :direct_play
-        end
-      end
-
+    #
+    # Decision flow:
+    #   1. burn_subtitle_index forces :full_transcode (overlay needs re-encode).
+    #   2. DirectPlayProfile match (container + video + audio + CodecProfiles)
+    #      → :direct_play.
+    #   3. Video codec accepted (incl. CodecProfiles), audio codec accepted, but
+    #      container mismatch → :direct_stream (remux only).
+    #   4. Video codec accepted but audio codec not → :audio_transcode.
+    #   5. Anything else → :full_transcode.
+    def transcode_strategy(probe_result, audio_stream_index, burn_subtitle_index, device_profile = nil)
       return :full_transcode if burn_subtitle_index
-      return :full_transcode if force_transcode
 
+      profile = DeviceProfile.new(device_profile)
       video_codec = probe_result.dig(:video, :codec)
-      allowed = allowed_direct_play_codecs(codec_support)
-      return :full_transcode unless allowed.include?(video_codec)
-
-      # 10-bit HEVC: only force re-encode when the client did NOT advertise
-      # Main 10 MSE support. Real browsers (Safari, Chrome 107+) decode 10-bit
-      # HEVC reliably and report `hevc10: true` — we direct-stream the source
-      # so the user gets true HDR with zero re-encode. Electron 33 / Chromium
-      # 130 MSE accepts the codec string but stalls on decode, so the http
-      # adapter explicitly suppresses hevc10 for the Electron user agent.
-      if %w[hevc h265].include?(video_codec) &&
-         TEN_BIT_PIX_FMTS.include?(probe_result.dig(:video, :pix_fmt)) &&
-         !hevc10_supported?(codec_support)
-        return :full_transcode
-      end
-
       audio_stream = (probe_result[:audioStreams] || []).find { |s| s[:index] == audio_stream_index }
-      audio_codec = audio_stream ? audio_stream[:codec] : nil
+      audio_codec = audio_stream && audio_stream[:codec]
 
-      return :audio_transcode unless allowed_audio_codec?(audio_codec, codec_support)
-
-      # Codecs are compatible. If the container is also browser-friendly,
-      # serve the file as-is (direct_play, no ffmpeg). Otherwise remux into
-      # fMP4 via `-c copy` (direct_stream).
-      if direct_play_container?(probe_result[:formatName], codec_support)
-        :direct_play
-      else
-        :direct_stream
+      if profile.direct_play_match?(probe_result, audio_codec: audio_codec)
+        return :direct_play
       end
+
+      video_ok = profile.video_codec_supported?(video_codec, probe_result)
+      audio_ok = audio_codec && profile.audio_codec_supported?(audio_codec)
+
+      return :direct_stream    if video_ok && audio_ok
+      return :audio_transcode  if video_ok && !audio_ok
+
+      :full_transcode
     end
 
     private
@@ -629,9 +521,8 @@ class TranscoderService
       FileUtils.mkdir_p(hls_dir)
 
       probe_result = opts[:probe_result] || probe(file_path)
-      codec_support = @session && @session[:codec_support]
-      force_transcode = (opts.key?(:force_transcode) ? opts[:force_transcode] : @session && @session[:force_transcode]) ? true : false
-      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], codec_support, force_transcode)
+      device_profile = opts[:device_profile] || (@session && @session[:device_profile])
+      strategy = transcode_strategy(probe_result, opts[:audio_stream_index], opts[:burn_subtitle_index], device_profile)
 
       @session[:strategy] = strategy if @session
 

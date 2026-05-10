@@ -13,6 +13,7 @@ sentryInit({
   isDev: import.meta.env.DEV,
 })
 import { createHttpAdapter, httpCapabilities } from '@caramba/ui/adapters/http'
+import { buildAndroidTvProfile, buildBrowserProfile } from '@caramba/ui/adapters/device-profile'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
 import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
@@ -131,7 +132,10 @@ export default function App() {
   // Use configurable URL on Android TV, otherwise use environment default
   const apiBase = isAndroidTV && apiUrl ? apiUrl : (import.meta.env.VITE_API_BASE || '')
   
-  const adapter = useMemo(() => createHttpAdapter(apiBase), [apiBase])
+  const adapter = useMemo(() => {
+    const buildProfile = isAndroidTV ? buildAndroidTvProfile : buildBrowserProfile
+    return createHttpAdapter(apiBase, { buildProfile })
+  }, [apiBase, isAndroidTV])
   const capabilities = useMemo(
     () => isAndroidTV
       ? { ...androidTvCapabilitiesBase, hasNativePlayer }

@@ -11,6 +11,7 @@
  *   - electron-updater
  */
 import { createHttpAdapter, httpCapabilities } from './http.js'
+import { buildDesktopProfile } from './device-profile.js'
 
 /**
  * @param {string} serverUrl - Rails API base URL (e.g. "http://192.168.1.10:3001")
@@ -20,7 +21,13 @@ import { createHttpAdapter, httpCapabilities } from './http.js'
  *   the renderer plays the server's HLS URL directly via hls.js.
  */
 export function createDesktopAdapter(serverUrl, { useEmbedVlc = false } = {}) {
-  const http = createHttpAdapter(serverUrl)
+  // Build a profile matching the active engine. libVLC has broader codec
+  // coverage than the Chromium MSE in the BrowserWindow, so the server
+  // can skip transcode for far more files when the embed engine is on.
+  const buildProfile = () => buildDesktopProfile({
+    engine: useEmbedVlc ? 'libvlc' : 'browser',
+  })
+  const http = createHttpAdapter(serverUrl, { buildProfile })
   const base = serverUrl.replace(/\/+$/, '')
 
   // Resolve a server-relative URL (e.g. "/api/playback/hls/abc.m3u8") into an

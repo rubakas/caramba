@@ -1,91 +1,21 @@
 /**
  * HTTP adapter — calls Rails API via fetch.
  * Used by web app and desktop in server mode.
+ *
+ * Codec/format capabilities are advertised via a DeviceProfile sent on
+ * every POST /api/playback/start. Each client supplies its own profile
+ * builder via the `buildProfile` constructor option. See
+ * ./device-profile.js for the canonical builders.
  */
 
-// Probe the browser's MSE decoder support once. The server uses this to
-// decide whether to direct-play HEVC (fast, high-quality) or force a
-// transcode to H.264 (slower but universally supported). Android WebView
-// in particular often lacks MSE HEVC support even when the device itself
-// can hardware-decode HEVC in other contexts.
-//
-// hevc10 (HEVC Main 10 / 4K HDR) drives the HDR direct-stream path on the
-// server. When true the server skips the 10-bit guard and remuxes the
-// source as-is — keeps true HDR, zero re-encode. We force it to false in
-// Electron because Chromium 130 / Electron 33 MSE accepts the codec string
-// but the decoder stalls on actual 10-bit playback (no frames produced).
-// Real browsers (Safari, Chrome 107+) decode 10-bit HEVC reliably.
-function isElectronRuntime() {
-  if (typeof navigator === 'undefined') return false
-  return /\bElectron\b/.test(navigator.userAgent || '')
-}
+import { buildBrowserProfile } from './device-profile.js'
 
-function detectCodecSupport() {
-  if (typeof MediaSource === 'undefined' || typeof MediaSource.isTypeSupported !== 'function') {
-    return { h264: true, hevc: false, hevc10: false, audio: { aac: true } }
-  }
-  const test = (type) => { try { return MediaSource.isTypeSupported(type) } catch { return false } }
-  const hevc = test('video/mp4; codecs="hvc1.1.6.L120.B0"') || test('video/mp4; codecs="hev1.1.6.L120.B0"')
-  // Main 10 profile (`.2.4.`) at level 5.0 — the smallest level that covers
-  // 4K HDR sources. Suppressed on Electron until the upstream MSE bug is
-  // resolved.
-  const hevc10 = !isElectronRuntime() && (
-    test('video/mp4; codecs="hvc1.2.4.L150.B0"') ||
-    test('video/mp4; codecs="hev1.2.4.L150.B0"')
-  )
-  // Audio codecs the browser MSE can decode in fMP4 segments. Lets the
-  // server skip audio_transcode when the source already matches. AAC is
-  // assumed everywhere; the others vary (Firefox lacks AC3/EAC3, Safari
-  // lacks Opus, etc.). TrueHD/DTS-HD are never in MSE — those always
-  // transcode.
-  const audio = {
-    // AAC is unconditionally true: every MSE-capable browser supports it,
-    // and some return false for the exact `mp4a.40.2` string while playing
-    // it in practice.
-    aac:  true,
-    ac3:  test('audio/mp4; codecs="ac-3"'),
-    eac3: test('audio/mp4; codecs="ec-3"'),
-    flac: test('audio/mp4; codecs="flac"'),
-    mp3:  test('audio/mp4; codecs="mp4a.40.34"') || test('audio/mp4; codecs="mp3"'),
-    opus: test('audio/mp4; codecs="opus"'),
-  }
-  return {
-    h264: test('video/mp4; codecs="avc1.640028"'),
-    hevc,
-    hevc10,
-    audio,
-  }
-}
-
-let _codecSupport = null
-function codecSupport() {
-  if (_codecSupport === null) _codecSupport = detectCodecSupport()
-  return _codecSupport
-}
-
-// What ExoPlayer (Media3) can decode natively. Wider than MSE — when
-// `nativePlayer:true` is set the server skips ffmpeg entirely and just
-// serves the source file via /api/playback/file. ExoPlayer's
-// MatroskaExtractor reads MKV directly, decoding HEVC HDR + AC-3 /
-// E-AC-3 / TrueHD / DTS audio + PGS bitmap / SubRip / ASS subtitles —
-// all the codecs that would otherwise force audio_transcode or full_transcode.
-const NATIVE_PLAYER_CODEC_SUPPORT = Object.freeze({
-  h264: true,
-  hevc: true,
-  hevc10: true,
-  nativePlayer: true,
-  audio: Object.freeze({
-    aac: true, ac3: true, eac3: true, flac: true, mp3: true, opus: true,
-    // ExoPlayer's hardware decoders can usually handle these too;
-    // signaling them lets the server skip audio_transcode for
-    // multi-channel lossless streams.
-    truehd: true, dts: true, dtshd: true,
-  }),
-})
-
-export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNativePlayerCodecs = false } = {}) {
+export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProfile } = {}) {
   const base = baseUrl.replace(/\/+$/, '')
-  const codecSupportForRequests = () => useNativePlayerCodecs ? NATIVE_PLAYER_CODEC_SUPPORT : codecSupport()
+  // Profile is built once and reused. Browsers only — desktop/android
+  // pass their own builder. Cached at adapter construction so MSE probes
+  // run a single time per session.
+  const profile = (buildProfile || buildBrowserProfile)()
 
   // Active playback session ID (set by startPlayback, cleared by stopPlayback)
   let activeSessionId = null
@@ -160,13 +90,12 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { useNative
     playMovie: (slug) => post(`/api/movies/${slug}/play`),
 
     // Playback
-    startPlayback: async (filePath, startTime, prefs, options) => {
+    startPlayback: async (filePath, startTime, prefs, _options) => {
       const result = await post('/api/playback/start', {
         filePath,
         startTime,
         prefs,
-        codecSupport: codecSupportForRequests(),
-        forceTranscode: !!options?.forceTranscode,
+        deviceProfile: profile,
       })
       if (result && result.sessionId) {
         activeSessionId = result.sessionId

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useMemo, useState, useEffect } from 'react'
 import { ApiProvider } from '@caramba/ui/context/ApiContext'
 import { createHttpAdapter, httpCapabilities } from '@caramba/ui/adapters/http'
+import { buildBrowserProfile, buildAndroidTvProfile } from '@caramba/ui/adapters/device-profile'
 import { ToastProvider } from '@caramba/ui/context/ToastContext'
 import { PlayerProvider } from '@caramba/ui/context/PlayerContext'
 import ToastContainer from '@caramba/ui/components/ToastContainer'
@@ -152,13 +153,14 @@ export default function App() {
   )
   
   // Create adapter with current API URL. When the native ExoPlayer plugin
-  // is registered, opt the adapter into the wider codec support set so the
-  // server picks direct_stream for HEVC HDR / AC3 / EAC3 sources instead of
+  // is registered, send the Android TV / ExoPlayer profile so the server
+  // picks direct_stream for HEVC HDR / AC3 / EAC3 sources instead of
   // tonemap-transcoding them — those codecs hit ExoPlayer's hardware
   // decoder directly via the native PlayerActivity.
   const adapter = useMemo(() => {
     console.log('Creating HTTP adapter with base URL:', apiUrl, 'nativePlayer:', hasNativePlayer)
-    const httpAdapter = createHttpAdapter(apiUrl || '', { useNativePlayerCodecs: hasNativePlayer })
+    const buildProfile = hasNativePlayer ? buildAndroidTvProfile : buildBrowserProfile
+    const httpAdapter = createHttpAdapter(apiUrl || '', { buildProfile })
     // Expose adapter as window.api for components that access it directly (e.g., UpdatePrompt)
     if (isNativeApp) {
       window.api = httpAdapter

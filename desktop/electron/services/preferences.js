@@ -2,9 +2,10 @@
 //
 // Replaces the SQLite + sync-config + api-config trio with a single JSON
 // file under `userData/preferences.json`. Keeps the surface narrow: server
-// URL, theme, player engine, downloads folder, force-transcode toggle.
-// Per-show / per-movie playback preferences live on the server now (via
-// /api/playback/preferences).
+// URL, theme, player engine, downloads folder. Per-show / per-movie
+// playback preferences live on the server now (via
+// /api/playback/preferences). Codec/transcode decisions are driven by the
+// DeviceProfile sent on each playback start — no manual toggle.
 
 const fs = require('fs')
 const path = require('path')
@@ -17,7 +18,6 @@ const DEFAULTS = {
   theme: 'dark',
   playerEngine: 'hlsjs',     // 'hlsjs' | 'libvlc'
   downloadsFolder: null,     // null = userData/downloads
-  forceTranscode: false,
 }
 
 let cache = null
