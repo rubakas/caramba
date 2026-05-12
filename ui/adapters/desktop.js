@@ -59,28 +59,49 @@ export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabil
 
       if (useEmbedMpv && (result.hlsUrl || result.streamUrl)) {
         const url = absoluteUrl(result.hlsUrl || result.streamUrl)
+        let mpvOk = false
+        let mpvError = null
+        let mpvResult = null
         try {
-          await window.api.startEmbedMpv(url, { startTime, prefs })
-          return { ...result, hlsUrl: null, streamUrl: null }
+          mpvResult = await window.api.startEmbedMpv(url, { startTime, prefs })
+          // libmpv's start IPC currently returns { ok: true, duration, tracks }
+          // even when it silently fails to load the file (the binding
+          // queues `loadfile` and returns synchronously without waiting
+          // for MPV_EVENT_FILE_LOADED). Detect silent failure by
+          // checking whether mpv produced track or duration info — a
+          // successful load always populates both.
+          const reportsLoad = mpvResult && mpvResult.ok &&
+                              (mpvResult.duration > 0 ||
+                               (Array.isArray(mpvResult.audioStreams) && mpvResult.audioStreams.length > 0))
+          if (reportsLoad) {
+            mpvOk = true
+          } else {
+            mpvError = new Error('libmpv start returned without loading the file (duration=0, tracks=0) — engine stalled silently')
+          }
         } catch (err) {
-          // libmpv was supposed to be available (capability detection
-          // passed at bootstrap) but failed at this specific playback
-          // start. Surface it loudly — a silent degradation to hls.js
-          // would hide a real regression. The renderer still returns
-          // the hls.js URL so playback continues.
-          console.warn('[desktop] libmpv start failed, falling back to hls.js:', err)
-          try {
-            const Sentry = (typeof window !== 'undefined' && window.Sentry) || null
-            Sentry?.addBreadcrumb?.({
-              category: 'desktop-player',
-              level: 'warning',
-              message: 'libmpv_start_failed_fallback_to_hlsjs',
-              data: { error: err?.message, filePath, strategy: result.strategy },
-            })
-          } catch {}
-          // Flag the fallback so the dev playback overlay can show it.
-          try { window.__caramba_engine_fallback__ = true } catch {}
+          mpvError = err
         }
+
+        if (mpvOk) {
+          return { ...result, hlsUrl: null, streamUrl: null }
+        }
+
+        // Fallback to hls.js. Surface loudly — silent degradation hides
+        // libmpv regressions, and we still want a working renderer.
+        console.warn('[desktop] libmpv start failed, falling back to hls.js:', mpvError?.message || mpvError)
+        try {
+          const Sentry = (typeof window !== 'undefined' && window.Sentry) || null
+          Sentry?.addBreadcrumb?.({
+            category: 'desktop-player',
+            level: 'warning',
+            message: 'libmpv_start_failed_fallback_to_hlsjs',
+            data: { error: mpvError?.message, filePath, strategy: result.strategy },
+          })
+        } catch {}
+        try { window.__caramba_engine_fallback__ = true } catch {}
+        // Also stop the mpv handle so it doesn't compete for the
+        // BrowserWindow's NSView while hls.js renders <video>.
+        try { await window.api.stopEmbedMpv() } catch {}
       }
       return result
     },

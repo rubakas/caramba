@@ -41,7 +41,6 @@ const events = new EventEmitter()
 
 let native = null
 let nsViewBuffer = null
-let pollTimer = null
 let lastState = { time: 0, duration: 0, paused: false, playing: false, ended: false }
 let lastTrackKey = ''
 let cachedCapabilities = null
@@ -62,6 +61,141 @@ function isAvailable() {
   try { resolveNativeModule(); return true } catch { return false }
 }
 
+// Composite state derived from individual mpv property pushes. Updated
+// from the native event callback below; emitted as 'state' on change.
+const compState = {
+  time: 0,
+  duration: 0,
+  paused: false,        // mpv "pause" property
+  coreIdle: true,       // mpv "core-idle" — true when nothing's playing
+  pausedForCache: false,
+  eofReached: false,
+  idleActive: true,
+  ended: false,
+}
+
+// Translates the compState into the public {time, duration, paused,
+// playing, ended} shape that the rest of the app expects.
+//
+// `playing` semantics: the file has loaded (duration > 0) and the
+// player isn't paused / at EOF. We deliberately don't gate on
+// `core-idle` — mpv reports core-idle=true while waiting for the VO to
+// produce a frame even when decode is healthy (audio is flowing,
+// time-pos advancing). Gating on core-idle leaves `playing` stuck at
+// false during the brief window between FILE_LOADED and first video
+// frame, blocking PlayerContext from flipping engineReady.
+function projectState() {
+  const playing = compState.duration > 0 && !compState.paused && !compState.eofReached
+  return {
+    time: compState.time,
+    duration: compState.duration,
+    paused: compState.paused,
+    playing,
+    ended: compState.eofReached,
+  }
+}
+
+let prevProjection = projectState()
+
+function emitStateIfChanged() {
+  const s = projectState()
+  if (s.time === prevProjection.time &&
+      s.duration === prevProjection.duration &&
+      s.paused === prevProjection.paused &&
+      s.playing === prevProjection.playing &&
+      s.ended === prevProjection.ended) {
+    return
+  }
+  prevProjection = s
+  lastState = s
+  events.emit('state', s)
+  detectStall(s)
+  // NB: do NOT emit 'ended' on a state change. mpv's `eof-reached`
+  // property flickers true during seeks and brief decoder hiccups —
+  // emitting 'ended' on that prematurely closes the player session.
+  // The authoritative end-of-file signal is MPV_EVENT_END_FILE with
+  // reason=EOF, dispatched separately in the 'endFile' case of
+  // onNativeEvent.
+}
+
+function emitTracksIfChanged() {
+  if (!native) return
+  try {
+    const t = native.mpvGetTracks()
+    const key = JSON.stringify(t)
+    if (key !== lastTrackKey) {
+      lastTrackKey = key
+      events.emit('tracks', t)
+    }
+  } catch {}
+}
+
+// Native event dispatcher. Called on the JS main thread via Napi's
+// ThreadSafeFunction from the pump thread in binding.mm.
+function onNativeEvent(ev) {
+  if (!ev || !ev.type) return
+  switch (ev.type) {
+    case 'property': {
+      switch (ev.name) {
+        case 'time-pos':        if (typeof ev.value === 'number') compState.time = ev.value; break
+        case 'duration':        if (typeof ev.value === 'number') compState.duration = ev.value; break
+        case 'pause':           compState.paused = !!ev.value; break
+        case 'core-idle':       compState.coreIdle = !!ev.value; break
+        case 'paused-for-cache':compState.pausedForCache = !!ev.value; break
+        case 'eof-reached':     compState.eofReached = !!ev.value; break
+        case 'idle-active':     compState.idleActive = !!ev.value; break
+      }
+      emitStateIfChanged()
+      break
+    }
+    case 'fileLoaded': {
+      // Track list is populated by now. Emit tracks once, then unpause
+      // — playback was deferred via pause=yes in MpvPlay so we could
+      // gate frame delivery on the demuxer being fully open. Mirrors
+      // JMP's ApplyPendingTrackSelectionAndPlay (handle.h:197-216).
+      emitTracksIfChanged()
+      try { native.mpvResume() } catch {}
+      break
+    }
+    case 'endFile': {
+      // ev.value is the reason string (eof / stop / quit / error / redirect).
+      // Only EOF means "the file naturally finished" — STOP/QUIT mean the
+      // host explicitly tore the session down (no auto-advance please);
+      // ERROR / REDIRECT are transitional. Emit 'ended' only for EOF.
+      const reason = ev.value || ev.text || ''
+      compState.eofReached = reason === 'eof'
+      compState.idleActive = true
+      emitStateIfChanged()
+      if (reason === 'eof') {
+        events.emit('ended', projectState())
+      } else if (reason.startsWith('error:')) {
+        console.warn('[mpv-embed] end-file error:', reason)
+      }
+      break
+    }
+    case 'log': {
+      // Forward mpv's own logs to the Electron main console. Only
+      // surface info+ to avoid noise; the binding requested "info" level.
+      const prefix = ev.name || 'mpv'
+      const text = ev.value || ev.text || ''
+      // Most of mpv's "info" lines are useful diagnostic context.
+      console.log(`[mpv:${prefix}] ${text}`)
+      break
+    }
+    case 'startFile': {
+      // Reset per-file state so a stale `ended` flag doesn't leak.
+      compState.eofReached = false
+      compState.idleActive = false
+      emitStateIfChanged()
+      break
+    }
+    case 'shutdown': {
+      // mpv terminated. Mostly fired during releaseMpv()'s teardown.
+      break
+    }
+  }
+}
+
 // One-time init. Pass the BrowserWindow's content NSView (Buffer from
 // mainWindow.getNativeWindowHandle()). Also stashes the buffer for
 // later sendBehind() / subview-frame calls.
@@ -71,41 +205,11 @@ function init(nsViewHandle) {
   }
   native = require(resolveNativeModule())
   nsViewBuffer = nsViewHandle
-  native.mpvInit(nsViewHandle)
+  native.mpvInit(nsViewHandle, onNativeEvent)
 }
 
 function ensureInited() {
   if (!native) throw new Error('mpv-embed-player not initialized; call init() with the main window NSView handle first')
-}
-
-function startPolling() {
-  if (pollTimer) return
-  pollTimer = setInterval(() => {
-    if (!native) return
-    const s = native.mpvGetState()
-    const changed =
-      s.time !== lastState.time ||
-      s.paused !== lastState.paused ||
-      s.playing !== lastState.playing ||
-      s.duration !== lastState.duration ||
-      s.ended !== lastState.ended
-    lastState = s
-    if (changed) events.emit('state', s)
-    detectStall(s)
-    if (s.ended) {
-      events.emit('ended', s)
-    }
-    // Track list polling: libmpv populates tracks on FILE_LOADED. Only
-    // emit when the shape changes so we don't spam consumers.
-    try {
-      const t = native.mpvGetTracks()
-      const key = JSON.stringify(t)
-      if (key !== lastTrackKey) {
-        lastTrackKey = key
-        events.emit('tracks', t)
-      }
-    } catch {}
-  }, 250)
 }
 
 function detectStall(s) {
@@ -181,16 +285,24 @@ function describeMediaSource(url) {
   return ctx
 }
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
-}
-
 async function start(urlOrPath, startTime = 0) {
   ensureInited()
   mediaContext = { ...describeMediaSource(urlOrPath), startTime: Number(startTime) || 0 }
   lastForwardWallclockMs = Date.now()
   lastForwardMediaTime = Number(startTime) || 0
   stallActive = false
+  // Reset projection so the next batch of property events triggers an
+  // emit even if the new values happen to match the previous file's.
+  compState.time = Number(startTime) || 0
+  compState.duration = 0
+  compState.paused = false
+  compState.coreIdle = true
+  compState.pausedForCache = false
+  compState.eofReached = false
+  compState.idleActive = true
+  compState.ended = false
+  prevProjection = projectState()
+  lastTrackKey = ''
   try {
     Sentry?.addBreadcrumb?.({
       category: 'mpv-embed',
@@ -213,14 +325,11 @@ async function start(urlOrPath, startTime = 0) {
     else console.warn('[mpv-embed] sendBehind never matched an mpv subview after 6s; subviews =', native.mpvDebugSubviews?.(nsViewBuffer))
   }
   setTimeout(nudge, 100)
-  lastTrackKey = ''
-  startPolling()
 }
 
 async function stop() {
   if (!native) return
   try { native.mpvStop() } catch {}
-  stopPolling()
   mediaContext = null
   stallActive = false
   events.emit('state', { time: 0, duration: 0, paused: false, playing: false, ended: false })

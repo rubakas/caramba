@@ -59,9 +59,11 @@ export default function App() {
 
         // Detect libmpv availability by querying capabilities. A
         // successful response with a non-empty decoder list means the
-        // native module loaded and we should route playback through it.
-        // Failure (native module missing, binding error, no decoders)
-        // means we transparently fall back to hls.js.
+        // native module loaded and the event-pump infrastructure is
+        // wired up — playback will succeed where supported. Failure
+        // (native module missing, binding error, no decoders) means we
+        // transparently fall back to hls.js. The adapter additionally
+        // guards against silent libmpv stalls at playback start.
         let mpvAvailable = false
         if (window.api?.getMpvCapabilities) {
           try {

@@ -38,7 +38,7 @@ class TechProbeService
   # misses by `probe_for` and silently re-probed on next play. Lets us
   # add fields (e.g. video.color_transfer for HDR detection) without
   # having to manually re-scan the library.
-  CACHE_SCHEMA_VERSION = 3
+  CACHE_SCHEMA_VERSION = 4
 
   class << self
     # Live ffprobe call. Returns nil on failure (never raises).
@@ -130,6 +130,10 @@ class TechProbeService
           # level_idc: 40=4.0, 51=5.1). Used by DeviceProfile CodecProfile
           # VideoLevel conditions.
           "level" => video_stream["level"],
+          # Frame rate as ffprobe "num/den" string; consumers (DeviceProfile)
+          # parse it for VideoFramerate conditions.
+          "r_frame_rate" => video_stream["r_frame_rate"],
+          "avg_frame_rate" => video_stream["avg_frame_rate"],
           "pix_fmt" => video_stream["pix_fmt"],
           "color_transfer" => video_stream["color_transfer"],
           "color_primaries" => video_stream["color_primaries"],

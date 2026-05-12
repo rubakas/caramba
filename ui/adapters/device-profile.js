@@ -96,6 +96,47 @@ function hdrSupportedSync() {
   return false
 }
 
+// Smoothness probe — mediaCapabilities.decodingInfo returns
+// `{ supported, smooth, powerEfficient }`. `supported:true && smooth:false`
+// means "the decoder will accept the bitstream but can't keep up at this
+// framerate / bitrate combination on this device" (e.g. some 4K60 HEVC
+// playback judders on integrated GPUs). Jellyfin uses this signal to
+// emit per-codec framerate / bitrate caps rather than letting playback
+// silently stutter.
+//
+// We probe two combinations per codec: 4K30 (baseline) and 4K60 (the
+// usual smoothness break point). If 4K60 isn't smooth but 4K30 is,
+// emit VideoFramerate <= 30 for that codec.
+async function probeSmoothness({ codec, framerate, width = 3840, height = 2160, bitrate = 20_000_000 }) {
+  if (typeof navigator === 'undefined' || !navigator.mediaCapabilities?.decodingInfo) return null
+  try {
+    const info = await navigator.mediaCapabilities.decodingInfo({
+      type: 'media-source',
+      video: { contentType: codec, width, height, bitrate, framerate },
+    })
+    return { supported: !!info.supported, smooth: !!info.smooth, powerEfficient: !!info.powerEfficient }
+  } catch { return null }
+}
+
+const _smoothCache = {}
+let _smoothProbeStarted = false
+function smoothMaxFramerate(codecKey, contentType) {
+  // Returns 60, 30, or null:
+  //   60  → 4K60 probe succeeded and was smooth (no cap needed)
+  //   30  → 4K60 supported but not smooth; cap to 30fps
+  //   null → 4K60 probe failed (omit cap; let isTypeSupported govern)
+  if (codecKey in _smoothCache) return _smoothCache[codecKey]
+  if (!_smoothProbeStarted) {
+    _smoothProbeStarted = true
+    ;(async () => {
+      const at60 = await probeSmoothness({ codec: contentType, framerate: 60 })
+      if (!at60 || !at60.supported) { _smoothCache[codecKey] = null; return }
+      _smoothCache[codecKey] = at60.smooth ? 60 : 30
+    })()
+  }
+  return null
+}
+
 const TRANSCODE_TARGET_CONTAINER = 'mp4'
 const TRANSCODE_TARGET_VIDEO = 'h264'
 const TRANSCODE_TARGET_AUDIO = 'aac'
@@ -205,6 +246,35 @@ export function buildBrowserProfile() {
         { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: String(hevcCap), IsRequired: true },
       ],
     })
+  }
+
+  // Smoothness caps via mediaCapabilities.decodingInfo. When the
+  // browser reports decoder "supported" but not "smooth" at 4K60 for
+  // HEVC or AV1, emit VideoFramerate <= 30 so the server transcodes
+  // high-fps 4K sources rather than letting playback stutter.
+  if (hevcCap > 0) {
+    const cap = smoothMaxFramerate('hevc-4k', `video/mp4; codecs="hvc1.1.6.L${hevcCap}.B0"`)
+    if (cap === 30) {
+      profile.CodecProfiles.push({
+        Type: 'Video',
+        Codec: 'hevc,h265',
+        Conditions: [
+          { Property: 'VideoFramerate', Condition: 'LessThanEqual', Value: '30', IsRequired: false },
+        ],
+      })
+    }
+  }
+  if (av1 || av1Hdr) {
+    const cap = smoothMaxFramerate('av1-4k', 'video/mp4; codecs="av01.0.05M.08"')
+    if (cap === 30) {
+      profile.CodecProfiles.push({
+        Type: 'Video',
+        Codec: 'av1',
+        Conditions: [
+          { Property: 'VideoFramerate', Condition: 'LessThanEqual', Value: '30', IsRequired: false },
+        ],
+      })
+    }
   }
 
   // HDR availability — when the system can't actually display HDR
@@ -397,21 +467,36 @@ function buildLibMpvProfile(capabilities) {
 
 /**
  * Android TV profile. ExoPlayer (Media3) reads MKV via MatroskaExtractor;
- * decodes HEVC HDR + AC-3/E-AC-3/TrueHD/DTS audio + PGS bitmap subs
- * directly. Hardcoded — ExoPlayer's capabilities don't surface via MSE.
+ * decodes HEVC HDR (incl. Dolby Vision profile 5/7/8) + AC-3/E-AC-3/
+ * TrueHD/DTS/DTS-HD audio + PGS bitmap subs directly. Hardcoded —
+ * ExoPlayer's capabilities don't surface via MSE in the WebView.
+ *
+ * Coverage mirrors jellyfin-androidtv's DeviceProfileBuilder: codec and
+ * container lists, plus per-codec HDR conditions matching what
+ * ExoPlayer's renderers handle natively on Android TV hardware.
  */
 export function buildAndroidTvProfile() {
   return {
     Name: 'caramba-android-tv',
     MaxStaticBitrate: 1_000_000_000,
     DirectPlayProfiles: [
-      { Container: 'mkv,webm,mp4,m4v,mov,ts,m2ts,avi',
+      // Expanded container coverage to match Jellyfin AndroidTV's
+      // matroska/mpegts/avi/asf/vob extractors. nut is rare but
+      // supported via the generic FFmpegExtractor.
+      { Container: 'mkv,webm,mp4,m4v,mov,ts,m2ts,avi,asf,vob,nut,3gp,3g2',
         Type: 'Video',
-        VideoCodec: 'h264,hevc,h265,vp9,av1,mpeg4,mpeg2video',
-        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,truehd,dts,dtshd,vorbis,pcm_s16le,pcm_s24le' },
-      { Container: 'mp4,m4v,mp3,flac,ogg,m4a',
+        // h265 alias for hevc; vc1 widely supported on Android TV
+        // chipsets; mpeg/mpeg1video for legacy content.
+        VideoCodec: 'h264,hevc,h265,vp8,vp9,av1,mpeg4,mpeg2video,mpeg1video,mpeg,vc1',
+        // Lossless / passthrough audio (truehd, dts, dts-hd, mlp,
+        // dolby-atmos via E-AC3 JOC) plays via HDMI bitstream when the
+        // attached receiver supports it. AudioOffloadPreferences is
+        // handled by ExoPlayer when wrapped via a native plugin —
+        // declaring the codec here lets the server skip transcode.
+        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,truehd,dts,dtshd,mlp,vorbis,pcm_s16le,pcm_s24le,pcm_s16be,pcm_s24be,pcm_f32le' },
+      { Container: 'mp4,m4v,mp3,flac,ogg,m4a,aac,wav',
         Type: 'Audio',
-        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus' },
+        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,vorbis' },
     ],
     TranscodingProfiles: [
       { Container: TRANSCODE_TARGET_CONTAINER, Type: 'Video', Protocol: 'hls',
@@ -419,15 +504,46 @@ export function buildAndroidTvProfile() {
         MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
     ],
     SubtitleProfiles: [
-      { Format: 'srt', Method: 'External' },
-      { Format: 'subrip', Method: 'External' },
-      { Format: 'ssa', Method: 'External' },
-      { Format: 'ass', Method: 'External' },
-      { Format: 'vtt', Method: 'External' },
-      { Format: 'PGSSUB', Method: 'Embed' },
+      // Text — ExoPlayer renders these via its built-in TextRenderer
+      // (libass-style typography lost; for that, ASS would need
+      // dedicated client-side rendering as discussed in Part 1 F).
+      { Format: 'srt',     Method: 'External' },
+      { Format: 'subrip',  Method: 'External' },
+      { Format: 'ssa',     Method: 'External' },
+      { Format: 'ass',     Method: 'External' },
+      { Format: 'vtt',     Method: 'External' },
+      { Format: 'webvtt',  Method: 'External' },
+      { Format: 'mov_text',Method: 'Embed'    },
+      // Bitmap — PGS/DVD/DVB rendered by Media3's PGS / DVB renderers
+      // (DVD VobSub support landed in Media3 1.4 / ExoPlayer 2.19).
+      { Format: 'PGSSUB',  Method: 'Embed' },
       { Format: 'hdmv_pgs_subtitle', Method: 'Embed' },
+      { Format: 'DVDSUB',  Method: 'Embed' },
+      { Format: 'dvd_subtitle', Method: 'Embed' },
+      { Format: 'DVBSUB',  Method: 'Embed' },
+      { Format: 'dvb_subtitle', Method: 'Embed' },
     ],
-    CodecProfiles: [],
+    CodecProfiles: [
+      // HEVC level cap — Android TV hardware decoders typically max at
+      // Level 5.1 (4K60 10-bit HDR). Sources above that need transcode.
+      // 153 == HEVC level_idc 5.1.
+      {
+        Type: 'Video',
+        Codec: 'hevc,h265',
+        Conditions: [
+          { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: '153', IsRequired: false },
+        ],
+      },
+      // H.264 level cap — Level 5.2 (51) covers 4K30 / 1080p120, beyond
+      // what most ATV chipsets handle in hardware.
+      {
+        Type: 'Video',
+        Codec: 'h264',
+        Conditions: [
+          { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: '51', IsRequired: false },
+        ],
+      },
+    ],
     ContainerProfiles: [],
   }
 }

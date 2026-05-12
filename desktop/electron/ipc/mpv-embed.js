@@ -72,19 +72,47 @@ function register(mainWindow) {
       if (!url) return { error: 'No stream URL' }
       await ensureInit()
       const startTime = opts.startTime || 0
+      // Race: native FILE_LOADED event (resolves with the freshly
+      // populated tracks) vs. a 15s timeout. The previous "poll for
+      // tracks" approach silently returned ok:true with empty tracks
+      // when mpv never actually loaded, masking real bugs. Now we
+      // return a hard error on timeout and let the adapter fall back.
+      const fileLoadedPromise = new Promise((resolve) => {
+        const onState = () => {} // ignored; we wait specifically for tracks
+        const onTracks = (tracks) => {
+          mpvEmbed.events.off('tracks', onTracks)
+          resolve({ kind: 'loaded', tracks })
+        }
+        mpvEmbed.events.once('tracks', onTracks)
+        // Bail-out if mpv ends with an error before FILE_LOADED fires.
+        const onEnded = (s) => {
+          mpvEmbed.events.off('tracks', onTracks)
+          resolve({ kind: 'ended', reason: s })
+        }
+        mpvEmbed.events.once('ended', onEnded)
+      })
+
       await mpvEmbed.start(url, startTime)
       startPowerBlocker()
 
-      // Wait for the track list to settle (libmpv populates it on
-      // MPV_EVENT_FILE_LOADED, shortly after loadfile returns).
-      let tracks = { audio: [], subtitle: [] }
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 100))
-        tracks = mpvEmbed.getTracks()
-        const real = (tracks.audio || []).filter(t => t.id !== -1)
-        if (real.length > 0) break
+      const FILE_LOADED_TIMEOUT_MS = 15_000
+      const outcome = await Promise.race([
+        fileLoadedPromise,
+        new Promise(r => setTimeout(() => r({ kind: 'timeout' }), FILE_LOADED_TIMEOUT_MS)),
+      ])
+
+      if (outcome.kind === 'timeout' || outcome.kind === 'ended') {
+        // libmpv didn't reach FILE_LOADED. Stop the engine so it
+        // doesn't keep a half-open stream while we fall back.
+        try { await mpvEmbed.stop() } catch {}
+        stopPowerBlocker()
+        const why = outcome.kind === 'timeout'
+          ? `FILE_LOADED never fired within ${FILE_LOADED_TIMEOUT_MS}ms`
+          : `playback ended before FILE_LOADED (${outcome.reason?.ended ? 'eof' : 'aborted'})`
+        return { error: `libmpv start failed: ${why}` }
       }
 
+      const tracks = outcome.tracks || { audio: [], subtitle: [] }
       const state = mpvEmbed.getState()
       return {
         ok: true,

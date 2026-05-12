@@ -4,7 +4,7 @@ require "tempfile"
 class TranscoderServiceTest < ActiveSupport::TestCase
   def probe_result(video_codec: "h264", audio_codec: "aac", format_name: "matroska,webm",
                    pix_fmt: "yuv420p", width: 1920, channels: 2, bitrate: nil,
-                   color_transfer: nil, level: nil)
+                   color_transfer: nil, level: nil, r_frame_rate: nil)
     {
       formatName: format_name,
       bitrate: bitrate,
@@ -14,6 +14,7 @@ class TranscoderServiceTest < ActiveSupport::TestCase
         height: 1080,
         pix_fmt: pix_fmt,
         level: level,
+        r_frame_rate: r_frame_rate,
         color_transfer: color_transfer
       },
       audioStreams: [ { index: 1, codec: audio_codec, channels: channels, language: "eng" } ],
@@ -239,6 +240,57 @@ class TranscoderServiceTest < ActiveSupport::TestCase
         probe_result(video_codec: "hevc", audio_codec: "aac",
                      format_name: "mov,mp4,m4a", level: nil),
         1, nil, browser_profile_with_hevc_level_cap(150)
+      )
+  end
+
+  # ── VideoFramerate CodecProfile (smoothness cap) ──────────────────
+
+  def browser_profile_with_hevc_framerate_cap(max_fps)
+    profile = browser_profile
+    profile["CodecProfiles"] << {
+      "Type" => "Video",
+      "Codec" => "hevc,h265",
+      "Conditions" => [
+        { "Property" => "VideoFramerate", "Condition" => "LessThanEqual",
+          "Value" => max_fps.to_s, "IsRequired" => true }
+      ]
+    }
+    profile
+  end
+
+  test "HEVC at 60fps with profile capped at 30fps → full_transcode" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", r_frame_rate: "60000/1001"),
+        1, nil, browser_profile_with_hevc_framerate_cap(30)
+      )
+  end
+
+  test "HEVC at 24fps with profile capped at 30fps → direct_play" do
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", r_frame_rate: "24000/1001"),
+        1, nil, browser_profile_with_hevc_framerate_cap(30)
+      )
+  end
+
+  test "HEVC missing framerate + IsRequired cap → full_transcode (fail-closed)" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", r_frame_rate: nil),
+        1, nil, browser_profile_with_hevc_framerate_cap(30)
+      )
+  end
+
+  test "HEVC at 30fps integer rate (no fraction) → direct_play" do
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", r_frame_rate: "30/1"),
+        1, nil, browser_profile_with_hevc_framerate_cap(30)
       )
   end
 

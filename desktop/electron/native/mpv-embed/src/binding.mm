@@ -36,8 +36,163 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 static mpv_handle* gMpv = nullptr;
+
+// ── Event pump infrastructure ─────────────────────────────────────
+//
+// libmpv processes commands (loadfile, seek, set property) on its own
+// internal threads but REQUIRES the host application to drain its event
+// queue via mpv_wait_event. Without that drain, mpv's state machine
+// stalls — FILE_LOADED never fires, property change events pile up,
+// and commands appear to silently fail. JMP's design (referenced in
+// jellyfin-desktop/src/main.cpp::mpv_digest_thread) uses a dedicated
+// thread blocking on mpv_wait_event(-1) and dispatches events to the
+// UI via the platform's main-thread queue.
+//
+// Here we marshal events back to JS via Napi::ThreadSafeFunction so the
+// renderer / Electron main JS layer can drive UI state from real events
+// instead of polling. The pump thread is started in mpvInit after
+// mpv_initialize and joined in releaseMpv before mpv_terminate_destroy.
+static Napi::ThreadSafeFunction gEventTsfn;
+static std::thread gEventThread;
+static std::atomic<bool> gEventStop{false};
+
+// reply_userdata values for mpv_observe_property — these surface as
+// `data->reply_userdata` on MPV_EVENT_PROPERTY_CHANGE so the dispatcher
+// can map back to a property name without strcmp on every event.
+enum ObservedProp : uint64_t {
+    OBS_PAUSE = 1,
+    OBS_TIME_POS,
+    OBS_DURATION,
+    OBS_CORE_IDLE,
+    OBS_PAUSED_FOR_CACHE,
+    OBS_SEEKING,
+    OBS_EOF_REACHED,
+    OBS_IDLE_ACTIVE,
+};
+
+// Event payload marshalled from pump thread → JS thread via tsfn.
+struct EventMsg {
+    std::string type;        // 'fileLoaded' | 'endFile' | 'property' | 'log' | 'shutdown' | 'startFile'
+    std::string name;        // property name / log prefix
+    std::string strValue;    // log text / end-file reason / property string value
+    double      numValue;    // property numeric value
+    bool        boolValue;   // property flag value
+    bool        hasNum;
+    bool        hasBool;
+    bool        hasStr;
+};
+
+static void dispatchToJs(EventMsg* msg) {
+    if (!gEventTsfn) { delete msg; return; }
+    auto status = gEventTsfn.BlockingCall(msg, [](Napi::Env env, Napi::Function cb, EventMsg* m) {
+        Napi::Object o = Napi::Object::New(env);
+        o.Set("type", Napi::String::New(env, m->type));
+        if (!m->name.empty())     o.Set("name",  Napi::String::New(env, m->name));
+        if (m->hasNum)            o.Set("value", Napi::Number::New(env, m->numValue));
+        if (m->hasBool)           o.Set("value", Napi::Boolean::New(env, m->boolValue));
+        if (m->hasStr)            o.Set("value", Napi::String::New(env, m->strValue));
+        if (!m->strValue.empty() && !m->hasStr)
+                                  o.Set("text",  Napi::String::New(env, m->strValue));
+        cb.Call({ o });
+        delete m;
+    });
+    if (status != napi_ok) {
+        delete msg;
+    }
+}
+
+static void eventThreadMain() {
+    while (!gEventStop.load(std::memory_order_relaxed)) {
+        if (!gMpv) break;
+        // -1 = block forever until an event arrives. Returns very fast
+        // once events queue up (mpv_terminate_destroy publishes a
+        // SHUTDOWN event that wakes us cleanly).
+        mpv_event* ev = mpv_wait_event(gMpv, -1);
+        if (!ev || ev->event_id == MPV_EVENT_NONE) continue;
+
+        switch (ev->event_id) {
+        case MPV_EVENT_SHUTDOWN: {
+            auto* m = new EventMsg();
+            m->type = "shutdown";
+            dispatchToJs(m);
+            return;
+        }
+        case MPV_EVENT_FILE_LOADED: {
+            auto* m = new EventMsg();
+            m->type = "fileLoaded";
+            dispatchToJs(m);
+            break;
+        }
+        case MPV_EVENT_START_FILE: {
+            auto* m = new EventMsg();
+            m->type = "startFile";
+            dispatchToJs(m);
+            break;
+        }
+        case MPV_EVENT_END_FILE: {
+            auto* d = static_cast<mpv_event_end_file*>(ev->data);
+            auto* m = new EventMsg();
+            m->type = "endFile";
+            // Translate mpv_end_file_reason → human-readable
+            switch (d->reason) {
+                case MPV_END_FILE_REASON_EOF:      m->strValue = "eof"; break;
+                case MPV_END_FILE_REASON_STOP:     m->strValue = "stop"; break;
+                case MPV_END_FILE_REASON_QUIT:     m->strValue = "quit"; break;
+                case MPV_END_FILE_REASON_ERROR:    m->strValue = std::string("error: ") + mpv_error_string(d->error); break;
+                case MPV_END_FILE_REASON_REDIRECT: m->strValue = "redirect"; break;
+                default:                           m->strValue = "unknown"; break;
+            }
+            dispatchToJs(m);
+            break;
+        }
+        case MPV_EVENT_LOG_MESSAGE: {
+            auto* d = static_cast<mpv_event_log_message*>(ev->data);
+            auto* m = new EventMsg();
+            m->type = "log";
+            m->name = d->prefix ? d->prefix : "";
+            // strip trailing newline mpv adds
+            std::string text = d->text ? d->text : "";
+            if (!text.empty() && text.back() == '\n') text.pop_back();
+            m->strValue = text;
+            dispatchToJs(m);
+            break;
+        }
+        case MPV_EVENT_PROPERTY_CHANGE: {
+            auto* p = static_cast<mpv_event_property*>(ev->data);
+            auto* m = new EventMsg();
+            m->type = "property";
+            switch (ev->reply_userdata) {
+                case OBS_PAUSE:            m->name = "pause"; break;
+                case OBS_TIME_POS:         m->name = "time-pos"; break;
+                case OBS_DURATION:         m->name = "duration"; break;
+                case OBS_CORE_IDLE:        m->name = "core-idle"; break;
+                case OBS_PAUSED_FOR_CACHE: m->name = "paused-for-cache"; break;
+                case OBS_SEEKING:          m->name = "seeking"; break;
+                case OBS_EOF_REACHED:      m->name = "eof-reached"; break;
+                case OBS_IDLE_ACTIVE:      m->name = "idle-active"; break;
+                default:                   delete m; m = nullptr; break;
+            }
+            if (!m) break;
+            if (p->format == MPV_FORMAT_DOUBLE && p->data) {
+                m->numValue = *(double*)p->data; m->hasNum = true;
+            } else if (p->format == MPV_FORMAT_FLAG && p->data) {
+                m->boolValue = !!*(int*)p->data; m->hasBool = true;
+            }
+            // (MPV_FORMAT_NONE means property is unavailable — emit anyway
+            // so JS can track unavailable state.)
+            dispatchToJs(m);
+            break;
+        }
+        default:
+            // Many event kinds we don't care about; ignore.
+            break;
+        }
+    }
+}
 
 // Pull NSView* out of the Buffer Electron returns from
 // BrowserWindow.getNativeWindowHandle(). On macOS arm64 + x64 this is an
@@ -50,22 +205,55 @@ static NSView* nsviewFromBuffer(const Napi::Buffer<uint8_t>& buf) {
 }
 
 static void releaseMpv() {
+    // Stop the event thread first so it doesn't poll a soon-to-be-freed
+    // handle. mpv_terminate_destroy posts MPV_EVENT_SHUTDOWN which wakes
+    // mpv_wait_event with a return that lets the thread exit cleanly,
+    // but as a belt-and-suspenders we set the stop flag too.
+    gEventStop.store(true, std::memory_order_relaxed);
+    if (gMpv) {
+        // Wake the pump out of wait_event immediately. mpv_wakeup is the
+        // documented way to make wait_event return without an actual
+        // event (returns MPV_EVENT_NONE which our loop skips).
+        mpv_wakeup(gMpv);
+    }
+    if (gEventThread.joinable()) {
+        gEventThread.join();
+    }
+    if (gEventTsfn) {
+        gEventTsfn.Release();
+        gEventTsfn = Napi::ThreadSafeFunction();
+    }
     if (gMpv) {
         mpv_terminate_destroy(gMpv);
         gMpv = nullptr;
     }
+    gEventStop.store(false, std::memory_order_relaxed);
 }
 
-// mpvInit(nsViewBuffer) — must be called once before mpvPlay.
+// Empty wakeup callback. Setting one signals to libmpv that an event
+// consumer exists; the pump thread does the actual draining. Without
+// the callback registered, libmpv may take internal shortcuts that
+// silently swallow events.
+static void onMpvWakeup(void*) { /* no-op; pump thread reads events */ }
+
+// mpvInit(nsViewBuffer, eventCallback) — must be called once before mpvPlay.
 //
-// Sets default options matched to embed-in-Electron usage (no OSD, no
-// keyboard/mouse input, 5s cache to absorb NAS hiccups), then binds the
-// "wid" option to the NSView pointer so mpv's video surface lives
-// inside the BrowserWindow's native view tree.
+// Configures libmpv for headless-Electron embed (no OSD, no keyboard /
+// mouse input, modest cache), binds the "wid" option to the NSView
+// pointer so mpv's video surface lives inside the BrowserWindow's view
+// tree, registers a wakeup callback + property observations BEFORE
+// mpv_initialize (JMP order, see jellyfin-desktop/src/main.cpp:742-753),
+// and starts an event-pump thread that drains mpv's queue and forwards
+// each event to the supplied JS callback.
 static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 1 || !info[0].IsBuffer()) {
-        Napi::TypeError::New(env, "mpvInit(nsView: Buffer)")
+        Napi::TypeError::New(env, "mpvInit(nsView: Buffer, eventCb: Function)")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    if (info.Length() < 2 || !info[1].IsFunction()) {
+        Napi::TypeError::New(env, "mpvInit requires an event callback function")
             .ThrowAsJavaScriptException();
         return env.Null();
     }
@@ -93,12 +281,21 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
     mpv_set_option_string(gMpv, "input-cursor", "no");
     mpv_set_option_string(gMpv, "input-keyboard", "no");
 
-    // Power-save / window: leave to the host. Caramba's vlc IPC starts a
-    // 'prevent-display-sleep' blocker around playback; mpv shouldn't try
-    // to manage that itself. force-window=no because we embed via wid.
+    // Power-save / window:
+    //   - stop-screensaver=no: host handles power blocking
+    //   - force-window=no: with wid set, mpv attaches its VO subview
+    //     to that NSView on first frame. force-window=yes makes mpv
+    //     try to initialize the VO eagerly at init time, before
+    //     Chromium has finished setting up the BrowserWindow's layer-
+    //     backed contentView — fails with "Error opening/initializing
+    //     the VO window".
+    //   - idle=yes: keep the mpv core alive between files so log
+    //     messages & error events surface even if loadfile fails
+    //     before producing any output. The host tears mpv down
+    //     explicitly via stop().
     mpv_set_option_string(gMpv, "stop-screensaver", "no");
     mpv_set_option_string(gMpv, "force-window", "no");
-    mpv_set_option_string(gMpv, "idle", "no");
+    mpv_set_option_string(gMpv, "idle", "yes");
 
     // Track selection is owned by Caramba (UI picks, server pre-selects
     // via select_audio_track / select_subtitle_track). Disable mpv's
@@ -125,6 +322,20 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
         fprintf(stderr, "[mpv-embed] set wid failed: %s\n", mpv_error_string(err));
     }
 
+    // Register wakeup callback + property observations BEFORE
+    // mpv_initialize (JMP main.cpp:742-748). The callback's presence
+    // changes libmpv's queueing behavior; the observations cause
+    // initial property values to arrive as events through the pump.
+    mpv_set_wakeup_callback(gMpv, &onMpvWakeup, nullptr);
+    mpv_observe_property(gMpv, OBS_PAUSE,            "pause",            MPV_FORMAT_FLAG);
+    mpv_observe_property(gMpv, OBS_TIME_POS,         "time-pos",         MPV_FORMAT_DOUBLE);
+    mpv_observe_property(gMpv, OBS_DURATION,         "duration",         MPV_FORMAT_DOUBLE);
+    mpv_observe_property(gMpv, OBS_CORE_IDLE,        "core-idle",        MPV_FORMAT_FLAG);
+    mpv_observe_property(gMpv, OBS_PAUSED_FOR_CACHE, "paused-for-cache", MPV_FORMAT_FLAG);
+    mpv_observe_property(gMpv, OBS_SEEKING,          "seeking",          MPV_FORMAT_FLAG);
+    mpv_observe_property(gMpv, OBS_EOF_REACHED,      "eof-reached",      MPV_FORMAT_FLAG);
+    mpv_observe_property(gMpv, OBS_IDLE_ACTIVE,      "idle-active",      MPV_FORMAT_FLAG);
+
     err = mpv_initialize(gMpv);
     if (err < 0) {
         std::string msg = std::string("mpv_initialize failed: ") + mpv_error_string(err);
@@ -132,6 +343,23 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
         Napi::Error::New(env, msg).ThrowAsJavaScriptException();
         return env.Null();
     }
+
+    // Drain mpv's own diagnostics through MPV_EVENT_LOG_MESSAGE. "v"
+    // (verbose) is JMP's default — chatty but invaluable when something
+    // silently fails. Could be tuned to "info" if log volume bothers.
+    mpv_request_log_messages(gMpv, "info");
+
+    // Spin up the JS-bound event pump. ThreadSafeFunction lets the
+    // pump thread (any thread) call back into JS on the main thread.
+    gEventStop.store(false, std::memory_order_relaxed);
+    gEventTsfn = Napi::ThreadSafeFunction::New(
+        env,
+        info[1].As<Napi::Function>(),
+        "mpv-event",
+        0,    // unlimited queue
+        1     // single producer thread
+    );
+    gEventThread = std::thread(eventThreadMain);
 
     return Napi::Boolean::New(env, true);
 }
@@ -160,7 +388,16 @@ static Napi::Value MpvPlay(const Napi::CallbackInfo& info) {
     }
 
     // loadfile <url> replace <0|-1> <options-string>
-    std::string optStr = "start=" + std::to_string(startTime) + ",pause=no";
+    //
+    // Load PAUSED. JMP's `LoadFile` (jellyfin-desktop/src/mpv/handle.h:161-216)
+    // uses the same pattern: load paused, await FILE_LOADED on the event
+    // pump, apply any deferred track-selection writes, then write
+    // pause=false. JS callers `start()` resolve on the FILE_LOADED event
+    // and unpause from there. Loading unpaused (`pause=no`) is the
+    // documented mpv default but bypasses the chance to wait for tracks
+    // to be enumerated before frames start flowing — JMP avoids it for
+    // a reason and so should we.
+    std::string optStr = "start=" + std::to_string(startTime) + ",pause=yes";
     const char* cmd[] = {
         "loadfile", url.c_str(), "replace", "-1", optStr.c_str(), nullptr
     };

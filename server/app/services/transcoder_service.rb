@@ -75,6 +75,13 @@ class TranscoderService
           height: video_stream["height"],
           profile: video_stream["profile"],
           level: video_stream["level"],
+          # Frame rate as a "num/den" fraction string from ffprobe.
+          # device_profile.rb#property_value parses it for VideoFramerate
+          # CodecProfile evaluation. Avg + r form are sometimes both
+          # populated; r_frame_rate is the more reliable "stream's
+          # advertised rate" (avg counts only realized frames).
+          r_frame_rate: video_stream["r_frame_rate"],
+          avg_frame_rate: video_stream["avg_frame_rate"],
           pix_fmt: video_stream["pix_fmt"],
           color_transfer: video_stream["color_transfer"],
           color_primaries: video_stream["color_primaries"],

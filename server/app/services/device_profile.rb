@@ -259,6 +259,16 @@ class DeviceProfile
     end
   end
 
+  # ffprobe rate strings are formal fractions: "30000/1001" → 29.97,
+  # "25/1" → 25, "0/0" → nil (unknown). Bare integers also accepted.
+  def parse_framerate(raw)
+    return nil if raw.blank?
+    num, den = raw.to_s.split("/").map(&:to_f)
+    return nil if num.nil? || num <= 0
+    return num if den.nil? || den == 0
+    (num / den).round(3)
+  end
+
   def property_value(property, probe_result)
     case property
     when "VideoBitDepth"
@@ -271,6 +281,14 @@ class DeviceProfile
       # integer in their CodecProfile VideoLevel conditions (mirrors the
       # `.LNNN` suffix from the canPlayType probe).
       probe_result.dig(:video, :level)
+    when "VideoFramerate"
+      # Parse ffprobe's "num/den" fraction strings into a float. r_frame_rate
+      # is the stream's nominal rate; falls back to avg_frame_rate when
+      # absent (some VFR sources). Returns nil when both are missing or
+      # invalid so IsRequired conditions fail closed.
+      parse_framerate(
+        probe_result.dig(:video, :r_frame_rate) || probe_result.dig(:video, :avg_frame_rate),
+      )
     when "VideoRangeType"
       # Stringly-typed HDR detection: PQ or HLG transfer ⇒ "HDR"; anything
       # else ⇒ "SDR". Clients without HDR display capability emit
