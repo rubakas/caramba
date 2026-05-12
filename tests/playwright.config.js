@@ -43,5 +43,15 @@ module.exports = defineConfig({
       name: 'electron',
       testDir: './specs/electron',
     },
+    {
+      name: 'safari',
+      testDir: './specs/web',
+      grep: /@safari/,
+      use: {
+        ...devices['Desktop Safari'],
+        baseURL: 'http://localhost:3000',
+        headless: false,
+      },
+    },
   ],
 })

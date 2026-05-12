@@ -140,13 +140,28 @@ class DeviceProfile
   def transcode_target
     entry = transcoding_profiles.find { |p| (p["Type"] || p[:Type]) == "Video" }
     return nil unless entry
-    {
-      container: (entry["Container"] || entry[:Container] || "mp4").to_s,
-      video_codec: csv_value(entry, "VideoCodec").first || "h264",
-      audio_codec: csv_value(entry, "AudioCodec").first || "aac",
-      max_audio_channels: (entry["MaxAudioChannels"] || entry[:MaxAudioChannels]).to_i,
-      protocol: (entry["Protocol"] || entry[:Protocol] || "hls").to_s
-    }
+    profile_to_target(entry)
+  end
+
+  # Pick the TranscodingProfile whose VideoCodec list contains the
+  # source's video codec — used when we want to *copy* the source video
+  # stream into the HLS output instead of re-encoding. Lets the server
+  # honor Jellyfin's two-profile pattern: { Container: 'ts',
+  # VideoCodec: 'h264' } for H.264 copy, { Container: 'mp4',
+  # VideoCodec: 'h264,hevc,av1' } for codecs that need fMP4. When no
+  # profile lists the source codec (or the client only sent one
+  # profile), we fall back to `transcode_target` — the server will
+  # re-encode to that profile's VideoCodec, which is the
+  # full_transcode path. Source: jellyfin-web's browserDeviceProfile.js
+  # emits both entries side-by-side and DynamicHlsController.cs picks
+  # `segmentContainer` from whichever the source matches.
+  def transcode_target_for(source_video_codec)
+    return transcode_target if source_video_codec.blank?
+    matching = transcoding_profiles.find do |p|
+      (p["Type"] || p[:Type]) == "Video" &&
+        csv_includes_codec?(p, "VideoCodec", source_video_codec)
+    end
+    matching ? profile_to_target(matching) : transcode_target
   end
 
   # ── Section accessors ───────────────────────────────────────────────
@@ -168,6 +183,16 @@ class DeviceProfile
   end
 
   private
+
+  def profile_to_target(entry)
+    {
+      container: (entry["Container"] || entry[:Container] || "mp4").to_s,
+      video_codec: csv_value(entry, "VideoCodec").first || "h264",
+      audio_codec: csv_value(entry, "AudioCodec").first || "aac",
+      max_audio_channels: (entry["MaxAudioChannels"] || entry[:MaxAudioChannels]).to_i,
+      protocol: (entry["Protocol"] || entry[:Protocol] || "hls").to_s
+    }
+  end
 
   def direct_play_video_entries
     direct_play_profiles.select { |p| (p["Type"] || p[:Type]) == "Video" }

@@ -51,7 +51,7 @@ Rails.application.routes.draw do
     # audio).
     get "playback/hls/:session_id/playlist.m3u8", to: "playback#hls_playlist", as: :playback_hls_playlist
     get "playback/hls/:session_id/:asset", to: "playback#hls_asset", as: :playback_hls_asset,
-        constraints: { asset: /(?:init\.mp4|init_[A-Za-z0-9]+\.mp4|segment_\d+\.m4s|[A-Za-z0-9]+_segment_\d+\.m4s|[A-Za-z0-9]+_playlist\.m3u8)/ }
+        constraints: { asset: /(?:init\.mp4|init_[A-Za-z0-9]+\.mp4|segment_\d+\.(?:m4s|ts)|[A-Za-z0-9]+_segment_\d+\.(?:m4s|ts)|[A-Za-z0-9]+_playlist\.m3u8)/ }
 
     # direct_play file stream (card #55): served as-is with HTTP Range support
     get "playback/file/:session_id", to: "playback#file", as: :playback_file

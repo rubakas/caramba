@@ -401,43 +401,22 @@ class Api::PlaybackController < Api::BaseController
   # ── HLS endpoints ──────────────────────────────────────────────────
 
   # GET /api/playback/hls/:session_id/playlist.m3u8
+  #
+  # Returns a complete VOD playlist (PLAYLIST-TYPE:VOD + every EXTINF
+  # + EXT-X-ENDLIST) generated from session metadata, not from what
+  # ffmpeg has written so far. Safari's native HLS player needs a
+  # terminated VOD playlist to advance currentTime — see the doc on
+  # TranscoderService#generate_vod_playlist.
   def hls_playlist
     session_id = params[:session_id]
 
     return head :not_found unless TranscoderService.active?(session_id)
 
-    # Wait up to 12 seconds for ffmpeg to create the playlist. Cold start
-    # for a 4K HEVC HDR source under tonemap + audio_transcode (TrueHD →
-    # AAC) commonly takes 6-10 seconds before the first segment + manifest
-    # are written. 3 seconds was short enough that hls.js bailed before
-    # ffmpeg had finished warming up — the user saw "first play hangs;
-    # switch audio fixes it" because the second ffmpeg startup hit warm
-    # filesystem + library caches.
-    #
-    # Re-resolve the path each tick — in multi-rendition mode ffmpeg
-    # writes `master.m3u8` while in single-rendition mode it writes
-    # `playlist.m3u8`. `hls_playlist_path` prefers master if it exists,
-    # so the loop transparently picks up whichever ffmpeg produces.
-    playlist_path = nil
-    40.times do
-      playlist_path = TranscoderService.hls_playlist_path(session_id)
-      break if playlist_path && File.exist?(playlist_path)
-      sleep 0.3
-    end
-
-    return render(plain: "Session not in HLS mode", status: :bad_request) unless playlist_path
-    return render(plain: "Playlist not ready", status: :service_unavailable) unless File.exist?(playlist_path)
-
-    playlist = File.read(playlist_path)
-
-    # If ffmpeg exited but the playlist is missing the ENDLIST tag, append it
-    # so clients stop polling.
-    unless TranscoderService.ffmpeg_running? || playlist.include?("#EXT-X-ENDLIST")
-      playlist = playlist.strip + "\n#EXT-X-ENDLIST\n"
-    end
+    playlist = TranscoderService.generate_vod_playlist(session_id)
+    return render(plain: "Session has no duration", status: :bad_request) unless playlist
 
     response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
-    response.headers["Cache-Control"] = "max-age=1"
+    response.headers["Cache-Control"] = "no-store"
     render plain: playlist
   end
 
@@ -452,10 +431,14 @@ class Api::PlaybackController < Api::BaseController
     asset_path = TranscoderService.hls_asset_path(session_id, asset_name)
     return head :bad_request unless asset_path
 
-    # Wait up to 8s for ffmpeg to finish writing the segment. Longer than the
-    # 6-second segment duration, so we respond successfully even when encoding
-    # briefly lags behind wall-clock playback.
-    40.times do
+    # Long-poll for the segment. Pre-generated VOD playlist lists every
+    # segment the session will ever produce, but ffmpeg encodes them
+    # sequentially — so a player requesting segment_N when ffmpeg is on
+    # segment_M<N has to wait for M..N to be written. 18s window stays
+    # inside hls.js's default fragLoadingTimeOut (20s) so a slow encode
+    # doesn't trip a retry storm. Under-realtime ffmpeg is its own
+    # separate problem (Sentry breadcrumb from monitor_ffmpeg_stderr).
+    90.times do
       break if File.exist?(asset_path)
       sleep 0.2
     end
@@ -468,10 +451,16 @@ class Api::PlaybackController < Api::BaseController
     # hls.js's PTS tracking.
     response.headers["Cache-Control"] = "no-store"
 
-    # Variant playlists (`<name>_playlist.m3u8`) need the HLS content type
-    # so hls.js parses them as playlists, not opaque MP4 blobs. Segments
-    # (`*.m4s`) and init segments (`init*.mp4`) stay as video/mp4.
-    content_type = asset_name.end_with?(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4"
+    # Variant playlists (`<name>_playlist.m3u8`) need the HLS content type.
+    # MPEG-TS segments (`*.ts`) need `video/mp2t`. fMP4 segments (`*.m4s`)
+    # and init segments (`init*.mp4`) use `video/mp4`.
+    content_type = if asset_name.end_with?(".m3u8")
+                     "application/vnd.apple.mpegurl"
+    elsif asset_name.end_with?(".ts")
+                     "video/mp2t"
+    else
+                     "video/mp4"
+    end
     send_file asset_path,
       type: content_type,
       disposition: "inline"

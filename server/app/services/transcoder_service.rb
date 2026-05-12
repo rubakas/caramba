@@ -208,28 +208,66 @@ class TranscoderService
 
     # ── HLS file accessors ────────────────────────────────────────────
 
-    # Returns the manifest the client should load first — master.m3u8 if
-    # a multi-rendition ladder was emitted (ffmpeg created it via
-    # -master_pl_name), else the single-rendition playlist.m3u8. The
-    # caller (controller) doesn't need to know about ladders — it asks
-    # for "the playlist" and gets whatever ffmpeg produced.
-    def hls_playlist_path(session_id)
+    # Generate a Jellyfin-style VOD playlist upfront. Pattern from
+    # jellyfin/src/Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs#CreateMainPlaylist:
+    # write #EXT-X-PLAYLIST-TYPE:VOD with every #EXTINF entry the
+    # session will ever produce and an immediate #EXT-X-ENDLIST.
+    # ffmpeg still encodes segments lazily; the segment endpoint waits
+    # for each file to exist. Safari requires a known, terminated VOD
+    # timeline to compute duration and let currentTime advance —
+    # without ENDLIST it treats the stream as live, locks currentTime
+    # at 0, and ignores #EXTINF for duration. hls.js doesn't care
+    # either way so we serve the same playlist for both clients.
+    SEGMENT_LENGTH = 6.0
+
+    def generate_vod_playlist(session_id)
       return nil unless @session && @session[:id] == session_id
-      master = File.join(@session[:hls_dir], "master.m3u8")
-      return master if File.exist?(master)
-      File.join(@session[:hls_dir], "playlist.m3u8")
+      total = @session[:duration].to_f
+      seek  = @session[:seek_time].to_f
+      remaining = [ total - seek, 0.0 ].max
+      return nil if remaining <= 0
+
+      # Match the segment container the ffmpeg session is actually
+      # writing. fmp4 sessions also need an #EXT-X-MAP entry pointing
+      # at the init segment ffmpeg emits via -hls_fmp4_init_filename.
+      container = (@session[:hls_container] || "ts").to_s
+      use_fmp4 = container == "mp4"
+      seg_ext = use_fmp4 ? "m4s" : "ts"
+
+      whole_count = (remaining / SEGMENT_LENGTH).floor
+      tail = remaining - whole_count * SEGMENT_LENGTH
+      durations = Array.new(whole_count) { SEGMENT_LENGTH }
+      durations << tail if tail > 0.001
+
+      lines = []
+      lines << "#EXTM3U"
+      lines << "#EXT-X-PLAYLIST-TYPE:VOD"
+      # HLS protocol version: 3 for ts, 7 for fmp4 (mirrors
+      # jellyfin/src/Jellyfin.MediaEncoding.Hls/Playlist/
+      # DynamicHlsPlaylistGenerator.cs#CreateMainPlaylist).
+      lines << "#EXT-X-VERSION:#{use_fmp4 ? 7 : 3}"
+      lines << "#EXT-X-TARGETDURATION:#{SEGMENT_LENGTH.ceil}"
+      lines << "#EXT-X-MEDIA-SEQUENCE:0"
+      lines << "#EXT-X-INDEPENDENT-SEGMENTS"
+      lines << "#EXT-X-MAP:URI=\"init.mp4\"" if use_fmp4
+      durations.each_with_index do |d, i|
+        lines << format("#EXTINF:%.6f,", d)
+        lines << "segment_#{i}.#{seg_ext}"
+      end
+      lines << "#EXT-X-ENDLIST"
+      lines.join("\n") + "\n"
     end
 
-    # Serve init segment, media segments, or variant playlists. Variant
-    # naming patterns: `<name>_playlist.m3u8`, `<name>_segment_N.m4s`,
-    # `init_<name>.mp4`. The name is one of the variant labels we set in
-    # var_stream_map (1080p / 720p / 480p / audio). Sanitised to prevent
-    # directory traversal.
+    # Serve init segment, media segments, or variant playlists. Segment
+    # extensions: `.ts` (mpegts, the default) or `.m4s` (fmp4, kept for
+    # backwards-compat in case someone re-enables fmp4 path). Variant
+    # naming patterns: `<name>_playlist.m3u8`, `<name>_segment_N.<ext>`,
+    # `init_<name>.mp4`. Sanitised to prevent directory traversal.
     HLS_ASSET_PATTERNS = [
       /\Ainit\.mp4\z/,
-      /\Asegment_\d+\.m4s\z/,
+      /\Asegment_\d+\.(?:m4s|ts)\z/,
       /\Ainit_[A-Za-z0-9]+\.mp4\z/,
-      /\A[A-Za-z0-9]+_segment_\d+\.m4s\z/,
+      /\A[A-Za-z0-9]+_segment_\d+\.(?:m4s|ts)\z/,
       /\A[A-Za-z0-9]+_playlist\.m3u8\z/
     ].freeze
 
@@ -380,16 +418,6 @@ class TranscoderService
       @session && @session[:id] == session_id
     end
 
-    def ffmpeg_running?
-      return false unless @ffmpeg_pid
-      begin
-        Process.kill(0, @ffmpeg_pid)
-        true
-      rescue Errno::ESRCH
-        false
-      end
-    end
-
     def session_info(session_id)
       return nil unless @session && @session[:id] == session_id
       @session
@@ -494,10 +522,31 @@ class TranscoderService
       video_ok = profile.video_codec_supported?(video_codec, probe_result)
       audio_ok = audio_codec && profile.audio_codec_supported?(audio_codec)
 
-      return :direct_stream    if video_ok && audio_ok
-      return :audio_transcode  if video_ok && !audio_ok
+      candidate = if video_ok && audio_ok then :direct_stream
+                  elsif video_ok && !audio_ok then :audio_transcode
+                  else :full_transcode
+                  end
 
-      :full_transcode
+      # Copying non-H.264 video into our HLS segments is currently
+      # unreliable in Safari's native HLS player. Symptoms vary by
+      # source: HDR HEVC throws MEDIA_ERR_DECODE (Apple HLS spec
+      # requires master-playlist VIDEO-RANGE=PQ for HDR which we
+      # don't emit on single-variant sessions); SDR HEVC sometimes
+      # plays from fMP4 + hvc1 (verified with EEAAO) and sometimes
+      # locks at currentTime=0 even with hvc1 + valid hvcC (Office US
+      # S01E03). Vanilla ffmpeg's parameter-set extraction is the
+      # likely culprit — jellyfin-ffmpeg ships patches we don't have.
+      # Until we vendor jellyfin-ffmpeg, force a re-encode whenever
+      # we'd copy non-H.264 video. The two-profile pipeline (Jellyfin
+      # pattern) stays in place — when the muxer is fixed we just
+      # drop this guard and direct_stream/audio_transcode start
+      # routing to fmp4 again with hvc1 tags.
+      if (candidate == :direct_stream || candidate == :audio_transcode) &&
+         video_codec.to_s.downcase != "h264"
+        return :full_transcode
+      end
+
+      candidate
     end
 
     private
@@ -552,7 +601,26 @@ class TranscoderService
 
       @session[:strategy] = strategy if @session
 
-      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result, opts)
+      # Pick the segment container the way Jellyfin does. The client may
+      # send two TranscodingProfiles (jellyfin-web ships one for ts and
+      # one for mp4 per browser); we match against the codec that will
+      # actually end up in the segments — the source video codec when
+      # we'd copy it (direct_stream / audio_transcode), or H.264 when
+      # we'd re-encode (full_transcode). Whichever TranscodingProfile
+      # lists that codec dictates the segment container ('ts' →
+      # mpegts, 'mp4' → fmp4). When the client sent only one profile
+      # this collapses to the legacy behaviour.
+      profile = DeviceProfile.new(device_profile)
+      target_video_codec = case strategy
+                           when :full_transcode then "h264"
+                           else probe_result.dig(:video, :codec).to_s
+                           end
+      target = profile.transcode_target_for(target_video_codec) || profile.transcode_target
+      segment_container = (target && target[:container].to_s.downcase == "mp4") ? "mp4" : "ts"
+      @session[:hls_container] = segment_container if @session
+
+      args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result,
+                                    opts.merge(segment_container: segment_container, target_video_codec: target_video_codec))
 
       log_dir = File.join(TMP_ROOT, "logs")
       FileUtils.mkdir_p(log_dir)
@@ -723,6 +791,21 @@ class TranscoderService
       # Only force a layout change when we're capping 7.1 → 5.1; for matching
       # or smaller layouts, let ffmpeg preserve the source channel order.
       args += [ "-ac", channels.to_s ] if source_channels > channels
+      # Explicit channel layout. ffmpeg's native `aac` encoder otherwise
+      # writes the output stream with `channel_layout=unknown`, which
+      # Safari's native HLS player accepts to the point of HAVE_ENOUGH_DATA
+      # but then refuses to decode (currentTime stuck at 0, no error
+      # event). Same encoder + same bitrate + explicit "5.1" / "7.1" tag
+      # plays cleanly. Apple's HLS Authoring Specification lists 1, 2, 6,
+      # and 8 as the only supported channel counts — match the layout to
+      # the count.
+      layout = case channels
+      when 8 then "7.1"
+      when 6 then "5.1"
+      when 1 then "mono"
+      else        "stereo"
+      end
+      args += [ "-channel_layout", layout ]
       # Force the AAC sample rate to match the source. With 7.1 → 5.1 downmix
       # ffmpeg occasionally picks an off-by-one rate that drifts audio.
       args += [ "-ar", "48000" ]
@@ -848,6 +931,23 @@ class TranscoderService
 
       args += [ "-i", file_path ]
 
+      # Force HLS output timestamps to start at 0. Without this trio,
+      # ffmpeg's MPEG-TS muxer adds a default 1.4s muxdelay, producing
+      # segment_0.ts with start_pts=127920 (PTS≈1.421s). Safari's
+      # native HLS player computes media duration from #EXTINF totals
+      # but currentTime from segment PTS — the 1.4s offset desyncs
+      # those two and currentTime sticks at 0 even though readyState=4.
+      # Jellyfin's recipe (DynamicHlsController.cs + EncodingHelper.cs):
+      #   -copyts                    keep input PTS rather than letting
+      #                              the encoder regenerate them
+      #   -avoid_negative_ts disabled  don't apply MPEG-TS's default shift
+      #   -start_at_zero             when combined with -copyts, shifts
+      #                              the demuxer's start_time to 0 so
+      #                              the first segment begins at PTS=0
+      # The combination is also the documented fix for `-ss`-with-seek
+      # losing track of the requested target position.
+      args += %w[-copyts -avoid_negative_ts disabled -start_at_zero]
+
       hdr = hdr_source?(probe_result)
       tonemap = hdr && zscale_available?
       width = probe_result.dig(:video, :width).to_i
@@ -962,30 +1062,63 @@ class TranscoderService
       # :direct_play is unreachable here — start_session short-circuits before
       # calling start_ffmpeg_hls when the strategy resolves to direct_play.
 
-      # (We tested `-tag:v hvc1` for HEVC copy paths — counter-intuitively,
-      # that retag broke playback on Electron 33 / Chromium 130 / macOS for
-      # HEVC Main-10 sources: readyState went to 4 with currentTime stuck.
-      # ffmpeg's default `hev1` tag plays correctly on this stack via
-      # VideoToolbox. Mirrored on the desktop side.)
+      # Pick segment container per Jellyfin's pattern. The TS path is
+      # the original HLS container (universal player support, no init
+      # segment, ~5% per-segment overhead vs fmp4); the fmp4 path
+      # carries codecs MPEG-TS can't (HEVC, AV1, VP9, FLAC, Opus) at
+      # the cost of an #EXT-X-MAP init segment.
+      segment_container = (opts[:segment_container] || "ts").to_s.downcase
+      target_video_codec = opts[:target_video_codec].to_s.downcase
+      use_fmp4 = (segment_container == "mp4")
 
-      # HLS output: CMAF (fMP4) segments.
-      #   hls_time 6       — 6-second segments matches Jellyfin's default and
-      #                      reduces HTTP round-trips. VideoToolbox H.264
-      #                      encodes well above 1× realtime on Apple Silicon
-      #                      (4K ≥ 4×, 1080p ≥ 10×) so segment production
-      #                      stays well ahead of playback consumption.
-      #   temp_file        — atomic write: ffmpeg writes *.tmp then renames, so
-      #                      the HTTP server never sees a half-flushed segment.
+      # Apple Safari requires the `hvc1` tag for HEVC in fmp4 HLS.
+      # ffmpeg's default is `hev1`, which Safari refuses. Mirrors
+      # Jellyfin's DynamicHlsController.cs:1828 ("Prefer hvc1 to
+      # hev1"). Only applies to fmp4 — mpegts uses stream type bytes,
+      # not a tag.
+      if use_fmp4 && %w[hevc h265].include?(target_video_codec)
+        args += [ "-tag:v:0", "hvc1" ]
+      end
+
+      # HLS muxer options shared by both containers.
+      #   hls_time 6       — 6-second segments, Jellyfin's default.
+      #   temp_file        — atomic write (.tmp → rename).
       #   independent_segments — each segment decodes standalone.
       args += %w[
         -f hls
         -hls_time 6
         -hls_list_size 0
-        -hls_playlist_type event
-        -hls_segment_type fmp4
         -hls_flags independent_segments+temp_file
         -start_number 0
       ]
+      # NB: no `-hls_playlist_type` — we emit our own VOD playlist
+      # upfront in TranscoderService#generate_vod_playlist; letting
+      # ffmpeg drive playlist type leads to live-vs-vod confusion in
+      # Safari while encoding is in progress.
+
+      if use_fmp4
+        # fMP4 segments carry HEVC/AV1/etc. We match Jellyfin's flag
+        # set verbatim (DynamicHlsController.cs:1611): just
+        # +frag_discont on the segment muxer. ffmpeg's HLS muxer
+        # supplies its own +frag_custom internally for fmp4 mode, so
+        # adding +frag_keyframe / +empty_moov on top produces a
+        # broken first segment (only the styp box, 24 bytes — the
+        # muxer treats segment_0 as moov-only). Sticking to the
+        # single +frag_discont lets ffmpeg's HLS muxer drive
+        # fragmentation correctly.
+        args += %w[-hls_segment_type fmp4 -hls_fmp4_init_filename init.mp4]
+        args += [ "-hls_segment_options", "movflags=+frag_discont" ]
+      else
+        # MPEG-TS segments.
+        #   muxdelay/muxpreload 0 — override ffmpeg's MPEG-TS muxer
+        #     defaults (combined ~1.4s) that exist for VBV pre-fill on
+        #     terrestrial broadcast. Without these segment_0 starts at
+        #     PTS≈1.4s, which makes Safari's native HLS player lock
+        #     currentTime at 0 even though readyState climbs to 4.
+        args += %w[-hls_segment_type mpegts -muxdelay 0 -muxpreload 0]
+      end
+
+      seg_ext = use_fmp4 ? "m4s" : "ts"
 
       if multi_rendition
         # Master playlist references each variant + the audio rendition.
@@ -996,23 +1129,10 @@ class TranscoderService
         variants = ladder.each_with_index.map { |_, i| "v:#{i},agroup:au,name:#{ladder[i][:height]}p" }
         variants << "a:0,agroup:au,default:yes,language:eng,name:audio"
         args += [ "-var_stream_map", variants.join(" ") ]
-
-        # Per-variant segment + playlist patterns. %v expands to the
-        # variant name set via `name:` in var_stream_map. Init filename
-        # MUST include %v in multi-variant fMP4 mode (ffmpeg requirement).
-        args += [ "-hls_fmp4_init_filename", "init_%v.mp4" ]
-        args += [ "-hls_segment_filename", File.join(output_dir, "%v_segment_%d.m4s") ]
+        args += [ "-hls_segment_filename", File.join(output_dir, "%v_segment_%d.#{seg_ext}") ]
         args += [ File.join(output_dir, "%v_playlist.m3u8") ]
       else
-        # Single rendition: write playlist.m3u8 directly. NO master_pl_name
-        # — emitting a master playlist that references playlist.m3u8 as
-        # its single variant causes hls.js to fetch playlist.m3u8, get
-        # the master content, follow the variant URI back to playlist.m3u8,
-        # get the master AGAIN, and loop on the master's MEDIA-SEQUENCE
-        # without ever decoding a segment. Surfaces to the user as the
-        # "server can't keep up" toast.
-        args += [ "-hls_fmp4_init_filename", "init.mp4" ]
-        args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.m4s") ]
+        args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.#{seg_ext}") ]
         args += [ File.join(output_dir, "playlist.m3u8") ]
       end
 

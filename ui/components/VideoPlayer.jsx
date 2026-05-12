@@ -163,9 +163,9 @@ function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
 
 // Subtitle size presets
 const SUB_SIZES = [
-  { id: 'small',  label: 'S',  em: '0.7em' },
-  { id: 'medium', label: 'M',  em: '0.9em' },
-  { id: 'large',  label: 'L',  em: '1.2em' },
+  { id: 'small',  label: 'S',  em: '1.4em' },
+  { id: 'medium', label: 'M',  em: '1.9em' },
+  { id: 'large',  label: 'L',  em: '2.6em' },
 ]
 
 // Subtitle appearance presets
@@ -535,6 +535,47 @@ function WebVideoPlayer() {
         if (playerState.startTime > 0) {
           try { video.currentTime = playerState.startTime } catch {}
         }
+        video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
+      }
+      video.addEventListener('loadedmetadata', onLoaded, { once: true })
+      return () => {
+        video.removeEventListener('loadedmetadata', onLoaded)
+        const v = videoRef.current
+        if (v) {
+          v.removeAttribute('src')
+          v.load()
+        }
+      }
+    }
+
+    // Safari (macOS + iOS) → prefer native HLS. Safari's built-in HLS
+    // player handles HEVC, HEVC Main 10 (HDR), AC3, EAC3, DTS, TrueHD,
+    // multi-channel audio — everything WebKit supports — far better than
+    // Safari's MSE, which has narrow codec support. Jellyfin's web client
+    // does the same (jellyfin-web/src/components/htmlMediaHelper.js
+    // enableHlsJsPlayerForCodecs returns false on Safari for non-VP9
+    // content). Without this gate, Safari shows:
+    //   - audio_transcode HEVC HDR → nothing plays (MSE rejects HEVC 10-bit)
+    //   - direct_stream H.264 + AC3 → spinner (MSE rejects AC3)
+    //   - audio_transcode + TrueHD source → A/V out of sync
+    // All three resolve when Safari uses native HLS playback.
+    //
+    // Detection: UA-sniff for "Safari" + not "Chrome" + not "Android"
+    // (Android Chrome shows "Safari" in UA). Electron's bundled
+    // Chromium also matches "Safari" string, so explicitly exclude
+    // Electron.
+    const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : ''
+    const isSafari = /Safari/.test(ua) &&
+                     !/Chrome|Chromium|Edg\/|OPR\/|Android/.test(ua) &&
+                     !/\bElectron\b/.test(ua)
+    const canNativeHls = video.canPlayType('application/vnd.apple.mpegurl') !== ''
+
+    if (isSafari && canNativeHls) {
+      console.log('[Player] native HLS (Safari):', manifestUrl)
+      video.src = manifestUrl
+      video.load()
+      const onLoaded = () => {
+        try { video.currentTime = 0 } catch {}
         video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
       }
       video.addEventListener('loadedmetadata', onLoaded, { once: true })

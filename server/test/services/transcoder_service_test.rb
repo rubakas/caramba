@@ -99,8 +99,13 @@ class TranscoderServiceTest < ActiveSupport::TestCase
       )
   end
 
-  test "audio_transcode when hevc video and ac3 audio (no client AC3 support)" do
-    assert_equal :audio_transcode,
+  test "hevc video + ac3 audio → full_transcode (vanilla ffmpeg fmp4 copy is unreliable in Safari)" do
+    # Two-profile pipeline would normally route HEVC copy to fmp4
+    # with -tag:v:0 hvc1. Vanilla ffmpeg's parameter-set extraction
+    # is flaky across sources (some play, some lock at t=0), so until
+    # we vendor jellyfin-ffmpeg we force a re-encode here. Drop this
+    # test when the workaround in transcode_strategy is removed.
+    assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "ac3"), 1, nil, browser_profile
       )
@@ -175,8 +180,12 @@ class TranscoderServiceTest < ActiveSupport::TestCase
       )
   end
 
-  test "10-bit HEVC + profile without bit-depth cap + mkv → direct_stream" do
-    assert_equal :direct_stream,
+  test "10-bit HEVC + profile without bit-depth cap + mkv → full_transcode (Safari fmp4 workaround)" do
+    # See note on the `hevc + ac3 → full_transcode` test: until we
+    # vendor jellyfin-ffmpeg, transcode_strategy forces a re-encode
+    # for any non-H.264 source so we never hand HEVC to Safari over
+    # vanilla ffmpeg's fmp4 path.
+    assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "aac",
                      format_name: "matroska,webm", pix_fmt: "yuv420p10le"),
@@ -637,7 +646,8 @@ class TranscoderServiceTest < ActiveSupport::TestCase
                                   :full_transcode, probe, { audio_stream_index: 1 })
     assert_nil find_arg(args, "-var_stream_map"),
       "multi-rendition is force-disabled while ffmpeg's fmp4 muxer is broken"
-    assert_equal "init.mp4", find_arg(args, "-hls_fmp4_init_filename")
+    assert_equal "mpegts", find_arg(args, "-hls_segment_type"),
+      "HLS output should be mpegts for Safari compat"
     assert_nil find_arg(args, "-master_pl_name"),
       "single-rendition must not emit a master playlist — it would reference playlist.m3u8 and loop"
   end
@@ -648,7 +658,7 @@ class TranscoderServiceTest < ActiveSupport::TestCase
                                   :full_transcode, probe, { audio_stream_index: 1 })
     assert_nil find_arg(args, "-var_stream_map"),
       "SD sources don't benefit from a ladder — single rendition stays single"
-    assert_equal "init.mp4", find_arg(args, "-hls_fmp4_init_filename")
+    assert_equal "mpegts", find_arg(args, "-hls_segment_type")
   end
 
   test "build_hls_ffmpeg_args: burn_sub forces single-rendition (no ladder under overlay)" do

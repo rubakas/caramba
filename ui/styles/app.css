@@ -2008,15 +2008,6 @@ body {
   background: #000;
   /* Suppress iOS native player UI overlay */
   -webkit-playsinline: none;
-  /* Force the video element onto its own GPU compositing layer.
-   * Without this, Chromium on some Apple Silicon GPUs (notably M2 Air's
-   * integrated GPU) decodes frames into a hardware overlay that the
-   * transparent BrowserWindow's compositor never paints — audio plays,
-   * controls render, but the video area stays black. translateZ(0) +
-   * will-change promote it to an IOSurface-backed layer that composites
-   * correctly inside the transparent window. */
-  transform: translateZ(0);
-  will-change: transform;
 }
 /* Hide all webkit media controls */
 .video-player-video::-webkit-media-controls {
@@ -2039,6 +2030,16 @@ body {
 /* Target the big play button that appears in iOS Safari center screen */
 .video-player-video::cue {
   background: transparent;
+}
+/* Lift Safari/WebKit's subtitle container off the very bottom so the
+ * player controls bar (~64px) doesn't cover the last line, and so the
+ * subtitle baseline matches what hls.js renders via the WebVTT track.
+ * Safari's default is `bottom: 0` which sits below the controls area. */
+.video-player-video::-webkit-media-text-track-container {
+  bottom: 8% !important;
+}
+.video-player-video::-webkit-media-text-track-display {
+  padding-bottom: 0 !important;
 }
 /* Ensure no fullscreen button appears */
 .video-player-video::-webkit-media-controls-fullscreen-button {

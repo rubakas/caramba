@@ -22,11 +22,7 @@ function createWindow() {
     height: 860,
     minWidth: 800,
     minHeight: 600,
-    // Transparent so libVLC's NSView (added behind Chromium's by
-    // vlc-embed-player) is visible through the React UI's transparent
-    // body region.
-    transparent: true,
-    backgroundColor: '#00000000',
+    backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

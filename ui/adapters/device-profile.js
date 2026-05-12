@@ -194,6 +194,40 @@ export function buildBrowserProfile() {
   // AVI, TS, WebM require remuxing on the server (direct_stream).
   const directPlayContainer = 'mp4,m4v,mov,mj2'
 
+  // Two TranscodingProfiles per Jellyfin's pattern. Server picks
+  // segment container per source codec:
+  //   { Container: 'ts',  VideoCodec: 'h264' }            - mpegts
+  //   { Container: 'mp4', VideoCodec: 'h264,hevc,av1' }   - fmp4
+  // Anything in the mp4-but-not-ts set (HEVC, AV1, FLAC, Opus) ends up
+  // in fmp4 segments which Safari can decode; H.264 stays in mpegts
+  // (smaller per-segment overhead, no init segment needed).
+  // Mirrors jellyfin-web's browserDeviceProfile.js:850-947 where
+  // hlsInTsVideoCodecs and hlsInFmp4VideoCodecs feed separate
+  // TranscodingProfiles.
+  const hlsTsVideoCodecs = [ 'h264' ]
+  const hlsTsAudioCodecs = audioCodecs.filter(c => [ 'aac', 'ac3', 'eac3', 'mp3' ].includes(c))
+
+  const hlsFmp4VideoCodecs = [ 'h264' ]
+  if (hevc8MaxLevel || hevc10MaxLevel) hlsFmp4VideoCodecs.push('hevc', 'h265')
+  if (av1 || av1Hdr) hlsFmp4VideoCodecs.push('av1')
+  const hlsFmp4AudioCodecs = audioCodecs.filter(c =>
+    [ 'aac', 'ac3', 'eac3', 'mp3', 'flac', 'opus' ].includes(c))
+
+  const transcodingProfiles = [
+    { Container: 'ts', Type: 'Video', Protocol: 'hls',
+      VideoCodec: hlsTsVideoCodecs.join(','),
+      AudioCodec: hlsTsAudioCodecs.join(','),
+      MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
+  ]
+  if (hlsFmp4VideoCodecs.length > 1) {
+    transcodingProfiles.push({
+      Container: 'mp4', Type: 'Video', Protocol: 'hls',
+      VideoCodec: hlsFmp4VideoCodecs.join(','),
+      AudioCodec: hlsFmp4AudioCodecs.join(','),
+      MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS,
+    })
+  }
+
   const profile = {
     Name: 'caramba-browser',
     MaxStaticBitrate: 1_000_000_000,
@@ -203,11 +237,7 @@ export function buildBrowserProfile() {
       { Container: directPlayContainer, Type: 'Audio',
         AudioCodec: audioCodecs.join(',') },
     ],
-    TranscodingProfiles: [
-      { Container: TRANSCODE_TARGET_CONTAINER, Type: 'Video', Protocol: 'hls',
-        VideoCodec: TRANSCODE_TARGET_VIDEO, AudioCodec: TRANSCODE_TARGET_AUDIO,
-        MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
-    ],
+    TranscodingProfiles: transcodingProfiles,
     SubtitleProfiles: [
       // Browsers render WebVTT via <track>. Server extracts ANY source
       // subtitle codec (incl. ASS/SSA/SubRip) to VTT and serves it at
