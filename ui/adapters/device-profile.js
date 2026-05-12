@@ -329,16 +329,19 @@ function buildLibMpvProfile(capabilities) {
     }
   }
 
-  // Classify mpv's flat decoder list into video/audio/subtitle by name.
+  // Classify mpv's flat decoder list into video/audio by name. mpv's
+  // `decoder-list` property only enumerates video/audio decoders —
+  // subtitle support is built into mpv (libass for ASS/SSA, internal
+  // renderer for SRT/VTT/PGS/DVD bitmaps) and isn't surfaced through
+  // decoder-list, so we hardcode the canonical set below instead of
+  // filtering it out and ending up with empty SubtitleProfiles.
   const decoders = capabilities.decoders || []
   const videoDecoders = decoders.filter(c => VIDEO_CODECS.has(c))
   const audioDecoders = decoders.filter(c => AUDIO_CODECS.has(c))
-  const subDecoders = decoders.filter(c => SUBTITLE_CODECS.has(c))
 
   // Demuxer list: ffmpeg's lavf names with the raw + renamed form so
   // the server matches either.
   const containers = expandWithRenames(capabilities.demuxers || [], CONTAINER_RENAMES)
-  const subFormats = expandWithRenames(subDecoders, SUBTITLE_RENAMES)
 
   const profile = {
     Name: 'caramba-desktop-libmpv',
@@ -370,10 +373,21 @@ function buildLibMpvProfile(capabilities) {
     })
   }
 
-  for (const fmt of subFormats) {
-    // mpv renders both embed and external subtitle streams natively
-    // (libass for ASS/SSA, native PGS bitmap overlay). Server can serve
-    // either form.
+  // Subtitle formats mpv handles natively, listed under both their raw
+  // ffprobe codec name and the canonical Jellyfin rename so the server
+  // matches either side without further translation. Method=Embed for
+  // muxed streams (mpv reads them directly from the source container);
+  // also External so VTT/SRT sidecars work too.
+  const MPV_NATIVE_SUBTITLE_FORMATS = [
+    'srt', 'subrip',                      // SubRip text
+    'ass', 'ssa',                         // Advanced SubStation Alpha (libass)
+    'webvtt', 'vtt',                      // WebVTT
+    'mov_text',                           // MP4 timed-text
+    'pgssub', 'hdmv_pgs_subtitle', 'PGSSUB',  // Blu-ray PGS bitmap
+    'dvd_subtitle', 'DVDSUB',             // DVD VobSub bitmap
+    'dvb_subtitle', 'DVBSUB',             // DVB bitmap
+  ]
+  for (const fmt of MPV_NATIVE_SUBTITLE_FORMATS) {
     profile.SubtitleProfiles.push({ Format: fmt, Method: 'Embed' })
     profile.SubtitleProfiles.push({ Format: fmt, Method: 'External' })
   }

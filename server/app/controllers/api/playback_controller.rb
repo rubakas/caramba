@@ -400,9 +400,6 @@ class Api::PlaybackController < Api::BaseController
 
     return head :not_found unless TranscoderService.active?(session_id)
 
-    playlist_path = TranscoderService.hls_playlist_path(session_id)
-    return render(plain: "Session not in HLS mode", status: :bad_request) unless playlist_path
-
     # Wait up to 12 seconds for ffmpeg to create the playlist. Cold start
     # for a 4K HEVC HDR source under tonemap + audio_transcode (TrueHD →
     # AAC) commonly takes 6-10 seconds before the first segment + manifest
@@ -410,11 +407,19 @@ class Api::PlaybackController < Api::BaseController
     # ffmpeg had finished warming up — the user saw "first play hangs;
     # switch audio fixes it" because the second ffmpeg startup hit warm
     # filesystem + library caches.
+    #
+    # Re-resolve the path each tick — in multi-rendition mode ffmpeg
+    # writes `master.m3u8` while in single-rendition mode it writes
+    # `playlist.m3u8`. `hls_playlist_path` prefers master if it exists,
+    # so the loop transparently picks up whichever ffmpeg produces.
+    playlist_path = nil
     40.times do
-      break if File.exist?(playlist_path)
+      playlist_path = TranscoderService.hls_playlist_path(session_id)
+      break if playlist_path && File.exist?(playlist_path)
       sleep 0.3
     end
 
+    return render(plain: "Session not in HLS mode", status: :bad_request) unless playlist_path
     return render(plain: "Playlist not ready", status: :service_unavailable) unless File.exist?(playlist_path)
 
     playlist = File.read(playlist_path)
@@ -456,8 +461,13 @@ class Api::PlaybackController < Api::BaseController
     # across sessions. Caching would hand back stale bytes and desync
     # hls.js's PTS tracking.
     response.headers["Cache-Control"] = "no-store"
+
+    # Variant playlists (`<name>_playlist.m3u8`) need the HLS content type
+    # so hls.js parses them as playlists, not opaque MP4 blobs. Segments
+    # (`*.m4s`) and init segments (`init*.mp4`) stay as video/mp4.
+    content_type = asset_name.end_with?(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4"
     send_file asset_path,
-      type: "video/mp4",
+      type: content_type,
       disposition: "inline"
   end
 
@@ -552,10 +562,11 @@ class Api::PlaybackController < Api::BaseController
   # Pick a subtitle track and decide whether the server must burn it in.
   # Returns [stream_index, burn_required].
   #
-  # Burn-required flag: true when the file's subtitle format is NOT in the
-  # client's SubtitleProfiles (so the client can't render it). Otherwise
-  # false — server either serves it as External (text → VTT sidecar) or
-  # leaves it Embed (mpv/ExoPlayer-class clients render embedded subs).
+  # Burn-required flag is true ONLY for bitmap subtitles the client can't
+  # render. Text subtitles (SRT/ASS/SSA/VTT/...) always fall back to VTT
+  # extraction — the burn-in filter chain uses ffmpeg's `overlay` which
+  # only accepts a bitmap subtitle stream as a video input; trying to
+  # overlay an SRT stream errors ffmpeg out and the player spins forever.
   def select_subtitle_track(subtitle_streams, prefs, device_profile)
     return [ nil, false ] if subtitle_streams.empty?
     return [ nil, false ] if prefs && prefs[:subtitleOff]
@@ -565,8 +576,12 @@ class Api::PlaybackController < Api::BaseController
     return [ nil, false ] unless picked
 
     method = profile.subtitle_method_for(picked[:codec])
-    burn_required = method.nil?
-    [ picked[:index], burn_required ]
+    # Profile covers it → server hands off to client (Embed or External).
+    return [ picked[:index], false ] if method
+    # Text sub not covered → extract as WebVTT sidecar (no burn).
+    return [ picked[:index], false ] if picked[:isText]
+    # Bitmap sub not covered → server burns it into the video stream.
+    [ picked[:index], true ]
   end
 
   # Saved language → text first, then bitmap. No preference → first text

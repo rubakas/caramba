@@ -203,10 +203,14 @@ export default function MpvOverlay() {
   // synchronously by PlayerContext.openPlayer / closePlayer, so the
   // see-through transition happens on the same frame as the click.
 
-  // Periodic progress report so resume-on-reopen works.
+  // Periodic progress report so resume-on-reopen works. Skip while
+  // duration is unknown — server rejects (422) report_progress with
+  // duration<=0, and mpv may not have propagated FILE_LOADED yet on the
+  // first few ticks.
   useEffect(() => {
     const t = setInterval(() => {
       if (paused) return
+      if (duration <= 0) return
       if (Math.abs(time - lastReportRef.current) < 1) return
       lastReportRef.current = time
       api.reportProgress?.(time, duration, {

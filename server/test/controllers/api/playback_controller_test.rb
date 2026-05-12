@@ -202,8 +202,11 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
         { index: 2, codec: "hdmv_pgs_subtitle", language: "eng", isText: false },
         { index: 3, codec: "subrip", language: "eng", isText: true }
       ]
-      # Browser profile: srt is NOT in SubtitleProfiles → burn_required=true.
-      assert_equal [ 3, true ], select(streams)
+      # Browser profile: srt is NOT in SubtitleProfiles, but text subs
+      # always fall through to VTT extraction rather than burn-in (the
+      # ffmpeg burn-in filter uses `overlay` which only works on bitmap
+      # streams). burn_required=false → server extracts as WebVTT sidecar.
+      assert_equal [ 3, false ], select(streams)
     end
 
     test "auto-picked srt → burn_required=false on native profile (srt External)" do
