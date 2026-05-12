@@ -20,6 +20,28 @@ try { Sentry = require('@sentry/electron/main') } catch {}
 
 const ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
 
+// libmpv's gpu / gpu-next VOs go through libplacebo → Vulkan; on macOS
+// Vulkan requires MoltenVK as a driver, found via an ICD manifest. JMP
+// ships MoltenVK + the manifest in its app bundle and lets the Vulkan
+// loader auto-discover via standard search paths. We do the same by
+// pointing VK_ICD_FILENAMES at the bundled MoltenVK_icd.json. Without
+// this, mpv decodes audio fine but fails the VO with
+// VK_ERROR_INCOMPATIBLE_DRIVER and shows audio-only with no frames.
+function configureMoltenVK() {
+  if (process.env.VK_ICD_FILENAMES) return // user override wins
+  const candidates = []
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'mpv', 'lib', 'vulkan', 'icd.d', 'MoltenVK_icd.json'))
+  }
+  candidates.push(path.join(__dirname, '..', '..', 'vendor', `mpv-${ARCH}`, 'lib', 'vulkan', 'icd.d', 'MoltenVK_icd.json'))
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      process.env.VK_ICD_FILENAMES = p
+      return
+    }
+  }
+}
+
 function resolveNativeModule() {
   // Packaged: extraResources puts the .node at Resources/mpv-embed/...
   // Dev: source tree path.
@@ -203,6 +225,10 @@ function init(nsViewHandle) {
   if (!nsViewHandle || !Buffer.isBuffer(nsViewHandle)) {
     throw new Error('init() requires a BrowserWindow native handle Buffer')
   }
+  // Point the Vulkan loader at our bundled MoltenVK driver BEFORE
+  // requiring the native module — libmpv's libplacebo backend resolves
+  // the Vulkan ICD when its VO opens at first frame.
+  configureMoltenVK()
   native = require(resolveNativeModule())
   nsViewBuffer = nsViewHandle
   native.mpvInit(nsViewHandle, onNativeEvent)
@@ -312,19 +338,24 @@ async function start(urlOrPath, startTime = 0) {
     })
   } catch {}
   native.mpvPlay(urlOrPath, { startTime: Number(startTime) || 0 })
-  // libmpv attaches its vout subview asynchronously after the file
-  // demuxer opens. Nudge it under Chromium's WebContents subview until
-  // the class-match succeeds.
+  // libmpv on macOS (0.41 libplacebo/Vulkan VO) creates its own
+  // NSWindow regardless of the `wid` option. Reparent that window
+  // as a child of our BrowserWindow so it sits below Chromium and
+  // follows the parent's geometry. Poll briefly because mpv's window
+  // appears asynchronously after first frame.
   let attempts = 0
-  const nudge = () => {
+  const reparent = () => {
     attempts++
     let r = 0
-    try { r = native.mpvSendBehind(nsViewBuffer) } catch {}
-    if (r !== 0) return    // either reordered (1) or already at bottom (-1)
-    if (attempts < 30) setTimeout(nudge, 200)
-    else console.warn('[mpv-embed] sendBehind never matched an mpv subview after 6s; subviews =', native.mpvDebugSubviews?.(nsViewBuffer))
+    try { r = native.mpvReparentAsChild(nsViewBuffer) } catch (err) {
+      console.warn('[mpv-embed] reparent threw:', err?.message)
+    }
+    if (r === 1) return
+    if (r === -1) { console.warn('[mpv-embed] parent NSView has no NSWindow'); return }
+    if (attempts < 30) setTimeout(reparent, 200)
+    else console.warn('[mpv-embed] mpv never created its NSWindow within 6s')
   }
-  setTimeout(nudge, 100)
+  setTimeout(reparent, 100)
 }
 
 async function stop() {

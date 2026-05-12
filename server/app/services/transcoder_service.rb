@@ -779,22 +779,38 @@ class TranscoderService
       ]
     end
 
-    # Multi-rendition HLS ladder for full_transcode. Returns an array of
-    # rendition specs `[{height:, bitrate:, maxrate:}, ...]` ordered
-    # highest-quality first. hls.js's ABR algorithm switches down on
-    # buffer pressure (encoder stalls, slow network), preventing the
-    # single-rendition failure mode where ffmpeg falling behind realtime
-    # produces an unrecoverable stall.
+    # Multi-rendition HLS ladder for full_transcode. CURRENTLY DISABLED.
     #
-    # Source width → (thresholds mirror video_bitrate_cap_bps)
-    #   ≥3000 (4K):         1080p source-cap, 720p @ 4M, 480p @ 2M
-    #   ≥1800 (1080p):      1080p source-cap, 480p @ 2M
-    #   < 1800 (720p, SD):  single rendition (ABR has no useful steps)
+    # The build_hls_ffmpeg_args branch that emits a ladder via
+    # `-var_stream_map` + agroup audio + `-hls_segment_type fmp4`
+    # produces fMP4 segments without a `tfhd` box on the vendored
+    # ffmpeg 8.1. ffprobe rejects with "trun track id unknown, no
+    # tfhd was found" and Chromium's MSE rejects appendBuffer the
+    # same way — segments load but never decode. hls.js retries
+    # segment_0 indefinitely until the fatal-error budget runs out,
+    # surfacing as "Playback failed — server can't keep up."
+    #
+    # Returning an empty ladder routes everything through the single-
+    # rendition path which works correctly. Re-enable when we can:
+    #   a) Patch ffmpeg's hls muxer (upstream issue), or
+    #   b) Switch back to mpegts segments for multi-rendition (loses
+    #      atomic temp_file writes), or
+    #   c) Implement segment muxing manually outside ffmpeg's HLS muxer.
+    #
+    # Multi-rendition's main benefit is ABR adaptation under network
+    # pressure, which is rare on LAN. The cost of always-single is
+    # one resolution emitted; the cost of always-multi is broken
+    # playback. Single wins for now.
+    #
+    # Test coverage for ladder shape (transcoder_service_test.rb)
+    # stays passing because we still produce the right ladder array;
+    # we just don't USE it in build_hls_ffmpeg_args anymore. See the
+    # `multi_rendition = false` short-circuit there.
     def transcode_ladder(probe_result)
       width  = probe_result.dig(:video, :width).to_i
       source = probe_result[:bitrate].to_i
 
-      cap1080 = video_bitrate_cap_bps(1920)  # 20 Mbps
+      cap1080 = video_bitrate_cap_bps(1920)
       cap720  = 4_000_000
       cap480  = 2_000_000
 
@@ -812,7 +828,7 @@ class TranscoderService
           { height: 480,  bitrate: cap480,     maxrate: (cap480    * 1.5).round }
         ]
       else
-        [] # single-rendition path (no ladder)
+        []
       end
     end
 
@@ -839,8 +855,15 @@ class TranscoderService
       # Ladder for full_transcode without burn-in. Burn-in keeps its
       # single-rendition complex filter — multi-output overlays would
       # double-render the subtitle bitmap to no benefit.
+      #
+      # NB: multi-rendition is currently FORCED OFF because ffmpeg's
+      # hls muxer + var_stream_map + fmp4 produces malformed
+      # segments (no tfhd box → MSE rejects → hls.js retries forever).
+      # See transcode_ladder doc for context. We still compute the
+      # ladder so tests pass, just don't take the multi-rendition
+      # branch in this builder.
       ladder = (strategy == :full_transcode && !burn_sub) ? transcode_ladder(probe_result) : []
-      multi_rendition = ladder.length > 1
+      multi_rendition = false
 
       # Filters / stream mapping. SAR fix is always applied. For tonemapped
       # HDR sources wider than 1080p we downscale BEFORE the zscale/tonemap
@@ -963,9 +986,10 @@ class TranscoderService
         -hls_flags independent_segments+temp_file
         -start_number 0
       ]
-      args += [ "-master_pl_name", "master.m3u8" ]
 
       if multi_rendition
+        # Master playlist references each variant + the audio rendition.
+        args += [ "-master_pl_name", "master.m3u8" ]
         # Map output streams to variants. Audio uses `agroup` so it's
         # encoded once and shared across all variants via #EXT-X-MEDIA in
         # the master playlist (hls.js handles this natively).
@@ -980,6 +1004,13 @@ class TranscoderService
         args += [ "-hls_segment_filename", File.join(output_dir, "%v_segment_%d.m4s") ]
         args += [ File.join(output_dir, "%v_playlist.m3u8") ]
       else
+        # Single rendition: write playlist.m3u8 directly. NO master_pl_name
+        # — emitting a master playlist that references playlist.m3u8 as
+        # its single variant causes hls.js to fetch playlist.m3u8, get
+        # the master content, follow the variant URI back to playlist.m3u8,
+        # get the master AGAIN, and loop on the master's MEDIA-SEQUENCE
+        # without ever decoding a segment. Surfaces to the user as the
+        # "server can't keep up" toast.
         args += [ "-hls_fmp4_init_filename", "init.mp4" ]
         args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.m4s") ]
         args += [ File.join(output_dir, "playlist.m3u8") ]

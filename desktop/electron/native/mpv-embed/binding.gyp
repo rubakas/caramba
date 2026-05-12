@@ -10,7 +10,7 @@
       "libraries": [
         "<(module_root_dir)/../../../vendor/mpv-<!@(node -p \"process.arch === 'x64' ? 'x64' : 'arm64'\")/lib/libmpv.dylib"
       ],
-      "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
+      "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS", "GL_SILENCE_DEPRECATION" ],
       "cflags!": [ "-fno-exceptions" ],
       "cflags_cc!": [ "-fno-exceptions" ],
       "xcode_settings": {
@@ -27,7 +27,9 @@
       },
       "link_settings": {
         "libraries": [
-          "$(SDKROOT)/System/Library/Frameworks/Cocoa.framework"
+          "$(SDKROOT)/System/Library/Frameworks/Cocoa.framework",
+          "$(SDKROOT)/System/Library/Frameworks/OpenGL.framework",
+          "$(SDKROOT)/System/Library/Frameworks/QuartzCore.framework"
         ]
       }
     }

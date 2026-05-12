@@ -59,6 +59,23 @@ function register(mainWindow) {
     return initPromise
   }
 
+  // Re-sync mpv's child window frame whenever Electron's BrowserWindow
+  // resizes, moves, enters/leaves fullscreen, or its content area
+  // otherwise changes. Listening here (in main JS) instead of via
+  // Cocoa NSNotificationCenter observers avoids the teardown-order
+  // hang we saw before — these listeners are torn down with the
+  // BrowserWindow naturally.
+  const syncChild = () => {
+    if (!mpvEmbed.isAvailable()) return
+    try { mpvEmbed.syncChildFrame(mainWindow.getNativeWindowHandle()) } catch {}
+  }
+  mainWindow.on('resize', syncChild)
+  mainWindow.on('move', syncChild)
+  mainWindow.on('enter-full-screen', syncChild)
+  mainWindow.on('leave-full-screen', syncChild)
+  mainWindow.on('maximize', syncChild)
+  mainWindow.on('unmaximize', syncChild)
+
   // Forward mpv pushes to renderer windows.
   mpvEmbed.events.on('state',  s => broadcast('playback:state', s))
   mpvEmbed.events.on('tracks', t => broadcast('playback:tracks', {

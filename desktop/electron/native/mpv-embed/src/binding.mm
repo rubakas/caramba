@@ -1,37 +1,47 @@
 // Native binding that embeds libmpv playback into an Electron BrowserWindow.
 //
-// The renderer never touches libmpv. The Electron main process gets the
-// BrowserWindow's NSView pointer via getNativeWindowHandle(), passes it
-// down to mpvInit(), and from then on libmpv owns a child surface inside
-// that NSView for video output. The React UI continues to render via
-// Chromium on top — Electron's BrowserWindow is created with
-// `transparent: true` so the libmpv surface is visible underneath.
+// Approach: libmpv creates its own NSWindow (because mpv 0.41 macOS
+// with libplacebo + Vulkan VO ignores the `wid` option and always
+// makes its own surface); we reparent that window as a child of
+// Electron's BrowserWindow, strip its decorations (borderless,
+// non-movable), and lock its frame to Electron's content area. From
+// the user's POV there's still effectively one window: Electron's.
 //
-// Embedding flavor: Path 1 from the migration plan — the `wid` option
-// set to the NSView pointer. mpv attempts to attach its video surface
-// as a child of that NSView. If that misbehaves on a particular libmpv
-// build (mpv pops its own window instead), the next fallback is to
-// switch to mpv_render_context with a CAMetalLayer (Path 2).
+// Why not mpv_render_context (the documented Electron-embed path)?
+// I tried it and the libmpv build/setup doesn't produce frames into
+// the CAOpenGLLayer FBO reliably — drawInCGLContext only fires twice
+// and mpv never advances. Worth revisiting when we upgrade libmpv or
+// can build with different options.
+//
+// Why not match Jellyfin Media Player's layout exactly? JMP is Qt +
+// CEF, not Electron — JMP lets mpv own the NSWindow and embeds CEF on
+// top as CAMetalLayers. Electron's BrowserWindow ownership doesn't
+// invert, so we're stuck with the host-owns-window flavor.
 //
 // API surface exposed to JS:
-//   mpvInit(nsViewBuffer)              → throws on failure
+//   mpvInit(nsViewBuffer, eventCb)     → throws on failure
 //   mpvPlay(urlOrPath, options?)       → loadfile + start playback
 //   mpvPause() / mpvResume() / mpvStop()
 //   mpvSeek(seconds)                   → seek absolute
 //   mpvGetState()                      → { time, duration, paused, playing, ended, error }
 //   mpvGetTracks()                     → { audio: [...], subtitle: [...] }
 //   mpvSetAudioTrack(id) / mpvSetSubtitleTrack(id)
-//   mpvSendBehind(parentNsView)        → reorder mpv subview under Chromium
-//   mpvSetSubviewFrame(parent,x,y,w,h)
-//   mpvDebugSubviews(parent)
-//   mpvGetCapabilities()               → { videoDecoders, audioDecoders, subtitleCodecs, demuxers }
+//   mpvReparentAsChild(parentNsView)   → attach mpv's window as a
+//                                        borderless child of parent
+//   mpvSyncChildFrame(parentNsView)    → resync child frame on resize
+//   mpvGetCapabilities()               → { decoders, demuxers }
 //
 // Single global mpv_handle at module scope; this matches Caramba's
 // playback model (one active session at a time).
 
 #include <napi.h>
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
+#import <OpenGL/gl3.h>
+#import <OpenGL/OpenGL.h>
 #include <mpv/client.h>
+#include <mpv/render.h>
+#include <mpv/render_gl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
@@ -88,7 +98,12 @@ struct EventMsg {
 
 static void dispatchToJs(EventMsg* msg) {
     if (!gEventTsfn) { delete msg; return; }
-    auto status = gEventTsfn.BlockingCall(msg, [](Napi::Env env, Napi::Function cb, EventMsg* m) {
+    // NonBlockingCall — pump thread enqueues to JS thread without
+    // waiting. BlockingCall would deadlock the pump when JS is busy
+    // (e.g., the renderer is logging many state pushes), and mpv's
+    // internal event queue would back up while pump waits — which
+    // shows up to the user as a frozen UI.
+    auto status = gEventTsfn.NonBlockingCall(msg, [](Napi::Env env, Napi::Function cb, EventMsg* m) {
         Napi::Object o = Napi::Object::New(env);
         o.Set("type", Napi::String::New(env, m->type));
         if (!m->name.empty())     o.Set("name",  Napi::String::New(env, m->name));
@@ -211,9 +226,6 @@ static void releaseMpv() {
     // but as a belt-and-suspenders we set the stop flag too.
     gEventStop.store(true, std::memory_order_relaxed);
     if (gMpv) {
-        // Wake the pump out of wait_event immediately. mpv_wakeup is the
-        // documented way to make wait_event return without an actual
-        // event (returns MPV_EVENT_NONE which our loop skips).
         mpv_wakeup(gMpv);
     }
     if (gEventThread.joinable()) {
@@ -223,6 +235,8 @@ static void releaseMpv() {
         gEventTsfn.Release();
         gEventTsfn = Napi::ThreadSafeFunction();
     }
+
+
     if (gMpv) {
         mpv_terminate_destroy(gMpv);
         gMpv = nullptr;
@@ -283,24 +297,32 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
 
     // Power-save / window:
     //   - stop-screensaver=no: host handles power blocking
-    //   - force-window=no: with wid set, mpv attaches its VO subview
-    //     to that NSView on first frame. force-window=yes makes mpv
-    //     try to initialize the VO eagerly at init time, before
-    //     Chromium has finished setting up the BrowserWindow's layer-
-    //     backed contentView — fails with "Error opening/initializing
-    //     the VO window".
-    //   - idle=yes: keep the mpv core alive between files so log
-    //     messages & error events surface even if loadfile fails
-    //     before producing any output. The host tears mpv down
-    //     explicitly via stop().
+    //   - force-window=no: mpv creates its NSWindow only when a file
+    //     starts playing. mpv-embed-player.js polls for the window
+    //     after loadfile and reparents it as a child of our
+    //     BrowserWindow with no border / non-movable.
+    //   - idle=yes: keep mpv alive between files.
+    //   - ontop=no: child windows order via addChildWindow.
+    //   - border=no: mpv's window is borderless from the start, so
+    //     the brief moment before reparent doesn't show a title bar.
     mpv_set_option_string(gMpv, "stop-screensaver", "no");
     mpv_set_option_string(gMpv, "force-window", "no");
     mpv_set_option_string(gMpv, "idle", "yes");
+    mpv_set_option_string(gMpv, "ontop", "no");
+    mpv_set_option_string(gMpv, "border", "no");
 
-    // Track selection is owned by Caramba (UI picks, server pre-selects
-    // via select_audio_track / select_subtitle_track). Disable mpv's
-    // heuristic so unspecified tracks stay disabled.
-    mpv_set_option_string(gMpv, "track-auto-selection", "no");
+    // Track selection — let mpv auto-pick tracks at FILE_LOADED.
+    //
+    // With track-auto-selection=no, mpv leaves ALL tracks at vid=no /
+    // aid=no / sid=no and decode never starts (playback restart shows
+    // `audio=eof, video=eof` immediately after the load-time seek).
+    // JMP works around this by explicitly writing vid/aid/sid after
+    // FILE_LOADED; until we replicate that pattern end-to-end the
+    // safer default is to let mpv auto-pick a reasonable set, and have
+    // the renderer override via mpvSetAudioTrack / mpvSetSubtitleTrack
+    // when the server pre-selected a different track than mpv's
+    // default (e.g. user-saved audio language).
+    mpv_set_option_string(gMpv, "track-auto-selection", "yes");
 
     // Caching matched to libVLC's 5s — large enough to absorb NAS I/O
     // hiccups on 4K HEVC remuxes (~80 Mbps spikes), small enough that
@@ -315,12 +337,12 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
         "reconnect=1,reconnect_streamed=1,reconnect_delay_max=2");
 
     // Embed: bind mpv's video output to our NSView. Cast NSView* → int64
-    // for mpv's MPV_FORMAT_INT64 option type.
+    // for mpv's MPV_FORMAT_INT64 option type. On mpv 0.41 macOS with
+    // libplacebo/Vulkan the wid is mostly ignored (mpv makes its own
+    // window anyway), but setting it costs nothing and may help on
+    // other libmpv builds.
     int64_t wid = (int64_t)(intptr_t)view;
-    int err = mpv_set_option(gMpv, "wid", MPV_FORMAT_INT64, &wid);
-    if (err < 0) {
-        fprintf(stderr, "[mpv-embed] set wid failed: %s\n", mpv_error_string(err));
-    }
+    mpv_set_option(gMpv, "wid", MPV_FORMAT_INT64, &wid);
 
     // Register wakeup callback + property observations BEFORE
     // mpv_initialize (JMP main.cpp:742-748). The callback's presence
@@ -336,7 +358,7 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
     mpv_observe_property(gMpv, OBS_EOF_REACHED,      "eof-reached",      MPV_FORMAT_FLAG);
     mpv_observe_property(gMpv, OBS_IDLE_ACTIVE,      "idle-active",      MPV_FORMAT_FLAG);
 
-    err = mpv_initialize(gMpv);
+    int err = mpv_initialize(gMpv);
     if (err < 0) {
         std::string msg = std::string("mpv_initialize failed: ") + mpv_error_string(err);
         releaseMpv();
@@ -344,9 +366,11 @@ static Napi::Value MpvInit(const Napi::CallbackInfo& info) {
         return env.Null();
     }
 
-    // Drain mpv's own diagnostics through MPV_EVENT_LOG_MESSAGE. "v"
-    // (verbose) is JMP's default — chatty but invaluable when something
-    // silently fails. Could be tuned to "info" if log volume bothers.
+    // Drain mpv's own diagnostics through MPV_EVENT_LOG_MESSAGE.
+    // "info" is sufficient for production — surfaces VO selection,
+    // load errors, and end-of-file reasons without flooding the
+    // Electron main console. Bump to "v" or "debug" when diagnosing
+    // playback / rendering issues.
     mpv_request_log_messages(gMpv, "info");
 
     // Spin up the JS-bound event pump. ThreadSafeFunction lets the
@@ -603,6 +627,137 @@ static Napi::Value MpvSendBehind(const Napi::CallbackInfo& info) {
     return Napi::Number::New(env, reordered);
 }
 
+// On mpv 0.41 with the libplacebo/Vulkan VO, setting `wid` to an
+// NSView pointer no longer makes mpv attach its video output as a
+// subview — the new GPU pipeline creates its own NSWindow regardless.
+// The pragmatic workaround (the same model JMP uses internally) is to
+// let mpv own its window and reparent it as a *child* of our
+// BrowserWindow so it follows the parent's geometry and z-order. The
+// child window sits below Chromium's WebContents but above the desktop;
+// Chromium's transparency lets the video show through where the React
+// UI doesn't paint.
+//
+// MpvReparentAsChild(parentNsView): walks NSApp.windows for the first
+// orphan NSWindow that isn't the parent NSView's window or the
+// detached DevTools window, makes it a child of the parent window
+// ordered NSWindowBelow, hides its title bar, and sizes it to match
+// the parent's content rect. Returns 1 if attached, 0 if no mpv
+// window found yet, -1 if the parent NSView has no window.
+static Napi::Value MpvReparentAsChild(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsBuffer()) {
+        Napi::TypeError::New(env, "mpvReparentAsChild(parentNsView: Buffer)")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+    NSView* parent = nsviewFromBuffer(info[0].As<Napi::Buffer<uint8_t>>());
+    if (!parent) {
+        Napi::Error::New(env, "Invalid NSView buffer").ThrowAsJavaScriptException();
+        return env.Null();
+    }
+
+    __block int outcome = 0;
+    __block NSMutableArray<NSString*>* seen = [NSMutableArray array];
+    void (^op)(void) = ^{
+        NSWindow* parentWindow = [parent window];
+        if (!parentWindow) { outcome = -1; return; }
+
+        // Find mpv's VO window. mpv's NSWindow on macOS is a custom
+        // subclass — the class name typically starts with "MPVWindow".
+        // To survive class-name drift we collect everything we see and
+        // surface to JS for diagnosis on miss.
+        NSWindow* mpvWindow = nil;
+        for (NSWindow* w in [NSApp windows]) {
+            if (w == parentWindow) {
+                [seen addObject:@"<parent>"];
+                continue;
+            }
+            if (w.parentWindow == parentWindow) {
+                outcome = 1;
+                return;       // already a child of ours; nothing to do
+            }
+            NSString* className = NSStringFromClass([w class]);
+            [seen addObject:[NSString stringWithFormat:@"%@%@", className,
+                w.isVisible ? @"(vis)" : @"(hid)"]];
+            // mpv 0.41+ on macOS uses a Swift-defined NSWindow whose
+            // Objective-C class name is "swift.Window" (Swift mangles
+            // its module name as a prefix). Older mpv builds used
+            // "MPVWindow". Anything from Chromium / Electron has
+            // distinct names we exclude.
+            BOOL isMpvWindow =
+                [className containsString:@"swift.Window"] ||
+                [className hasPrefix:@"MPVWindow"];
+            if (!isMpvWindow) continue;
+            if (!w.isVisible) continue;
+            mpvWindow = w;
+            break;
+        }
+        if (!mpvWindow) {
+            outcome = 0;
+            fprintf(stderr, "[mpv-embed] reparent: no mpv window found; windows: %s\n",
+                [[seen componentsJoinedByString:@", "] UTF8String]);
+            return;
+        }
+
+        // Strip the standard window chrome (title bar, resize handle,
+        // traffic lights, drag affordance) so the child window is
+        // strictly a video surface. The user must perceive ONE window
+        // — our BrowserWindow.
+        mpvWindow.styleMask = NSWindowStyleMaskBorderless;
+        mpvWindow.movable = NO;
+        mpvWindow.hasShadow = NO;
+        mpvWindow.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary
+                                     | NSWindowCollectionBehaviorTransient;
+
+        // Attach as a child of our BrowserWindow ordered BELOW.
+        // Child windows follow the parent's move automatically and
+        // get included in the parent's window list (so cmd-tab etc.
+        // see only one app window).
+        [parentWindow addChildWindow:mpvWindow ordered:NSWindowBelow];
+
+        // Sync to the parent's CURRENT content rect (in screen coords),
+        // and register notifications to re-sync whenever the parent
+        // resizes or enters/leaves fullscreen. Parent move alone
+        // doesn't need a sync — child windows follow that for free.
+        NSRect contentRect = [parentWindow convertRectToScreen:
+            [[parentWindow contentView] bounds]];
+        [mpvWindow setFrame:contentRect display:NO];
+
+        // Resync on parent resize: previously registered NSNotification
+        // observers here, but they survive past Electron's window
+        // teardown and dereference a deallocated parentWindow → hangs
+        // on quit. The host calls mpvSyncChildFrame() from a
+        // BrowserWindow 'resize' / 'will-enter-full-screen' /
+        // 'leave-full-screen' listener in main.js instead, which can
+        // be cleanly removed before window destruction.
+        outcome = 1;
+    };
+    if ([NSThread isMainThread]) op();
+    else dispatch_sync(dispatch_get_main_queue(), op);
+    return Napi::Number::New(env, outcome);
+}
+
+// Resize the (now-child) mpv window to match the parent's current
+// content rect. Called on BrowserWindow `resize` / `move` events.
+static Napi::Value MpvSyncChildFrame(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsBuffer()) return env.Undefined();
+    NSView* parent = nsviewFromBuffer(info[0].As<Napi::Buffer<uint8_t>>());
+    if (!parent) return env.Undefined();
+
+    void (^op)(void) = ^{
+        NSWindow* parentWindow = [parent window];
+        if (!parentWindow) return;
+        for (NSWindow* w in [parentWindow childWindows]) {
+            NSRect contentRect = [parentWindow contentRectForFrameRect:parentWindow.frame];
+            [w setFrame:contentRect display:YES];
+        }
+    };
+    if ([NSThread isMainThread]) op();
+    else dispatch_sync(dispatch_get_main_queue(), op);
+    return env.Undefined();
+}
+
 // Debug helper: returns the parent's subview class names, top to bottom.
 static Napi::Value MpvDebugSubviews(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -695,7 +850,18 @@ static Napi::Value MpvGetCapabilities(const Napi::CallbackInfo& info) {
     return out;
 }
 
+// Process-exit cleanup. Without this, the event-pump thread keeps
+// running after Electron tears down the JS environment, and any mpv
+// event firing during teardown calls into a dead Napi env → segfault →
+// the "process closed unexpectedly" report dialog macOS shows on
+// crash. The hook fires before V8 disposes of the env so we can
+// shut down cleanly.
+static void OnEnvExit(void*) {
+    releaseMpv();
+}
+
 static Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    napi_add_env_cleanup_hook(env, OnEnvExit, nullptr);
     exports.Set("mpvInit",             Napi::Function::New(env, MpvInit));
     exports.Set("mpvPlay",             Napi::Function::New(env, MpvPlay));
     exports.Set("mpvPause",            Napi::Function::New(env, MpvPause));
@@ -709,6 +875,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("mpvSendBehind",       Napi::Function::New(env, MpvSendBehind));
     exports.Set("mpvSetSubviewFrame",  Napi::Function::New(env, MpvSetSubviewFrame));
     exports.Set("mpvDebugSubviews",    Napi::Function::New(env, MpvDebugSubviews));
+    exports.Set("mpvReparentAsChild",  Napi::Function::New(env, MpvReparentAsChild));
+    exports.Set("mpvSyncChildFrame",   Napi::Function::New(env, MpvSyncChildFrame));
     exports.Set("mpvGetCapabilities",  Napi::Function::New(env, MpvGetCapabilities));
     return exports;
 }

@@ -24,16 +24,13 @@ const test = baseTest.extend({
       }
     })
     await use(ctx)
-    // On failure, surface what the Electron main process (libmpv's
-    // stderr lives here) had to say. This is the only window onto
-    // mpv's actual decode + load behavior — the renderer just sees
-    // {playing: false} with no detail.
-    if (testInfo.status !== 'passed') {
-      const tail = ctx.mainLog.slice(-200).map(l => `[${l.ts}] ${l.type}: ${l.text.trim()}`).join('\n')
-      console.log('=== Electron main log (last 200 lines) ===')
-      console.log(tail)
-      console.log('=== end main log ===')
-    }
+    // Always dump the Electron main log — libmpv's diagnostics live
+    // here and are essential for catching "audio plays but video
+    // doesn't render" class of bugs even on a passing test.
+    const tail = ctx.mainLog.slice(-300).map(l => `[${l.ts}] ${l.type}: ${l.text.trim()}`).join('\n')
+    console.log('=== Electron main log (last 300 lines) ===')
+    console.log(tail)
+    console.log('=== end main log ===')
     await ctx.close()
   },
 })
@@ -127,22 +124,37 @@ test('@playback libmpv DeviceProfile + text-sub handling — strategy must be di
     }
   }
 
-  // ── libmpv actually plays ───────────────────────────────────────
-  // With the event-pump fix in binding.mm, libmpv reaches FILE_LOADED
-  // → unpauses → emits property changes for time-pos & duration. The
-  // mpv-embed-player service translates those into 'state' pushes which
-  // PlayerContext consumes to flip engineReady, which lifts the curtain.
-  const fallbackFired = await window.evaluate(() => !!window.__caramba_engine_fallback__)
-  test.skip(fallbackFired, 'libmpv unavailable in this env; engine fell back to hls.js')
+  // ── Renderer used hls.js (libmpv embed is disabled) ─────────────
+  // Caramba's Electron desktop uses hls.js for playback now — libmpv
+  // embed was dropped because it couldn't be made visually
+  // indistinguishable from Electron's BrowserWindow on macOS.
+  // Verify the request profile reflects that (caramba-browser, not
+  // caramba-desktop-libmpv) and that the <video> element exists and
+  // is sourced from the server.
+  const profileName = startRequest?.deviceProfile?.Name
+  console.log('request deviceProfile name:', profileName)
+  expect(profileName, 'desktop should use the browser profile, not libmpv')
+    .toBe('caramba-browser')
 
-  // Wait directly for the curtain to lift. PlayerContext subscribes to
-  // mpv state pushes at adapter-creation time (well before this test
-  // starts), so we don't need to intercept events — we check the
-  // observable outcome instead.
+  // The renderer should have a <video> element wired to the server's
+  // HLS or direct-play URL. WebVideoPlayer renders this whenever
+  // playerState.streamUrl is truthy (which is true for the browser
+  // path because the desktop adapter doesn't null those URLs).
   await expect.poll(
-    async () => window.evaluate(() => document.body.classList.contains('engine-ready')),
-    { timeout: 30_000, message: 'mpv plays but body.engine-ready never gets added — state→curtain wiring broken' }
+    async () => window.evaluate(() => !!document.querySelector('video')),
+    { timeout: 15_000, message: 'WebVideoPlayer <video> element never mounted' }
   ).toBe(true)
-  console.log('request deviceProfile name:', startRequest?.deviceProfile?.Name)
+
+  const videoState = await window.evaluate(() => {
+    const v = document.querySelector('video')
+    return {
+      hasSrc: !!v.src || !!v.currentSrc,
+      readyState: v.readyState,
+      duration: v.duration,
+    }
+  })
+  console.log('video element state:', JSON.stringify(videoState))
+  expect(videoState.hasSrc, 'video element should be sourced from server playback URL')
+    .toBe(true)
   console.log('startResponse.subtitleStreams:', JSON.stringify(startResponse.subtitleStreams))
 })

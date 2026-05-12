@@ -624,31 +624,22 @@ class TranscoderServiceTest < ActiveSupport::TestCase
     assert_equal 12_000_000, rendition_1080[:bitrate]
   end
 
-  test "build_hls_ffmpeg_args: multi-rendition emits var_stream_map with named variants" do
-    probe = probe_result(video_codec: "vc1", width: 3840)
-    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
-                                  :full_transcode, probe, { audio_stream_index: 1 })
-    var_stream_map = find_arg(args, "-var_stream_map")
-    refute_nil var_stream_map
-    assert_includes var_stream_map, "name:1080p"
-    assert_includes var_stream_map, "name:720p"
-    assert_includes var_stream_map, "name:480p"
-    # Audio shared via agroup so it's encoded once across all variants.
-    assert_includes var_stream_map, "agroup:au"
-  end
+  # Multi-rendition is currently force-disabled — ffmpeg's hls muxer
+  # with var_stream_map + fmp4 produces malformed segments (no tfhd
+  # box → MSE rejects). See transcoder_service.rb#transcode_ladder
+  # docstring. These tests now assert the single-rendition output
+  # even for sources where the ladder spec WOULD have produced 3
+  # variants; if/when the bug is fixed upstream, flip them back.
 
-  test "build_hls_ffmpeg_args: multi-rendition emits master_pl_name" do
+  test "build_hls_ffmpeg_args: 4K source still uses single rendition (multi-rendition disabled)" do
     probe = probe_result(video_codec: "vc1", width: 3840)
     args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                   :full_transcode, probe, { audio_stream_index: 1 })
-    assert_equal "master.m3u8", find_arg(args, "-master_pl_name")
-  end
-
-  test "build_hls_ffmpeg_args: multi-rendition uses init_%v.mp4 init filename" do
-    probe = probe_result(video_codec: "vc1", width: 3840)
-    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
-                                  :full_transcode, probe, { audio_stream_index: 1 })
-    assert_equal "init_%v.mp4", find_arg(args, "-hls_fmp4_init_filename")
+    assert_nil find_arg(args, "-var_stream_map"),
+      "multi-rendition is force-disabled while ffmpeg's fmp4 muxer is broken"
+    assert_equal "init.mp4", find_arg(args, "-hls_fmp4_init_filename")
+    assert_nil find_arg(args, "-master_pl_name"),
+      "single-rendition must not emit a master playlist — it would reference playlist.m3u8 and loop"
   end
 
   test "build_hls_ffmpeg_args: SD source falls back to single-rendition (no ladder)" do

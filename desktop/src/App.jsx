@@ -57,15 +57,19 @@ export default function App() {
         if (cancelled) return
         const url = cfg?.serverUrl || ''
 
-        // Detect libmpv availability by querying capabilities. A
-        // successful response with a non-empty decoder list means the
-        // native module loaded and the event-pump infrastructure is
-        // wired up — playback will succeed where supported. Failure
-        // (native module missing, binding error, no decoders) means we
-        // transparently fall back to hls.js. The adapter additionally
-        // guards against silent libmpv stalls at playback start.
+        // libmpv embed is intentionally disabled — see plan file Part 2
+        // notes. mpv 0.41 + Electron on macOS can't be embedded
+        // cleanly (mpv creates its own NSWindow that we can't make
+        // visually indistinguishable from Electron's, and the
+        // mpv_render_context path needs more native work than is
+        // justified for an Electron shell). Desktop uses hls.js
+        // through the same VideoPlayer the web client uses. Re-enable
+        // by setting VITE_CARAMBA_FORCE_LIBMPV=1 if you want to try
+        // the embed path again.
+        const forceLibmpv = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_CARAMBA_FORCE_LIBMPV === '1') ||
+                            (typeof window !== 'undefined' && window.__caramba_force_libmpv__ === true)
         let mpvAvailable = false
-        if (window.api?.getMpvCapabilities) {
+        if (forceLibmpv && window.api?.getMpvCapabilities) {
           try {
             const caps = await window.api.getMpvCapabilities()
             if (!cancelled && caps && !caps.error && Array.isArray(caps.decoders) && caps.decoders.length > 0) {

@@ -23,7 +23,7 @@
 # Requires (build-time only, on the maintainer's Mac):
 #   brew install meson ninja pkgconf nasm dylibbundler \
 #                ffmpeg libplacebo libass luajit zimg \
-#                little-cms2 libunibreak fontconfig
+#                little-cms2 libunibreak fontconfig molten-vk
 #
 # At runtime (end-user Mac), no Homebrew is required — every dependency
 # is bundled into the tarball with @loader_path linkage so the libmpv
@@ -58,7 +58,7 @@ need_brew() {
   }
   local pkgs=(meson ninja pkgconf nasm dylibbundler
               ffmpeg libplacebo libass luajit zimg
-              little-cms2 libunibreak fontconfig)
+              little-cms2 libunibreak fontconfig molten-vk)
   local missing=()
   for p in "${pkgs[@]}"; do
     brew list --formula "$p" >/dev/null 2>&1 || missing+=("$p")
@@ -148,6 +148,32 @@ for dylib in "$OUT/lib/"*.dylib; do
     count=$((count - 1))
   done
 done
+
+# ── 5a. Bundle MoltenVK as the Vulkan driver ─────────────────────────
+# libmpv's gpu / gpu-next VOs use libplacebo + Vulkan. On macOS Vulkan
+# is implemented via MoltenVK (Khronos's Metal-backed driver). The
+# Vulkan loader (bundled by dylibbundler as libvulkan.dylib) discovers
+# drivers via an ICD manifest JSON; we drop MoltenVK's dylib next to
+# libmpv and a manifest at lib/vulkan/icd.d/, then point the loader
+# at it via VK_ICD_FILENAMES in mpv-embed-player.js. Mirrors JMP's
+# packaging (jellyfin-desktop/resources/macos/MoltenVK_icd.json).
+echo "Bundling MoltenVK + Vulkan ICD manifest..."
+MOLTENVK_SRC=$(brew --prefix molten-vk)/lib/libMoltenVK.dylib
+if [ ! -f "$MOLTENVK_SRC" ]; then
+  echo "error: MoltenVK not found at $MOLTENVK_SRC — install with: brew install molten-vk"
+  exit 1
+fi
+cp "$MOLTENVK_SRC" "$OUT/lib/"
+mkdir -p "$OUT/lib/vulkan/icd.d"
+cat > "$OUT/lib/vulkan/icd.d/MoltenVK_icd.json" <<'EOF'
+{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "library_path": "../../libMoltenVK.dylib",
+        "api_version": "1.2.0"
+    }
+}
+EOF
 
 # install_name_tool and dylibbundler both invalidate the dylibs' code
 # signatures (every load-command edit changes the binary). Gatekeeper
