@@ -86,7 +86,13 @@ class Api::PlaybackController < Api::BaseController
       burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
       subtitle_stream_index: subtitle_stream_index,
       duration: info[:duration],
-      device_profile: device_profile)
+      device_profile: device_profile,
+      # Hand the probe we already ran (cached via TechProbeService or
+      # live ffprobe a few lines up) into start_session so it doesn't
+      # re-probe the file. Re-probing a 4K HEVC HDR source over USB
+      # SSD costs ~3-5s of cold-start latency before ffmpeg even
+      # launches — the user sees it as "wait 20s before video plays".
+      probe_result: info)
 
     session[:playback_session_id] = session_id
 
@@ -421,7 +427,21 @@ class Api::PlaybackController < Api::BaseController
   end
 
   # GET /api/playback/hls/:session_id/:asset
-  # Serves both init.mp4 and segment_N.m4s.
+  # Serves init.mp4 and segment_N.{ts,m4s}.
+  #
+  # We tried mirroring Jellyfin's `DynamicHlsController.cs:1428` model
+  # — kill+restart ffmpeg when a requested segment is more than 4
+  # ahead of ffmpeg's current frontier. In Caramba it backfires: a
+  # cold-starting session ffmpeg has no segments yet, Safari fires a
+  # burst of 5 prefetch requests in parallel (segment_0 through
+  # segment_5), and the segment_5 request triggers a relocate that
+  # kills ffmpeg mid-write of segment_0 — the file Safari actually
+  # needs to play. The legitimate forward-seek path runs through
+  # /api/playback/seek (our custom scrubber controls), which already
+  # restarts ffmpeg correctly. The remaining 404 noise is harmless:
+  # Safari prefetches a few segments ahead, long-poll covers
+  # whatever ffmpeg is about to write, anything further out 404s
+  # cleanly and Safari retries when it actually catches up.
   def hls_asset
     session_id = params[:session_id]
     asset_name = params[:asset]
@@ -431,13 +451,10 @@ class Api::PlaybackController < Api::BaseController
     asset_path = TranscoderService.hls_asset_path(session_id, asset_name)
     return head :bad_request unless asset_path
 
-    # Long-poll for the segment. Pre-generated VOD playlist lists every
-    # segment the session will ever produce, but ffmpeg encodes them
-    # sequentially — so a player requesting segment_N when ffmpeg is on
-    # segment_M<N has to wait for M..N to be written. 18s window stays
-    # inside hls.js's default fragLoadingTimeOut (20s) so a slow encode
-    # doesn't trip a retry storm. Under-realtime ffmpeg is its own
-    # separate problem (Sentry breadcrumb from monitor_ffmpeg_stderr).
+    # Long-poll for ffmpeg to write the segment. 18 s stays inside
+    # hls.js's default fragLoadingTimeOut (20 s) so a brief lag
+    # doesn't trip a retry storm. Under-realtime ffmpeg surfaces via
+    # Sentry breadcrumb from monitor_ffmpeg_stderr.
     90.times do
       break if File.exist?(asset_path)
       sleep 0.2

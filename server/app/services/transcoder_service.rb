@@ -142,7 +142,9 @@ class TranscoderService
         # we'd run inside start_ffmpeg_hls anyway, and skip ffmpeg if it's
         # direct_play. Subtitle extraction is still useful, since the file's
         # embedded text subs need to be exposed via the session VTT.
-        probe_result = probe(file_path)
+        # The controller hands in :probe_result so we don't re-run ffprobe
+        # (TechProbeService caches it; live probe takes ~3-5s for 4K HEVC).
+        probe_result = opts[:probe_result] || probe(file_path)
         decided = transcode_strategy(
           probe_result,
           opts[:audio_stream_index],
@@ -192,6 +194,7 @@ class TranscoderService
         seek_time
       end
     end
+
 
     def stop_session(session_id)
       mu = session_mutex(session_id)
@@ -1156,6 +1159,9 @@ class TranscoderService
       #   hls_time 6       — 6-second segments, Jellyfin's default.
       #   temp_file        — atomic write (.tmp → rename).
       #   independent_segments — each segment decodes standalone.
+      #   start_number 0   — fresh sessions always begin at segment_0.
+      #     Seeks restart ffmpeg via seek_session (which clears the
+      #     dir and starts again at segment_0 for the new timeline).
       args += %w[
         -f hls
         -hls_time 6
