@@ -313,6 +313,19 @@ export function PlayerProvider({ children }) {
     return null
   }, [savePreferences, api])
 
+  // Direct-play fast-path: mark the new audio index as active and persist
+  // the language preference. The renderer has already flipped the
+  // <video>.audioTracks[i].enabled flags client-side — no server call, no
+  // ffmpeg restart, no stream reload. Mirrors Jellyfin's htmlVideoPlayer
+  // setAudioStreamIndex when the source has multiple muxed audio tracks.
+  const applyDirectPlayAudio = useCallback((audioStreamId) => {
+    setPlayerState(prev => {
+      const next = { ...prev, activeAudioIndex: audioStreamId }
+      savePreferences(next)
+      return next
+    })
+  }, [savePreferences])
+
   const switchSubtitle = useCallback(async (subtitleStreamId) => {
     try {
       const result = await api.switchSubtitle(subtitleStreamId)
@@ -439,8 +452,8 @@ export function PlayerProvider({ children }) {
 
   const contextValue = useMemo(() => ({
     playerState, launching, openPlayer, closePlayer, playNextEpisode,
-    seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance,
-  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
+    seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance,
+  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
 
   return (
     <PlayerContext.Provider value={contextValue}>

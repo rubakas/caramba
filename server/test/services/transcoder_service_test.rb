@@ -1,9 +1,10 @@
 require "test_helper"
+require "tempfile"
 
 class TranscoderServiceTest < ActiveSupport::TestCase
   def probe_result(video_codec: "h264", audio_codec: "aac", format_name: "matroska,webm",
                    pix_fmt: "yuv420p", width: 1920, channels: 2, bitrate: nil,
-                   color_transfer: nil)
+                   color_transfer: nil, level: nil)
     {
       formatName: format_name,
       bitrate: bitrate,
@@ -12,6 +13,7 @@ class TranscoderServiceTest < ActiveSupport::TestCase
         width: width,
         height: 1080,
         pix_fmt: pix_fmt,
+        level: level,
         color_transfer: color_transfer
       },
       audioStreams: [ { index: 1, codec: audio_codec, channels: channels, language: "eng" } ],
@@ -198,6 +200,99 @@ class TranscoderServiceTest < ActiveSupport::TestCase
       )
   end
 
+  # ── VideoLevel CodecProfile (HEVC level cap) ──────────────────────
+
+  def browser_profile_with_hevc_level_cap(max_level)
+    profile = browser_profile
+    profile["CodecProfiles"] << {
+      "Type" => "Video",
+      "Codec" => "hevc,h265",
+      "Conditions" => [
+        { "Property" => "VideoLevel", "Condition" => "LessThanEqual",
+          "Value" => max_level.to_s, "IsRequired" => true }
+      ]
+    }
+    profile
+  end
+
+  test "HEVC at level 5.1 with profile capped at level 5.0 → full_transcode" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", level: 153),
+        1, nil, browser_profile_with_hevc_level_cap(150)
+      )
+  end
+
+  test "HEVC at level 4.0 with profile capped at level 5.0 → direct_play" do
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", level: 120),
+        1, nil, browser_profile_with_hevc_level_cap(150)
+      )
+  end
+
+  test "HEVC missing level + IsRequired cap → full_transcode (fail-closed)" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", level: nil),
+        1, nil, browser_profile_with_hevc_level_cap(150)
+      )
+  end
+
+  # ── VideoRangeType CodecProfile (HDR tonemap routing) ─────────────
+
+  def browser_profile_sdr_only
+    profile = browser_profile
+    profile["CodecProfiles"] << {
+      "Type" => "Video",
+      "Codec" => "hevc,h265",
+      "Conditions" => [
+        { "Property" => "VideoRangeType", "Condition" => "Equals",
+          "Value" => "SDR", "IsRequired" => true }
+      ]
+    }
+    profile
+  end
+
+  test "HDR (smpte2084) HEVC with SDR-only profile → full_transcode (tonemap)" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", color_transfer: "smpte2084"),
+        1, nil, browser_profile_sdr_only
+      )
+  end
+
+  test "HLG HEVC with SDR-only profile → full_transcode (tonemap)" do
+    assert_equal :full_transcode,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", color_transfer: "arib-std-b67"),
+        1, nil, browser_profile_sdr_only
+      )
+  end
+
+  test "SDR HEVC (bt709) with SDR-only profile → direct_play" do
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", color_transfer: "bt709"),
+        1, nil, browser_profile_sdr_only
+      )
+  end
+
+  test "missing color_transfer treated as SDR with SDR-only profile → direct_play" do
+    assert_equal :direct_play,
+      TranscoderService.transcode_strategy(
+        probe_result(video_codec: "hevc", audio_codec: "aac",
+                     format_name: "mov,mp4,m4a", color_transfer: nil),
+        1, nil, browser_profile_sdr_only
+      )
+  end
+
   # ── Native-player profile (ExoPlayer-class) ───────────────────────
 
   test "native-player profile + mkv + hevc + truehd → direct_play (broad codec coverage)" do
@@ -244,6 +339,21 @@ class TranscoderServiceTest < ActiveSupport::TestCase
   def find_arg(args, flag)
     idx = args.index(flag)
     idx && args[idx + 1]
+  end
+
+  # Returns the base video filter chain — `-vf` value when single-rendition,
+  # else the pre-split portion of `-filter_complex` (multi-rendition wraps
+  # the same base chain then splits N ways for the ladder). Tests that
+  # assert "tonemap is/isn't applied to the base chain" should compare
+  # against this rather than the raw -vf, which goes away in the ladder
+  # path.
+  def find_video_filter(args)
+    vf = find_arg(args, "-vf")
+    return vf if vf
+    fc = find_arg(args, "-filter_complex")
+    return nil unless fc
+    m = fc.match(/\A\[0:v:0\](.*?)\[v_split\]/m)
+    m ? m[1] : fc
   end
 
   test "full_transcode_video_args: targets source bitrate when below the cap" do
@@ -348,13 +458,13 @@ class TranscoderServiceTest < ActiveSupport::TestCase
     TranscoderService.instance_variable_set(:@zscale_available, prev)
   end
 
-  test "build_hls_ffmpeg_args: HDR full_transcode prepends tonemap chain to -vf" do
+  test "build_hls_ffmpeg_args: HDR full_transcode prepends tonemap chain to base filter" do
     with_zscale(true) do
       probe = probe_result(video_codec: "hevc", pix_fmt: "yuv420p10le",
                            color_transfer: "smpte2084", width: 3840)
       args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                     :full_transcode, probe, { audio_stream_index: 1 })
-      vf = find_arg(args, "-vf")
+      vf = find_video_filter(args)
       assert_includes vf, "zscale=t=linear:npl=100"
       assert_includes vf, "tonemap=tonemap=hable"
       assert_includes vf, "format=yuv420p"
@@ -369,7 +479,7 @@ class TranscoderServiceTest < ActiveSupport::TestCase
     probe = probe_result(video_codec: "vc1", color_transfer: "bt709")
     args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                   :full_transcode, probe, { audio_stream_index: 1 })
-    vf = find_arg(args, "-vf")
+    vf = find_video_filter(args)
     refute_includes vf, "zscale"
     refute_includes vf, "tonemap"
     assert_nil find_arg(args, "-color_primaries"),
@@ -382,7 +492,7 @@ class TranscoderServiceTest < ActiveSupport::TestCase
                            color_transfer: "smpte2084", width: 3840)
       args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                     :full_transcode, probe, { audio_stream_index: 1 })
-      vf = find_arg(args, "-vf")
+      vf = find_video_filter(args)
       refute_includes vf, "zscale"
       refute_includes vf, "tonemap"
     end
@@ -396,29 +506,220 @@ class TranscoderServiceTest < ActiveSupport::TestCase
                            color_transfer: "smpte2084", width: 3840)
       args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                     :full_transcode, probe, { audio_stream_index: 1 })
-      vf = find_arg(args, "-vf")
+      vf = find_video_filter(args)
       assert_includes vf, "scale=-2:1080:flags=lanczos"
       assert vf.index("scale=-2:1080") < vf.index("zscale=t=linear"),
         "downscale must precede tonemap so we tonemap 4× fewer pixels"
     end
   end
 
-  test "HDR + 1080p source does NOT add downscale" do
+  test "HDR + 1080p source does NOT add base-filter downscale" do
     with_zscale(true) do
       probe = probe_result(video_codec: "hevc", pix_fmt: "yuv420p10le",
                            color_transfer: "smpte2084", width: 1920)
       args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                     :full_transcode, probe, { audio_stream_index: 1 })
-      refute_includes find_arg(args, "-vf"), "scale=-2:1080"
+      # Base filter (pre-split) must not pre-downscale 1080p sources.
+      # The ladder's per-variant scale=-2:1080 step lives after the split
+      # and is a no-op when source is already 1080p.
+      refute_includes find_video_filter(args), "scale=-2:1080"
     end
   end
 
-  test "SDR 4K source does NOT downscale (downscale only fires with tonemap)" do
+  test "SDR 4K source does NOT downscale in base filter (downscale only with tonemap)" do
     with_zscale(true) do
       probe = probe_result(video_codec: "vc1", color_transfer: "bt709", width: 3840)
       args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
                                     :full_transcode, probe, { audio_stream_index: 1 })
-      refute_includes find_arg(args, "-vf"), "scale=-2:1080"
+      refute_includes find_video_filter(args), "scale=-2:1080"
+    end
+  end
+
+  # ── Multi-rendition HLS ladder ────────────────────────────────────
+
+  test "transcode_ladder: 4K source produces 3 renditions (1080p, 720p, 480p)" do
+    probe = probe_result(width: 3840, bitrate: 25_000_000)
+    ladder = TranscoderService.send(:transcode_ladder, probe)
+    heights = ladder.map { |r| r[:height] }
+    assert_equal [ 1080, 720, 480 ], heights
+  end
+
+  test "transcode_ladder: 1080p source produces 2 renditions (1080p, 480p)" do
+    probe = probe_result(width: 1920, bitrate: 10_000_000)
+    ladder = TranscoderService.send(:transcode_ladder, probe)
+    heights = ladder.map { |r| r[:height] }
+    assert_equal [ 1080, 480 ], heights
+  end
+
+  test "transcode_ladder: 720p source produces no ladder (single rendition)" do
+    probe = probe_result(width: 1280, bitrate: 5_000_000)
+    ladder = TranscoderService.send(:transcode_ladder, probe)
+    # 1280 < 1800 → single rendition (downshifting to 480p offers no real
+    # ABR benefit when source is already at 720p)
+    assert_empty ladder
+  end
+
+  test "transcode_ladder: SD source produces empty ladder (single rendition path)" do
+    probe = probe_result(width: 854, bitrate: 1_500_000)
+    ladder = TranscoderService.send(:transcode_ladder, probe)
+    assert_empty ladder
+  end
+
+  test "transcode_ladder: 1080p rendition caps at source bitrate when below 20M ceiling" do
+    probe = probe_result(width: 3840, bitrate: 12_000_000)
+    ladder = TranscoderService.send(:transcode_ladder, probe)
+    rendition_1080 = ladder.find { |r| r[:height] == 1080 }
+    assert_equal 12_000_000, rendition_1080[:bitrate]
+  end
+
+  test "build_hls_ffmpeg_args: multi-rendition emits var_stream_map with named variants" do
+    probe = probe_result(video_codec: "vc1", width: 3840)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :full_transcode, probe, { audio_stream_index: 1 })
+    var_stream_map = find_arg(args, "-var_stream_map")
+    refute_nil var_stream_map
+    assert_includes var_stream_map, "name:1080p"
+    assert_includes var_stream_map, "name:720p"
+    assert_includes var_stream_map, "name:480p"
+    # Audio shared via agroup so it's encoded once across all variants.
+    assert_includes var_stream_map, "agroup:au"
+  end
+
+  test "build_hls_ffmpeg_args: multi-rendition emits master_pl_name" do
+    probe = probe_result(video_codec: "vc1", width: 3840)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :full_transcode, probe, { audio_stream_index: 1 })
+    assert_equal "master.m3u8", find_arg(args, "-master_pl_name")
+  end
+
+  test "build_hls_ffmpeg_args: multi-rendition uses init_%v.mp4 init filename" do
+    probe = probe_result(video_codec: "vc1", width: 3840)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :full_transcode, probe, { audio_stream_index: 1 })
+    assert_equal "init_%v.mp4", find_arg(args, "-hls_fmp4_init_filename")
+  end
+
+  test "build_hls_ffmpeg_args: SD source falls back to single-rendition (no ladder)" do
+    probe = probe_result(video_codec: "vc1", width: 854)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :full_transcode, probe, { audio_stream_index: 1 })
+    assert_nil find_arg(args, "-var_stream_map"),
+      "SD sources don't benefit from a ladder — single rendition stays single"
+    assert_equal "init.mp4", find_arg(args, "-hls_fmp4_init_filename")
+  end
+
+  test "build_hls_ffmpeg_args: burn_sub forces single-rendition (no ladder under overlay)" do
+    probe = probe_result(video_codec: "vc1", width: 3840)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :full_transcode, probe,
+                                  { audio_stream_index: 1, burn_subtitle_index: 3 })
+    assert_nil find_arg(args, "-var_stream_map"),
+      "burn-in overlay uses a single filter_complex output — no ladder split"
+  end
+
+  test "build_hls_ffmpeg_args: audio_transcode does NOT use ladder (no video re-encode)" do
+    probe = probe_result(video_codec: "h264", audio_codec: "truehd", width: 3840)
+    args = TranscoderService.send(:build_hls_ffmpeg_args, "/path", 0, "/tmp",
+                                  :audio_transcode, probe, { audio_stream_index: 1 })
+    assert_nil find_arg(args, "-var_stream_map")
+  end
+
+  # ── Encode-speed monitoring (Sentry breadcrumbs) ──────────────────
+
+  test "monitor_ffmpeg_stderr writes stderr lines to the log file" do
+    Tempfile.create("ffmpeg_test_stderr") do |log_tmp|
+      rd, wr = IO.pipe
+      wr.write "frame= 100 fps= 25 speed=1.5x\n"
+      wr.write "frame= 200 fps= 25 speed=1.6x\n"
+      wr.close
+
+      probe = probe_result(width: 1920, color_transfer: nil)
+      thread = Thread.new {
+        TranscoderService.send(:monitor_ffmpeg_stderr, rd, log_tmp.path,
+                               :full_transcode, probe, "test-session")
+      }
+      thread.join(2)
+
+      content = File.read(log_tmp.path)
+      assert_includes content, "speed=1.5x"
+      assert_includes content, "speed=1.6x"
+    end
+  end
+
+  # Temporarily replace the report_encode_speed_degraded singleton with
+  # a recording proxy so we can assert on what the stderr monitor reports.
+  def with_speed_report_recorder
+    recorded = []
+    original = TranscoderService.singleton_class.instance_method(:report_encode_speed_degraded)
+    TranscoderService.define_singleton_method(:report_encode_speed_degraded) do |mean, samples, strategy, probe, session|
+      recorded << { mean: mean, samples: samples, strategy: strategy, session: session }
+    end
+    begin
+      yield recorded
+    ensure
+      TranscoderService.define_singleton_method(:report_encode_speed_degraded, original)
+    end
+  end
+
+  test "monitor_ffmpeg_stderr fires Sentry breadcrumb when speed degrades" do
+    Tempfile.create("ffmpeg_test_stderr") do |log_tmp|
+      rd, wr = IO.pipe
+      # 5 samples below 0.9× — should trigger breadcrumb.
+      5.times { |i| wr.write "frame=#{100 + i} fps= 25 speed=0.5x\n" }
+      wr.close
+
+      with_speed_report_recorder do |recorded|
+        probe = probe_result(width: 1920)
+        thread = Thread.new {
+          TranscoderService.send(:monitor_ffmpeg_stderr, rd, log_tmp.path,
+                                 :full_transcode, probe, "session-X")
+        }
+        thread.join(2)
+
+        assert_equal 1, recorded.length
+        assert_in_delta 0.5, recorded[0][:mean], 0.01
+        assert_equal :full_transcode, recorded[0][:strategy]
+        assert_equal "session-X", recorded[0][:session]
+      end
+    end
+  end
+
+  test "monitor_ffmpeg_stderr does NOT fire when speed stays above threshold" do
+    Tempfile.create("ffmpeg_test_stderr") do |log_tmp|
+      rd, wr = IO.pipe
+      10.times { |i| wr.write "frame=#{100 + i} fps= 25 speed=1.5x\n" }
+      wr.close
+
+      with_speed_report_recorder do |recorded|
+        probe = probe_result(width: 1920)
+        thread = Thread.new {
+          TranscoderService.send(:monitor_ffmpeg_stderr, rd, log_tmp.path,
+                                 :full_transcode, probe, "session-Y")
+        }
+        thread.join(2)
+
+        assert_empty recorded
+      end
+    end
+  end
+
+  test "monitor_ffmpeg_stderr does NOT fire after fewer than 5 degraded samples" do
+    Tempfile.create("ffmpeg_test_stderr") do |log_tmp|
+      rd, wr = IO.pipe
+      # Only 4 degraded samples — below the rolling-window size.
+      4.times { wr.write "frame= 100 fps= 25 speed=0.5x\n" }
+      wr.close
+
+      with_speed_report_recorder do |recorded|
+        probe = probe_result(width: 1920)
+        thread = Thread.new {
+          TranscoderService.send(:monitor_ffmpeg_stderr, rd, log_tmp.path,
+                                 :full_transcode, probe, "session-Z")
+        }
+        thread.join(2)
+
+        assert_empty recorded
+      end
     end
   end
 

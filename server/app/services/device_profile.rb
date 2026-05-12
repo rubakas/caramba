@@ -255,7 +255,7 @@ class DeviceProfile
       next true if actual.nil? && !is_required
       next false if actual.nil?
 
-      compare(actual, condition, value)
+      compare(actual, condition, value, property)
     end
   end
 
@@ -265,6 +265,20 @@ class DeviceProfile
       pix_fmt = probe_result.dig(:video, :pix_fmt).to_s
       return 10 if TEN_BIT_PIX_FMTS.include?(pix_fmt)
       8
+    when "VideoLevel"
+      # ffprobe-reported level_idc, codec-specific. HEVC: 120=4.0, 150=5.0,
+      # 153=5.1, 156=5.2. H.264: 40=4.0, 51=5.1. Clients emit the same
+      # integer in their CodecProfile VideoLevel conditions (mirrors the
+      # `.LNNN` suffix from the canPlayType probe).
+      probe_result.dig(:video, :level)
+    when "VideoRangeType"
+      # Stringly-typed HDR detection: PQ or HLG transfer ⇒ "HDR"; anything
+      # else ⇒ "SDR". Clients without HDR display capability emit
+      # { Property: 'VideoRangeType', Condition: 'Equals', Value: 'SDR' }
+      # to force tonemap.
+      transfer = probe_result.dig(:video, :color_transfer).to_s
+      return "HDR" if %w[smpte2084 arib-std-b67].include?(transfer)
+      "SDR"
     when "AudioChannels"
       # Reserved for future audio-channel constraints. Caller would need
       # to pass the chosen audio stream into evaluate_conditions; not
@@ -274,17 +288,31 @@ class DeviceProfile
     end
   end
 
-  def compare(actual, condition, value)
-    target = value.to_f
-    actual_num = actual.to_f
-    case condition
-    when "Equals"           then actual_num == target
-    when "NotEquals"        then actual_num != target
-    when "LessThanEqual"    then actual_num <= target
-    when "LessThan"         then actual_num <  target
-    when "GreaterThanEqual" then actual_num >= target
-    when "GreaterThan"      then actual_num >  target
-    else false
+  # String properties (VideoRangeType) compare on case-insensitive equality;
+  # everything else falls back to numeric comparison.
+  STRING_PROPERTIES = %w[VideoRangeType].freeze
+
+  def compare(actual, condition, value, property = nil)
+    if STRING_PROPERTIES.include?(property.to_s)
+      a = actual.to_s
+      v = value.to_s
+      case condition
+      when "Equals"    then a.casecmp?(v)
+      when "NotEquals" then !a.casecmp?(v)
+      else false
+      end
+    else
+      target = value.to_f
+      actual_num = actual.to_f
+      case condition
+      when "Equals"           then actual_num == target
+      when "NotEquals"        then actual_num != target
+      when "LessThanEqual"    then actual_num <= target
+      when "LessThan"         then actual_num <  target
+      when "GreaterThanEqual" then actual_num >= target
+      when "GreaterThan"      then actual_num >  target
+      else false
+      end
     end
   end
 end

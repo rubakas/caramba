@@ -36,6 +36,66 @@ function isElectronRuntime() {
   return /\bElectron\b/.test(navigator.userAgent || '')
 }
 
+// HEVC level_idc values we probe. Mirrors ffprobe's level field exactly,
+// so the server's VideoLevel comparator matches the LessThanEqual cap
+// emitted in CodecProfiles.
+//   120 = 4.0  (4K @ 30fps)
+//   150 = 5.0  (4K @ 60fps main-tier)
+//   153 = 5.1  (4K @ 60fps high-tier)
+//   156 = 5.2  (8K)
+const HEVC_LEVELS = [120, 150, 153, 156]
+
+// Probe each level for both Main and Main 10 profiles using both `hvc1`
+// (mp4 sample entry) and `hev1` (raw HEVC NAL) tags — Chrome accepts both
+// but only one form per platform survives MSE strict mode.
+function highestHevcLevel(profileTag /* '1.6' | '2.4' */) {
+  let best = 0
+  for (const lvl of HEVC_LEVELS) {
+    const hvc1 = `video/mp4; codecs="hvc1.${profileTag}.L${lvl}.B0"`
+    const hev1 = `video/mp4; codecs="hev1.${profileTag}.L${lvl}.B0"`
+    if (probe(hvc1) || probe(hev1)) best = lvl
+  }
+  return best
+}
+
+// HDR decode capability via the W3C Media Capabilities API. Lets us
+// distinguish "decoder accepts the bitstream" (canPlayType) from "system
+// can actually display HDR" (decodingInfo's powerEfficient + supported
+// against PQ + Rec.2020). When this returns false, the client emits a
+// VideoRangeType:Equals:SDR CodecProfile so the server tonemaps HDR
+// sources instead of letting them direct-play to a non-HDR display.
+async function probeHdrSupport() {
+  if (typeof navigator === 'undefined' || !navigator.mediaCapabilities?.decodingInfo) return false
+  try {
+    const info = await navigator.mediaCapabilities.decodingInfo({
+      type: 'media-source',
+      video: {
+        contentType: 'video/mp4; codecs="hvc1.2.4.L150.B0"',
+        width: 3840, height: 2160, bitrate: 20_000_000, framerate: 60,
+        hdrMetadataType: 'smpteSt2086',
+        colorGamut: 'rec2020',
+        transferFunction: 'pq',
+      },
+    })
+    return !!info.supported
+  } catch { return false }
+}
+
+// Cached HDR probe — decodingInfo is async; we kick off the probe lazily
+// and read the resolved value on subsequent calls. First profile build of
+// a session may see `null` (treat as conservative SDR-only) until the
+// promise settles, but startup playback is always strategy-driven by the
+// server, so a slightly conservative first profile is acceptable.
+let _hdrSupported = null
+let _hdrProbePromise = null
+function hdrSupportedSync() {
+  if (_hdrSupported !== null) return _hdrSupported
+  if (!_hdrProbePromise) {
+    _hdrProbePromise = probeHdrSupport().then(v => { _hdrSupported = v })
+  }
+  return false
+}
+
 const TRANSCODE_TARGET_CONTAINER = 'mp4'
 const TRANSCODE_TARGET_VIDEO = 'h264'
 const TRANSCODE_TARGET_AUDIO = 'aac'
@@ -48,27 +108,44 @@ const TRANSCODE_TARGET_MAX_AUDIO_CHANNELS = '6'
  */
 export function buildBrowserProfile() {
   const h264 = probe('video/mp4; codecs="avc1.640028"')
-  const hevc8 = probe('video/mp4; codecs="hvc1.1.6.L120.B0"') || probe('video/mp4; codecs="hev1.1.6.L120.B0"')
+
+  const hevc8MaxLevel = highestHevcLevel('1.6')
   // Electron 33 / Chromium 130 MSE accepts the codec string but stalls on
   // 10-bit playback (segments arrive, decoder produces no frames). Real
   // browsers (Safari, Chrome 107+) decode 10-bit HEVC reliably.
-  const hevc10 = !isElectronRuntime() && (
-    probe('video/mp4; codecs="hvc1.2.4.L150.B0"') ||
-    probe('video/mp4; codecs="hev1.2.4.L150.B0"')
-  )
+  const hevc10MaxLevel = isElectronRuntime() ? 0 : highestHevcLevel('2.4')
+
+  // AV1 — Main profile, 4K SDR (.05M.08), 4K HDR (.05M.10), 8K SDR
+  // (.09M.08). Chrome 70+, Firefox 67+, Safari 17.4+ on Apple Silicon.
+  const av1 = probe('video/mp4; codecs="av01.0.05M.08"') ||
+              probe('video/mp4; codecs="av01.0.09M.08"')
+  const av1Hdr = probe('video/mp4; codecs="av01.0.05M.10"')
+
+  // VP9 — Profile 0 (8-bit), Profile 2 (10-bit HDR). Chrome universal,
+  // Safari 14+, Firefox.
+  const vp9 = probe('video/mp4; codecs="vp09.00.50.08"')
+  const vp9Hdr = probe('video/mp4; codecs="vp09.02.51.10"')
 
   const audioFlags = {
-    aac:  true, // unconditional — every MSE-capable browser supports it
-    ac3:  probe('audio/mp4; codecs="ac-3"'),
-    eac3: probe('audio/mp4; codecs="ec-3"'),
-    flac: probe('audio/mp4; codecs="flac"'),
-    mp3:  probe('audio/mp4; codecs="mp4a.40.34"') || probe('audio/mp4; codecs="mp3"'),
-    opus: probe('audio/mp4; codecs="opus"'),
+    aac:    true, // unconditional — every MSE-capable browser supports it
+    ac3:    probe('audio/mp4; codecs="ac-3"'),
+    eac3:   probe('audio/mp4; codecs="ec-3"'),
+    flac:   probe('audio/mp4; codecs="flac"'),
+    mp3:    probe('audio/mp4; codecs="mp4a.40.34"') || probe('audio/mp4; codecs="mp3"'),
+    opus:   probe('audio/mp4; codecs="opus"'),
+    // DTS / DTS-HD work in Chrome with the "DTS audio codec extension"
+    // shipped in Win 11. Negative on most builds; we probe anyway so
+    // capable installs avoid an audio_transcode.
+    dts:    probe('audio/mp4; codecs="dts"') || probe('audio/mp4; codecs="dtsc"'),
+    dtshd:  probe('audio/mp4; codecs="dtsh"'),
+    vorbis: probe('audio/webm; codecs="vorbis"'),
   }
 
   const videoCodecs = []
-  if (h264)  videoCodecs.push('h264')
-  if (hevc8) videoCodecs.push('hevc', 'h265')
+  if (h264)             videoCodecs.push('h264')
+  if (hevc8MaxLevel)    videoCodecs.push('hevc', 'h265')
+  if (av1 || av1Hdr)    videoCodecs.push('av1')
+  if (vp9 || vp9Hdr)    videoCodecs.push('vp9')
 
   const audioCodecs = Object.entries(audioFlags).filter(([_, v]) => v).map(([k]) => k)
 
@@ -91,22 +168,54 @@ export function buildBrowserProfile() {
         MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
     ],
     SubtitleProfiles: [
-      // Browsers render WebVTT via <track>. Server extracts to VTT and
-      // serves at /api/playback/subtitles?session=...
+      // Browsers render WebVTT via <track>. Server extracts ANY source
+      // subtitle codec (incl. ASS/SSA/SubRip) to VTT and serves it at
+      // /api/playback/subtitles?session=...
+      //
+      // ASS/SSA styling (fonts, positions, karaoke) is lost in the VTT
+      // conversion. Client-side libass-wasm rendering would preserve it
+      // — see follow-up task in the plan file.
       { Format: 'vtt', Method: 'External' },
     ],
     CodecProfiles: [],
     ContainerProfiles: [],
   }
 
-  // HEVC Main 10 unsupported — cap HEVC bit depth at 8 so the server
-  // transcodes 10-bit/HDR sources instead of attempting direct-stream.
-  if (hevc8 && !hevc10) {
+  // HEVC bit-depth cap when Main 10 isn't supported. Even if Main 8 is,
+  // 10-bit sources would otherwise satisfy a Codec match.
+  if (hevc8MaxLevel && !hevc10MaxLevel) {
     profile.CodecProfiles.push({
       Type: 'Video',
       Codec: 'hevc,h265',
       Conditions: [
         { Property: 'VideoBitDepth', Condition: 'LessThanEqual', Value: '8', IsRequired: true },
+      ],
+    })
+  }
+
+  // HEVC level cap — pin to the highest level we successfully probed.
+  // Without this, the server would direct-play a Level 5.2 file to a
+  // decoder that only handles Level 4.0, and the renderer would stall.
+  const hevcCap = Math.max(hevc8MaxLevel, hevc10MaxLevel)
+  if (hevcCap > 0) {
+    profile.CodecProfiles.push({
+      Type: 'Video',
+      Codec: 'hevc,h265',
+      Conditions: [
+        { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: String(hevcCap), IsRequired: true },
+      ],
+    })
+  }
+
+  // HDR availability — when the system can't actually display HDR
+  // (decodingInfo returns supported:false for PQ+rec2020), force tonemap
+  // by blocking HDR direct-play. SDR sources are unaffected.
+  if (!hdrSupportedSync()) {
+    profile.CodecProfiles.push({
+      Type: 'Video',
+      Codec: 'hevc,h265,av1,vp9',
+      Conditions: [
+        { Property: 'VideoRangeType', Condition: 'Equals', Value: 'SDR', IsRequired: true },
       ],
     })
   }

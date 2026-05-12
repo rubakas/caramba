@@ -401,7 +401,7 @@ export default function VideoPlayer() {
 }
 
 function WebVideoPlayer() {
-  const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
   const { showToast } = useToast()
   const videoRef = useRef(null)
@@ -503,6 +503,11 @@ function WebVideoPlayer() {
     }
     fatalAttemptsRef.current = 0
     if (hlsRef.current) {
+      const v = videoRef.current
+      const handler = hlsRef.current.__carambaVideoErrorHandler
+      if (v && handler) {
+        try { v.removeEventListener('error', handler) } catch {}
+      }
       try { hlsRef.current.destroy() } catch {}
       hlsRef.current = null
     }
@@ -551,6 +556,17 @@ function WebVideoPlayer() {
     // infinite-spinner trap.
     if (Hls.isSupported()) {
       console.log('[Player] hls.js:', manifestUrl)
+      // Adaptive buffer: shrink to 6s on high-bitrate sources (≥25 Mbps).
+      // Counterintuitive but Jellyfin proven — a smaller buffer recovers
+      // from stalls faster because there's less to flush and fewer
+      // in-flight segment fetches competing with the live edge. Skip on
+      // Android TV WebView (tight memory budget — keep small either way).
+      const isAndroidTv = typeof navigator !== 'undefined' &&
+        /Android.*TV|Caramba\/AndroidTV/i.test(navigator.userAgent || '')
+      const highBitrate = (playerState.bitrate || 0) >= 25_000_000
+      const maxBuf = (highBitrate && !isAndroidTv) ? 6 : 30
+      const maxMaxBuf = (highBitrate && !isAndroidTv) ? 6 : 60
+
       const hls = new Hls({
         // Always start at the beginning of the new playlist, regardless of
         // whatever stale currentTime the <video> element is carrying from
@@ -560,9 +576,9 @@ function WebVideoPlayer() {
         // treats them as live and seeks near the live edge, honouring the
         // video element's stale currentTime if non-zero.
         startPosition: 0,
-        // Conservative buffer caps — Android TV WebView has tight memory limits.
-        maxBufferLength: 30,                // seconds forward
-        maxMaxBufferLength: 60,             // seconds hard cap
+        // Buffer caps — see comment above.
+        maxBufferLength: maxBuf,
+        maxMaxBufferLength: maxMaxBuf,
         maxBufferSize: 60 * 1024 * 1024,    // 60 MB
         backBufferLength: 15,               // seconds behind playhead
         // Transient retry — ffmpeg may lag one segment behind playback on
@@ -605,6 +621,54 @@ function WebVideoPlayer() {
       hls.on(Hls.Events.FRAG_LOADED, resetFatalBudget)
       hls.on(Hls.Events.LEVEL_LOADED, resetFatalBudget)
 
+      // Multi-step recovery state machine (Jellyfin-style).
+      //   network: startLoad() ×N
+      //   media:   attempt 0 → recoverMediaError()
+      //            attempt 1 → swapAudioCodec() + recoverMediaError()
+      //            attempt 2 → fail
+      // The swapAudioCodec() step is the key trick: when ffmpeg's HLS
+      // audio container shifts mid-stream (E-AC3 announced but bytes
+      // arrive as AC3, or vice versa), hls.js's decoder gets stuck and
+      // simple recoverMediaError() loops forever. Swapping the codec
+      // family forces hls.js to rebuild its SourceBuffer and re-attach.
+      const runRecovery = (kind /* 'network' | 'media' */) => {
+        if (hlsRef.current !== hls) return
+        const attempt = fatalAttemptsRef.current
+        if (attempt >= HLS_MAX_FATAL_RECOVERIES) {
+          console.warn('[Player] hls.js exceeded recovery budget — giving up')
+          cleanupSource()
+          showToast("Playback failed — server can't keep up", { type: 'error', duration: 6000 })
+          closePlayer()
+          return
+        }
+
+        const delay = HLS_FATAL_BACKOFF_MS[Math.min(attempt, HLS_FATAL_BACKOFF_MS.length - 1)]
+        fatalAttemptsRef.current = attempt + 1
+        if (fatalTimerRef.current) clearTimeout(fatalTimerRef.current)
+        fatalTimerRef.current = setTimeout(() => {
+          fatalTimerRef.current = null
+          if (hlsRef.current !== hls) return
+          try {
+            if (kind === 'network') {
+              hls.startLoad()
+            } else {
+              // attempt 0 = simple recover; attempt 1 = swap then recover
+              if (attempt >= 1) {
+                try { hls.swapAudioCodec() } catch (err) {
+                  console.warn('[Player] swapAudioCodec threw:', err?.message)
+                }
+              }
+              hls.recoverMediaError()
+            }
+          } catch (err) {
+            console.warn('[Player] recovery threw:', err?.message)
+          }
+        }, delay)
+      }
+
+      // Expose for the <video>.error handler (registered separately).
+      hls.__carambaRunRecovery = runRecovery
+
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (typeof window !== 'undefined' && Array.isArray(window.__caramba_hls_errors__)) {
           window.__caramba_hls_errors__.push({
@@ -620,42 +684,63 @@ function WebVideoPlayer() {
         }
         console.warn('[Player] hls.js fatal:', data.type, data.details)
 
-        const isRecoverable = data.type === Hls.ErrorTypes.NETWORK_ERROR ||
-                              data.type === Hls.ErrorTypes.MEDIA_ERROR
-        if (!isRecoverable) {
+        // HTTP error category split — don't retry a 4xx, that's a
+        // permanent server-side rejection (404 manifest, 401 expired
+        // session). code 0 with NETWORK_ERROR is a CORS / DNS failure;
+        // also unrecoverable for our LAN setup.
+        const responseCode = data.response?.code
+        if (responseCode >= 400 && responseCode < 500) {
+          cleanupSource()
+          showToast('Playback failed — server error', { type: 'error' })
+          closePlayer()
+          return
+        }
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && responseCode === 0) {
+          cleanupSource()
+          showToast('Playback failed — network error', { type: 'error' })
+          closePlayer()
+          return
+        }
+
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          runRecovery('network')
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          runRecovery('media')
+        } else {
           cleanupSource()
           showToast('Playback failed', { type: 'error' })
           closePlayer()
-          return
         }
-
-        const attempt = fatalAttemptsRef.current
-        if (attempt >= HLS_MAX_FATAL_RECOVERIES) {
-          console.warn('[Player] hls.js exceeded recovery budget — giving up')
-          cleanupSource()
-          showToast("Playback failed — server can't keep up", { type: 'error', duration: 6000 })
-          closePlayer()
-          return
-        }
-
-        const delay = HLS_FATAL_BACKOFF_MS[Math.min(attempt, HLS_FATAL_BACKOFF_MS.length - 1)]
-        fatalAttemptsRef.current = attempt + 1
-        if (fatalTimerRef.current) clearTimeout(fatalTimerRef.current)
-        fatalTimerRef.current = setTimeout(() => {
-          fatalTimerRef.current = null
-          // hls instance may have been destroyed during the wait
-          if (hlsRef.current !== hls) return
-          try {
-            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              hls.startLoad()
-            } else {
-              hls.recoverMediaError()
-            }
-          } catch (err) {
-            console.warn('[Player] recovery threw:', err?.message)
-          }
-        }, delay)
       })
+
+      // Route <video> element errors into the same recovery state machine.
+      // Decoder failures (MEDIA_ERR_DECODE) and MSE buffer rejections can
+      // fire on the <video> element without surfacing through hls.js's
+      // ERROR event, leaving the recovery path unused. Mirror Jellyfin's
+      // htmlVideoPlayer onError → handleHlsJsMediaError dispatch.
+      const onVideoError = () => {
+        const err = video.error
+        if (!err) return
+        console.warn('[Player] <video> error:', err.code, err.message)
+        // MEDIA_ERR_ABORTED (1) — user-driven; skip.
+        if (err.code === 1) return
+        // MEDIA_ERR_NETWORK (2)
+        if (err.code === 2) {
+          runRecovery('network')
+          return
+        }
+        // MEDIA_ERR_DECODE (3) — most likely fixable by swapAudioCodec.
+        if (err.code === 3) {
+          runRecovery('media')
+          return
+        }
+        // MEDIA_ERR_SRC_NOT_SUPPORTED (4) — terminal.
+        cleanupSource()
+        showToast('Format not supported', { type: 'error' })
+        closePlayer()
+      }
+      video.addEventListener('error', onVideoError)
+      hls.__carambaVideoErrorHandler = onVideoError
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       console.log('[Player] Native HLS:', manifestUrl)
       video.src = manifestUrl
@@ -676,7 +761,7 @@ function WebVideoPlayer() {
         v.load()
       }
     }
-  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, playerState.strategy, playerState.startTime, cleanupSource])
+  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, playerState.strategy, playerState.startTime, playerState.bitrate, cleanupSource])
 
   // Helper: disable all text tracks on the video element.
   const disableAllTextTracks = useCallback(() => {
@@ -969,6 +1054,29 @@ function WebVideoPlayer() {
     const video = videoRef.current
     if (!video) return
 
+    // Direct-play fast-path: file is byte-for-byte the source, so every
+    // audio track is already muxed into the same MP4 the browser is
+    // decoding. Flip <video>.audioTracks[i].enabled instead of restarting
+    // ffmpeg. Audio swap is instantaneous, video keeps playing, no seek
+    // jump. Requires the browser to expose the HTMLMediaElement
+    // audioTracks API — Chrome/Edge/Safari yes, Firefox no.
+    if (playerState.strategy === 'direct_play' &&
+        typeof video.audioTracks !== 'undefined' &&
+        video.audioTracks?.length > 1) {
+      const targetPos = playerState.audioStreams.findIndex(
+        s => (s.id ?? s.index) === audioStreamIndex
+      )
+      if (targetPos >= 0 && targetPos < video.audioTracks.length) {
+        for (let i = 0; i < video.audioTracks.length; i++) {
+          video.audioTracks[i].enabled = (i === targetPos)
+        }
+        applyDirectPlayAudio(audioStreamIndex)
+        return
+      }
+      // Fall through to server round-trip if the index doesn't map
+      // (e.g. browser only exposed a subset of tracks).
+    }
+
     const currentVideoTime = isFinite(video.currentTime) ? video.currentTime : 0
 
     setBuffering(true)
@@ -983,7 +1091,7 @@ function WebVideoPlayer() {
     } else {
       setBuffering(false)
     }
-  }, [switchAudio])
+  }, [switchAudio, applyDirectPlayAudio, playerState.strategy, playerState.audioStreams])
 
   const handleSwitchSubtitle = useCallback(async (subtitleStreamIndex) => {
     disableAllTextTracks()

@@ -74,6 +74,7 @@ class TranscoderService
           width: video_stream["width"],
           height: video_stream["height"],
           profile: video_stream["profile"],
+          level: video_stream["level"],
           pix_fmt: video_stream["pix_fmt"],
           color_transfer: video_stream["color_transfer"],
           color_primaries: video_stream["color_primaries"],
@@ -200,17 +201,35 @@ class TranscoderService
 
     # ── HLS file accessors ────────────────────────────────────────────
 
+    # Returns the manifest the client should load first — master.m3u8 if
+    # a multi-rendition ladder was emitted (ffmpeg created it via
+    # -master_pl_name), else the single-rendition playlist.m3u8. The
+    # caller (controller) doesn't need to know about ladders — it asks
+    # for "the playlist" and gets whatever ffmpeg produced.
     def hls_playlist_path(session_id)
       return nil unless @session && @session[:id] == session_id
+      master = File.join(@session[:hls_dir], "master.m3u8")
+      return master if File.exist?(master)
       File.join(@session[:hls_dir], "playlist.m3u8")
     end
 
-    # Serve init segment (init.mp4) or media segments (segment_N.m4s).
-    # Name is sanitised to prevent directory traversal.
+    # Serve init segment, media segments, or variant playlists. Variant
+    # naming patterns: `<name>_playlist.m3u8`, `<name>_segment_N.m4s`,
+    # `init_<name>.mp4`. The name is one of the variant labels we set in
+    # var_stream_map (1080p / 720p / 480p / audio). Sanitised to prevent
+    # directory traversal.
+    HLS_ASSET_PATTERNS = [
+      /\Ainit\.mp4\z/,
+      /\Asegment_\d+\.m4s\z/,
+      /\Ainit_[A-Za-z0-9]+\.mp4\z/,
+      /\A[A-Za-z0-9]+_segment_\d+\.m4s\z/,
+      /\A[A-Za-z0-9]+_playlist\.m3u8\z/
+    ].freeze
+
     def hls_asset_path(session_id, asset_name)
       return nil unless @session && @session[:id] == session_id
       safe_name = File.basename(asset_name)
-      return nil unless safe_name == "init.mp4" || safe_name.match?(/\Asegment_\d+\.m4s\z/)
+      return nil unless HLS_ASSET_PATTERNS.any? { |re| safe_name.match?(re) }
       File.join(@session[:hls_dir], safe_name)
     end
 
@@ -530,18 +549,27 @@ class TranscoderService
 
       log_dir = File.join(TMP_ROOT, "logs")
       FileUtils.mkdir_p(log_dir)
-      stderr_log = File.open(File.join(log_dir, "ffmpeg_hls_stderr.log"), "w")
+      stderr_log_path = File.join(log_dir, "ffmpeg_hls_stderr.log")
 
+      # Spawn ffmpeg with stderr piped so we can both write it to a log
+      # file AND scan it for `speed=N.NNx` progress markers. When mean
+      # speed drops below 0.9× over a 5-segment rolling window, ffmpeg
+      # is falling behind realtime — the segment buffer will drain, hls.js
+      # will stall, the user will see "loading" forever. Emit a Sentry
+      # breadcrumb so the root cause is visible in error reports.
+      rd, wr = IO.pipe
       pid = spawn(
         ffmpeg_path, *args,
         in: :close,
         out: :close,
-        err: stderr_log,
+        err: wr,
         pgroup: true
       )
-
-      stderr_log.close
+      wr.close
       @ffmpeg_pid = pid
+
+      monitor_session_id = @session && @session[:id]
+      Thread.new { monitor_ffmpeg_stderr(rd, stderr_log_path, strategy, probe_result, monitor_session_id) }
 
       vf = extract_arg(args, "-vf") || extract_arg(args, "-filter_complex")
       bv = extract_arg(args, "-b:v")
@@ -557,6 +585,88 @@ class TranscoderService
     def extract_arg(args, flag)
       idx = args.index(flag)
       idx && args[idx + 1]
+    end
+
+    # ── Encode-speed monitoring ──────────────────────────────────────
+    #
+    # ffmpeg prints periodic progress lines to stderr:
+    #   frame= 1234 fps= 25 ... time=00:00:50.40 bitrate=8000kbits/s speed=1.23x
+    #
+    # `speed=N.NNx` is the realtime ratio: 1.0 = encoding at wall-clock pace.
+    # Anything <1.0 means the encoder is falling behind the playhead, which
+    # eventually drains hls.js's buffer and produces an unrecoverable stall.
+    #
+    # We tee stderr to (a) the persistent log file used for debugging and
+    # (b) a small in-memory rolling window of speed samples. When the
+    # window's mean drops below DEGRADED_THRESHOLD for at least
+    # DEGRADED_WINDOW consecutive samples, we emit a Sentry breadcrumb so
+    # the failure mode shows up in error reports instead of looking like
+    # a mysterious client-side hang.
+    SPEED_RE                = /speed=\s*([0-9.]+)x/
+    DEGRADED_THRESHOLD      = 0.9
+    DEGRADED_WINDOW         = 5
+    DEGRADED_REPEAT_SECONDS = 60   # don't re-fire more often than this
+
+    def monitor_ffmpeg_stderr(rd, log_path, strategy, probe_result, session_id)
+      log_file = File.open(log_path, "w")
+      speeds = []
+      last_fired_at = nil
+
+      rd.each_line do |line|
+        log_file.write(line)
+        log_file.flush
+
+        m = line.match(SPEED_RE)
+        next unless m
+
+        speed = m[1].to_f
+        speeds << speed
+        speeds.shift while speeds.length > DEGRADED_WINDOW
+        next unless speeds.length == DEGRADED_WINDOW
+
+        mean = speeds.sum / speeds.length.to_f
+        next unless mean < DEGRADED_THRESHOLD
+
+        now = Time.now
+        next if last_fired_at && (now - last_fired_at) < DEGRADED_REPEAT_SECONDS
+
+        last_fired_at = now
+        report_encode_speed_degraded(mean, speeds.dup, strategy, probe_result, session_id)
+      end
+    rescue IOError, Errno::EPIPE
+      # Pipe closed when ffmpeg exited — normal termination path.
+    rescue => e
+      Rails.logger.warn "[Transcoder] stderr monitor error: #{e.class}: #{e.message}"
+    ensure
+      log_file.close rescue nil
+      rd.close rescue nil
+    end
+
+    def report_encode_speed_degraded(mean, samples, strategy, probe_result, session_id)
+      width = probe_result.dig(:video, :width)
+      height = probe_result.dig(:video, :height)
+      video_codec = probe_result.dig(:video, :codec)
+      hdr = HDR_TRANSFERS.include?(probe_result.dig(:video, :color_transfer).to_s)
+
+      Rails.logger.warn "[Transcoder] encode speed degraded: mean=#{mean.round(2)}x " \
+        "samples=#{samples.map { |s| s.round(2) }.inspect} strategy=#{strategy} " \
+        "source=#{width}x#{height} #{video_codec}#{hdr ? ' (HDR)' : ''}"
+
+      return unless defined?(Sentry) && Sentry.initialized?
+      Sentry.add_breadcrumb(Sentry::Breadcrumb.new(
+        category: "transcoder",
+        message: "encode_speed_degraded",
+        level: "warning",
+        data: {
+          mean_speed: mean.round(3),
+          samples: samples.map { |s| s.round(3) },
+          strategy: strategy.to_s,
+          resolution: "#{width}x#{height}",
+          video_codec: video_codec,
+          hdr: hdr,
+          session_id: session_id
+        }
+      ))
     end
 
     # ── ffmpeg argument builder ──────────────────────────────────────
@@ -662,6 +772,43 @@ class TranscoderService
       ]
     end
 
+    # Multi-rendition HLS ladder for full_transcode. Returns an array of
+    # rendition specs `[{height:, bitrate:, maxrate:}, ...]` ordered
+    # highest-quality first. hls.js's ABR algorithm switches down on
+    # buffer pressure (encoder stalls, slow network), preventing the
+    # single-rendition failure mode where ffmpeg falling behind realtime
+    # produces an unrecoverable stall.
+    #
+    # Source width → (thresholds mirror video_bitrate_cap_bps)
+    #   ≥3000 (4K):         1080p source-cap, 720p @ 4M, 480p @ 2M
+    #   ≥1800 (1080p):      1080p source-cap, 480p @ 2M
+    #   < 1800 (720p, SD):  single rendition (ABR has no useful steps)
+    def transcode_ladder(probe_result)
+      width  = probe_result.dig(:video, :width).to_i
+      source = probe_result[:bitrate].to_i
+
+      cap1080 = video_bitrate_cap_bps(1920)  # 20 Mbps
+      cap720  = 4_000_000
+      cap480  = 2_000_000
+
+      target1080 = source > 0 ? [ source, cap1080 ].min : cap1080
+
+      if width >= 3000
+        [
+          { height: 1080, bitrate: target1080, maxrate: (target1080 * 1.5).round },
+          { height: 720,  bitrate: cap720,     maxrate: (cap720    * 1.5).round },
+          { height: 480,  bitrate: cap480,     maxrate: (cap480    * 1.5).round }
+        ]
+      elsif width >= 1800
+        [
+          { height: 1080, bitrate: target1080, maxrate: (target1080 * 1.5).round },
+          { height: 480,  bitrate: cap480,     maxrate: (cap480    * 1.5).round }
+        ]
+      else
+        [] # single-rendition path (no ladder)
+      end
+    end
+
     def build_hls_ffmpeg_args(file_path, seek_time, output_dir, strategy, probe_result, opts = {})
       args = []
       burn_sub = opts[:burn_subtitle_index].present?
@@ -681,6 +828,12 @@ class TranscoderService
       hdr = hdr_source?(probe_result)
       tonemap = hdr && zscale_available?
       width = probe_result.dig(:video, :width).to_i
+
+      # Ladder for full_transcode without burn-in. Burn-in keeps its
+      # single-rendition complex filter — multi-output overlays would
+      # double-render the subtitle bitmap to no benefit.
+      ladder = (strategy == :full_transcode && !burn_sub) ? transcode_ladder(probe_result) : []
+      multi_rendition = ladder.length > 1
 
       # Filters / stream mapping. SAR fix is always applied. For tonemapped
       # HDR sources wider than 1080p we downscale BEFORE the zscale/tonemap
@@ -713,6 +866,23 @@ class TranscoderService
         end
         args += [ "-filter_complex", chain ]
         args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
+      elsif strategy == :full_transcode && multi_rendition
+        if hdr && !zscale_available?
+          Rails.logger.warn "[Transcoder] HDR source but ffmpeg lacks zscale — output will band. Install ffmpeg with libzimg or use the vendored binary."
+        end
+        # Build filter_complex: base filter → split → per-rendition scale.
+        # Splits AFTER the SDR-mapped frames so tonemapping runs once on
+        # the source-res input, not per-rendition.
+        split_label = "[v_split]"
+        split_outs = ladder.each_with_index.map { |_, i| "[v_in_#{i}]" }.join
+        chain = "[0:v:0]#{base_filter}#{split_label};"
+        chain += "#{split_label}split=#{ladder.length}#{split_outs}"
+        ladder.each_with_index do |r, i|
+          chain += ";[v_in_#{i}]scale=-2:#{r[:height]}:flags=lanczos[v_out_#{i}]"
+        end
+        args += [ "-filter_complex", chain ]
+        ladder.each_with_index { |_, i| args += [ "-map", "[v_out_#{i}]" ] }
+        args += [ "-map", opts[:audio_stream_index] ? "0:#{opts[:audio_stream_index]}" : "0:a:0" ]
       elsif strategy == :full_transcode
         if hdr && !zscale_available?
           Rails.logger.warn "[Transcoder] HDR source but ffmpeg lacks zscale — output will band. Install ffmpeg with libzimg or use the vendored binary."
@@ -734,7 +904,25 @@ class TranscoderService
         args += %w[-c:v copy]
         args += audio_transcode_args(probe_result, opts[:audio_stream_index])
       when :full_transcode
-        args += full_transcode_video_args(probe_result)
+        if multi_rendition
+          # Per-variant H.264 settings. Stream specifiers `v:N` index into
+          # the OUTPUT video streams in -map order. VideoToolbox handles
+          # concurrent encodes on Apple Silicon without issue.
+          ladder.each_with_index do |r, i|
+            args += [
+              "-c:v:#{i}", "h264_videotoolbox",
+              "-allow_sw:v:#{i}", "1",
+              "-b:v:#{i}", r[:bitrate].to_s,
+              "-maxrate:v:#{i}", r[:maxrate].to_s,
+              "-bufsize:v:#{i}", (r[:bitrate] * 3).to_s,
+              "-profile:v:#{i}", "high",
+              "-g:v:#{i}", "48"
+            ]
+          end
+          args += [ "-pix_fmt", "yuv420p" ]
+        else
+          args += full_transcode_video_args(probe_result)
+        end
         # When tonemapping HDR → SDR, tag the output with BT.709 metadata so
         # the browser decoder interprets the colorspace correctly. Without
         # these the decoder may apply its own legacy conversion on top.
@@ -768,9 +956,27 @@ class TranscoderService
         -hls_flags independent_segments+temp_file
         -start_number 0
       ]
-      args += [ "-hls_fmp4_init_filename", "init.mp4" ]
-      args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.m4s") ]
-      args += [ File.join(output_dir, "playlist.m3u8") ]
+      args += [ "-master_pl_name", "master.m3u8" ]
+
+      if multi_rendition
+        # Map output streams to variants. Audio uses `agroup` so it's
+        # encoded once and shared across all variants via #EXT-X-MEDIA in
+        # the master playlist (hls.js handles this natively).
+        variants = ladder.each_with_index.map { |_, i| "v:#{i},agroup:au,name:#{ladder[i][:height]}p" }
+        variants << "a:0,agroup:au,default:yes,language:eng,name:audio"
+        args += [ "-var_stream_map", variants.join(" ") ]
+
+        # Per-variant segment + playlist patterns. %v expands to the
+        # variant name set via `name:` in var_stream_map. Init filename
+        # MUST include %v in multi-variant fMP4 mode (ffmpeg requirement).
+        args += [ "-hls_fmp4_init_filename", "init_%v.mp4" ]
+        args += [ "-hls_segment_filename", File.join(output_dir, "%v_segment_%d.m4s") ]
+        args += [ File.join(output_dir, "%v_playlist.m3u8") ]
+      else
+        args += [ "-hls_fmp4_init_filename", "init.mp4" ]
+        args += [ "-hls_segment_filename", File.join(output_dir, "segment_%d.m4s") ]
+        args += [ File.join(output_dir, "playlist.m3u8") ]
+      end
 
       args += %w[-y -nostdin]
 

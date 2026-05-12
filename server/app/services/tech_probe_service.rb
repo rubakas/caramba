@@ -38,7 +38,7 @@ class TechProbeService
   # misses by `probe_for` and silently re-probed on next play. Lets us
   # add fields (e.g. video.color_transfer for HDR detection) without
   # having to manually re-scan the library.
-  CACHE_SCHEMA_VERSION = 2
+  CACHE_SCHEMA_VERSION = 3
 
   class << self
     # Live ffprobe call. Returns nil on failure (never raises).
@@ -125,6 +125,11 @@ class TechProbeService
           "width" => video_stream["width"],
           "height" => video_stream["height"],
           "profile" => video_stream["profile"],
+          # ffprobe returns level as an integer matching the codec spec
+          # (HEVC level_idc: 120=4.0, 150=5.0, 153=5.1, 156=5.2; H.264
+          # level_idc: 40=4.0, 51=5.1). Used by DeviceProfile CodecProfile
+          # VideoLevel conditions.
+          "level" => video_stream["level"],
           "pix_fmt" => video_stream["pix_fmt"],
           "color_transfer" => video_stream["color_transfer"],
           "color_primaries" => video_stream["color_primaries"],
