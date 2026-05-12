@@ -341,15 +341,17 @@ class Api::PlaybackController < Api::BaseController
       end
       length = end_byte - start_byte + 1
 
-      response.status = 206
       response.headers["Content-Range"] = "bytes #{start_byte}-#{end_byte}/#{size}"
       response.headers["Content-Length"] = length.to_s
 
       if request.head?
-        response.body = ""
-        return
+        # HEAD must mirror the GET status (206 Partial Content) and ship
+        # the same headers, but no body. `head :partial_content` sets
+        # status to 206 while keeping the headers we just stamped.
+        return head(:partial_content)
       end
 
+      response.status = 206
       self.response_body = Enumerator.new do |yielder|
         File.open(file_path, "rb") do |f|
           f.seek(start_byte)
@@ -366,9 +368,13 @@ class Api::PlaybackController < Api::BaseController
     end
 
     response.headers["Content-Length"] = size.to_s
+
     if request.head?
-      response.body = ""
-      return
+      # HEAD before the player picks a range — this is what ffmpeg's
+      # lavf HTTP demuxer issues first to learn Content-Type / size.
+      # Must return 200 with headers, never 204 (which mpv interprets
+      # as "the URL has no content" and gives up without trying GET).
+      return head(:ok)
     end
 
     self.response_body = Enumerator.new do |yielder|
