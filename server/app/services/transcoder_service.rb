@@ -523,24 +523,23 @@ class TranscoderService
       audio_ok = audio_codec && profile.audio_codec_supported?(audio_codec)
 
       candidate = if video_ok && audio_ok then :direct_stream
-                  elsif video_ok && !audio_ok then :audio_transcode
-                  else :full_transcode
-                  end
+      elsif video_ok && !audio_ok then :audio_transcode
+      else :full_transcode
+      end
 
-      # Copying non-H.264 video into our HLS segments is currently
-      # unreliable in Safari's native HLS player. Symptoms vary by
-      # source: HDR HEVC throws MEDIA_ERR_DECODE (Apple HLS spec
-      # requires master-playlist VIDEO-RANGE=PQ for HDR which we
-      # don't emit on single-variant sessions); SDR HEVC sometimes
-      # plays from fMP4 + hvc1 (verified with EEAAO) and sometimes
-      # locks at currentTime=0 even with hvc1 + valid hvcC (Office US
-      # S01E03). Vanilla ffmpeg's parameter-set extraction is the
-      # likely culprit — jellyfin-ffmpeg ships patches we don't have.
-      # Until we vendor jellyfin-ffmpeg, force a re-encode whenever
-      # we'd copy non-H.264 video. The two-profile pipeline (Jellyfin
-      # pattern) stays in place — when the muxer is fixed we just
-      # drop this guard and direct_stream/audio_transcode start
-      # routing to fmp4 again with hvc1 tags.
+      # Even with jellyfin-ffmpeg vendored, HEVC video copy into our
+      # fmp4 HLS segments still produces output that Safari's native
+      # HLS player refuses: Safari accepts to readyState=4 but never
+      # advances currentTime (Office US S01E03), or throws
+      # MEDIA_ERR_DECODE outright (EEAAO). ffprobe sees the styp
+      # brands as `msdh msix` (DASH) instead of an Apple-compatible
+      # brand and the muxer writes two sidx boxes per segment;
+      # ffmpeg's HLS muxer doesn't expose flags to change either.
+      # Force a re-encode whenever we'd copy non-H.264 video. The
+      # two-profile pipeline (Jellyfin pattern) stays in place; the
+      # ts/h264 path keeps direct_stream working for the H.264 files
+      # in the library. Revisit when ffmpeg's mp4 muxer learns
+      # writable styp brands.
       if (candidate == :direct_stream || candidate == :audio_transcode) &&
          video_codec.to_s.downcase != "h264"
         return :full_transcode
@@ -612,11 +611,20 @@ class TranscoderService
       # this collapses to the legacy behaviour.
       profile = DeviceProfile.new(device_profile)
       target_video_codec = case strategy
-                           when :full_transcode then "h264"
-                           else probe_result.dig(:video, :codec).to_s
-                           end
+      when :full_transcode then "h264"
+      else probe_result.dig(:video, :codec).to_s
+      end
       target = profile.transcode_target_for(target_video_codec) || profile.transcode_target
       segment_container = (target && target[:container].to_s.downcase == "mp4") ? "mp4" : "ts"
+
+      # Belt-and-braces override: H.264 output always goes to mpegts.
+      # ffmpeg's HLS fmp4 muxer writes a 24-byte segment_0 (only the
+      # styp box) for `full_transcode → h264 → fmp4` — the exact path a
+      # cached old client hits when it only sends one TranscodingProfile
+      # with Container='mp4'. Safari plays H.264 mpegts cleanly so we
+      # lose nothing by pinning the container here.
+      segment_container = "ts" if target_video_codec == "h264"
+
       @session[:hls_container] = segment_container if @session
 
       args = build_hls_ffmpeg_args(file_path, seek_time, hls_dir, strategy, probe_result,
@@ -766,10 +774,31 @@ class TranscoderService
     # exact flags.
     def zscale_available?
       return @zscale_available unless @zscale_available.nil?
-      stdout, _stderr, status = Open3.capture3(ffmpeg_path, "-hide_banner", "-filters")
-      @zscale_available = status.success? && stdout.match?(/^\s+\S+\s+zscale\s+/)
+      @zscale_available = filters_list_cached.match?(/^\s+\S+\s+zscale\s+/)
     rescue StandardError
       @zscale_available = false
+    end
+
+    # jellyfin-ffmpeg ships `tonemap_videotoolbox` + `scale_vt` — Metal-
+    # backed HDR→SDR + scaling on Apple Silicon. Used to drive the
+    # full_transcode HDR path; falls back to the software zscale +
+    # tonemap chain when not present (e.g. vanilla ffmpeg-arm64 build).
+    def tonemap_videotoolbox_available?
+      return @tonemap_videotoolbox_available unless @tonemap_videotoolbox_available.nil?
+      @tonemap_videotoolbox_available =
+        filters_list_cached.match?(/^\s+\S+\s+tonemap_videotoolbox\s+/) &&
+        filters_list_cached.match?(/^\s+\S+\s+scale_vt\s+/)
+    rescue StandardError
+      @tonemap_videotoolbox_available = false
+    end
+
+    def filters_list_cached
+      @filters_list_cached ||= begin
+        stdout, _stderr, status = Open3.capture3(ffmpeg_path, "-hide_banner", "-filters")
+        status.success? ? stdout : ""
+      end
+    rescue StandardError
+      ""
     end
 
     # AAC encode args sized to the source channel layout. Browsers decode
@@ -922,8 +951,16 @@ class TranscoderService
       # Hardware decode (macOS VideoToolbox). Skip when burning bitmap
       # subtitles because the overlay filter operates on software frames.
       # Also skip for direct-play (-c copy) since there's no decode path.
+      hw_tonemap = (strategy == :full_transcode) && !burn_sub &&
+                   hdr_source?(probe_result) && tonemap_videotoolbox_available?
       if strategy == :full_transcode && !burn_sub
         args += %w[-hwaccel videotoolbox]
+        # Decode to videotoolbox surfaces directly so scale_vt has a
+        # real hwframe_ctx to derive output frame contexts from.
+        # Without this, scale_vt errors with "Invalid output format
+        # monow for hwframe download" because the upstream hwupload
+        # doesn't carry a proper videotoolbox framecontext.
+        args += %w[-hwaccel_output_format videotoolbox] if hw_tonemap
       end
 
       args += [ "-ss", seek_time.to_s ] if seek_time > 0
@@ -949,7 +986,7 @@ class TranscoderService
       args += %w[-copyts -avoid_negative_ts disabled -start_at_zero]
 
       hdr = hdr_source?(probe_result)
-      tonemap = hdr && zscale_available?
+      sw_tonemap = hdr && zscale_available? && !hw_tonemap
       width = probe_result.dig(:video, :width).to_i
 
       # Ladder for full_transcode without burn-in. Burn-in keeps its
@@ -971,10 +1008,43 @@ class TranscoderService
       # pixel in linear-light float space; 4K → 1080p is ~4× less work) and
       # the output is 8-bit SDR anyway so the extra resolution would only
       # serve to inflate the encode bitrate.
-      need_downscale = width >= 2560 && tonemap
-      base_filter = "scale=iw*sar:ih:flags=lanczos,setsar=1"
-      base_filter += ",scale=-2:1080:flags=lanczos" if need_downscale
-      base_filter += ",#{HDR_TONEMAP_CHAIN}" if tonemap
+      need_downscale = width >= 2560 && (sw_tonemap || hw_tonemap)
+      if hw_tonemap
+        # Metal-accelerated HDR→SDR. Pattern lifted verbatim from
+        # jellyfin's EncodingHelper.cs:5800-5855: prepend a format
+        # whitelist + hwupload to lift either software or hardware
+        # decoder output into a videotoolbox surface, then scale_vt
+        # does the scaling AND BT.709 tonemap in one Metal pass
+        # (`color_matrix=bt709:color_primaries=bt709:color_transfer=bt709`
+        # is what triggers the tonemap path inside scale_vt), then
+        # hwdownload back to NV12 for h264_videotoolbox encode.
+        # scale_vt only accepts integer width/height (no -2 aspect
+        # token), so compute the aspect-preserving 1080p width from
+        # the probe rounded to even pixels.
+        # `format=nv12` makes scale_vt output 8-bit NV12 hwframes so
+        # hwdownload can yield CPU NV12 for the x264/h264_videotoolbox
+        # encoder. Without it the output stays 10-bit p010 and the
+        # download step errors with "Invalid output format nv12 for
+        # hwframe download."
+        vt_args = "format=nv12:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709"
+        if need_downscale
+          src_h = [ probe_result.dig(:video, :height).to_i, 1 ].max
+          src_w = [ probe_result.dig(:video, :width).to_i, 1 ].max
+          target_w = ((src_w * 1080.0 / src_h).round / 2) * 2
+          scale_vt = "scale_vt=w=#{target_w}:h=1080:#{vt_args}"
+        else
+          scale_vt = "scale_vt=#{vt_args}"
+        end
+        # Frames arrive from -hwaccel_output_format videotoolbox as
+        # videotoolbox surfaces. format=...,hwupload is still needed
+        # so the chain works when the upstream filter graph injects a
+        # software hop (e.g. -ss before -i).
+        base_filter = "format=nv12|p010le|videotoolbox_vld,hwupload,#{scale_vt},hwdownload,format=nv12,setsar=1"
+      else
+        base_filter = "scale=iw*sar:ih:flags=lanczos,setsar=1"
+        base_filter += ",scale=-2:1080:flags=lanczos" if need_downscale
+        base_filter += ",#{HDR_TONEMAP_CHAIN}" if sw_tonemap
+      end
 
       if burn_sub
         # Bitmap subtitle burn-in. The naive `overlay,scale,tonemap` order
@@ -982,14 +1052,16 @@ class TranscoderService
         # 4K HDR with CPU tonemap that's where ffmpeg falls under realtime
         # and the player times out waiting for the first segment. Reorder
         # to: downscale video → downscale subtitle → overlay → tonemap, so
-        # all the heavy work happens at 1080p.
+        # all the heavy work happens at 1080p. The overlay filter operates
+        # on CPU frames only, so the burn-in path always uses the software
+        # tonemap chain even when tonemap_videotoolbox is available.
         sub = opts[:burn_subtitle_index]
         if need_downscale
           chain = "[0:v:0]scale=iw*sar:ih:flags=lanczos,setsar=1,scale=-2:1080:flags=lanczos[v];" \
                   "[0:#{sub}]scale=-2:1080:flags=lanczos[s];" \
                   "[v][s]overlay"
-          chain += ",#{HDR_TONEMAP_CHAIN}" if tonemap
-        elsif tonemap
+          chain += ",#{HDR_TONEMAP_CHAIN}" if sw_tonemap || hw_tonemap
+        elsif sw_tonemap || hw_tonemap
           chain = "[0:v:0][0:#{sub}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1,#{HDR_TONEMAP_CHAIN}"
         else
           chain = "[0:v:0][0:#{sub}]overlay,scale=iw*sar:ih:flags=lanczos,setsar=1"
@@ -1056,7 +1128,7 @@ class TranscoderService
         # When tonemapping HDR → SDR, tag the output with BT.709 metadata so
         # the browser decoder interprets the colorspace correctly. Without
         # these the decoder may apply its own legacy conversion on top.
-        args += SDR_OUTPUT_COLOR_FLAGS if hdr && zscale_available?
+        args += SDR_OUTPUT_COLOR_FLAGS if sw_tonemap || hw_tonemap
         args += audio_transcode_args(probe_result, opts[:audio_stream_index])
       end
       # :direct_play is unreachable here — start_session short-circuits before
@@ -1145,10 +1217,15 @@ class TranscoderService
 
     # Prefer the vendored ffmpeg shared with the desktop app (compiled with
     # libzimg, so the `zscale` filter is available — required by the HDR
-    # tonemap chain). The vendored path resolves only in dev where the repo
-    # is laid out as ../desktop/vendor; in any deployment without that
-    # directory, falls through to system ffmpeg.
+    # tonemap chain). jellyfin-ffmpeg comes first because its patches make
+    # HEVC → fmp4 HLS reliable in Safari (proper hvc1 parameter-set
+    # extraction, CMAF-compatible styp brands). Falls through to the
+    # original vendored ffmpeg-arm64 build and then to system ffmpeg when
+    # the jellyfin bundle is missing.
     def find_binary(name)
+      jellyfin = File.expand_path("../../../desktop/vendor/jellyfin-ffmpeg/#{name}", __dir__)
+      return jellyfin if File.executable?(jellyfin)
+
       vendored = File.expand_path("../../../desktop/vendor/ffmpeg-arm64/#{name}", __dir__)
       return vendored if File.executable?(vendored)
 

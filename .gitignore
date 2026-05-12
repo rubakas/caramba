@@ -10,6 +10,7 @@ desktop/storage
 
 # Bundled binaries (downloaded by bin/setup-ffmpeg, bin/setup-mpv)
 desktop/vendor/ffmpeg*
+desktop/vendor/jellyfin-ffmpeg*
 desktop/vendor/vlc*
 desktop/vendor/mpv*
 

@@ -99,12 +99,11 @@ class TranscoderServiceTest < ActiveSupport::TestCase
       )
   end
 
-  test "hevc video + ac3 audio → full_transcode (vanilla ffmpeg fmp4 copy is unreliable in Safari)" do
-    # Two-profile pipeline would normally route HEVC copy to fmp4
-    # with -tag:v:0 hvc1. Vanilla ffmpeg's parameter-set extraction
-    # is flaky across sources (some play, some lock at t=0), so until
-    # we vendor jellyfin-ffmpeg we force a re-encode here. Drop this
-    # test when the workaround in transcode_strategy is removed.
+  test "hevc video + ac3 audio → full_transcode (Safari rejects HEVC fmp4)" do
+    # See transcode_strategy comment: HEVC video copy into fmp4 HLS
+    # segments doesn't play in Safari with ffmpeg's HLS muxer (DASH
+    # styp brands, dual sidx). Until that's fixed upstream, every
+    # non-H.264 source goes through full_transcode.
     assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "ac3"), 1, nil, browser_profile
@@ -181,10 +180,8 @@ class TranscoderServiceTest < ActiveSupport::TestCase
   end
 
   test "10-bit HEVC + profile without bit-depth cap + mkv → full_transcode (Safari fmp4 workaround)" do
-    # See note on the `hevc + ac3 → full_transcode` test: until we
-    # vendor jellyfin-ffmpeg, transcode_strategy forces a re-encode
-    # for any non-H.264 source so we never hand HEVC to Safari over
-    # vanilla ffmpeg's fmp4 path.
+    # See note on the hevc-ac3 test: transcode_strategy forces a
+    # re-encode for any non-H.264 source so Safari never gets fmp4.
     assert_equal :full_transcode,
       TranscoderService.transcode_strategy(
         probe_result(video_codec: "hevc", audio_codec: "aac",
@@ -510,13 +507,18 @@ class TranscoderServiceTest < ActiveSupport::TestCase
   end
 
   # Helper: pin @zscale_available so tests don't depend on the local
-  # ffmpeg binary. We restore the memo after the block.
+  # ffmpeg binary. Also pins @tonemap_videotoolbox_available to false so
+  # the HDR full_transcode path stays on the software zscale chain that
+  # these tests exercise. We restore both memos after the block.
   def with_zscale(available)
-    prev = TranscoderService.instance_variable_get(:@zscale_available)
+    prev_z = TranscoderService.instance_variable_get(:@zscale_available)
+    prev_vt = TranscoderService.instance_variable_get(:@tonemap_videotoolbox_available)
     TranscoderService.instance_variable_set(:@zscale_available, available)
+    TranscoderService.instance_variable_set(:@tonemap_videotoolbox_available, false)
     yield
   ensure
-    TranscoderService.instance_variable_set(:@zscale_available, prev)
+    TranscoderService.instance_variable_set(:@zscale_available, prev_z)
+    TranscoderService.instance_variable_set(:@tonemap_videotoolbox_available, prev_vt)
   end
 
   test "build_hls_ffmpeg_args: HDR full_transcode prepends tonemap chain to base filter" do
