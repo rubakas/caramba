@@ -39,7 +39,13 @@ export default function App() {
   const [phase, setPhase] = useState('loading')
   const [serverUrl, setServerUrl] = useState(null)
   const [setupReason, setSetupReason] = useState(null)
-  const [useEmbedMpv, setUseEmbedMpv] = useState(true)
+  // libmpv when capability detection says the native module is available,
+  // hls.js otherwise. This is a runtime fact, not a user preference —
+  // libmpv is strictly a superset (broader codec coverage, fewer
+  // transcodes) and the DeviceProfile already declares per-engine
+  // capabilities to the server. Surfaced as `useEmbedMpv` for the
+  // adapter; null while detection is in flight.
+  const [useEmbedMpv, setUseEmbedMpv] = useState(null)
   const [mpvCapabilities, setMpvCapabilities] = useState(null)
 
   // Initial bootstrap: load saved server URL + probe health.
@@ -48,25 +54,28 @@ export default function App() {
     ;(async () => {
       try {
         const cfg = await window.api.getServerConfig()
-        const prefs = await window.api.getPreferences().catch(() => null)
         if (cancelled) return
         const url = cfg?.serverUrl || ''
-        // libmpv is the default desktop engine — broader codec coverage,
-        // no MSE codec quirks. Only fall back to hls.js when the user
-        // explicitly picks it in Settings.
-        const engine = prefs?.playerEngine || 'libmpv'
-        setUseEmbedMpv(engine === 'libmpv')
 
-        // Fetch the engine's decoder + demuxer lists so the device
-        // profile reflects this specific libmpv build, not the
-        // hardcoded fallback. Best-effort — the profile builder falls
-        // back gracefully if this fails (e.g. native module not built).
-        if (engine === 'libmpv') {
+        // Detect libmpv availability by querying capabilities. A
+        // successful response with a non-empty decoder list means the
+        // native module loaded and we should route playback through it.
+        // Failure (native module missing, binding error, no decoders)
+        // means we transparently fall back to hls.js.
+        let mpvAvailable = false
+        if (window.api?.getMpvCapabilities) {
           try {
             const caps = await window.api.getMpvCapabilities()
-            if (!cancelled && caps && !caps.error) setMpvCapabilities(caps)
-          } catch {}
+            if (!cancelled && caps && !caps.error && Array.isArray(caps.decoders) && caps.decoders.length > 0) {
+              setMpvCapabilities(caps)
+              mpvAvailable = true
+            }
+          } catch (err) {
+            console.warn('[App] mpv capability probe failed; using hls.js engine:', err?.message)
+          }
         }
+        if (!cancelled) setUseEmbedMpv(mpvAvailable)
+
         if (!url) {
           setSetupReason('First launch — let’s find your Caramba server.')
           setPhase('setup')
@@ -108,15 +117,8 @@ export default function App() {
     setPhase('setup')
   }, [])
 
-  const handlePlayerEngineChange = useCallback(async (engine) => {
-    try {
-      await window.api.setPreferences({ playerEngine: engine })
-    } catch {}
-    setUseEmbedMpv(engine === 'libmpv')
-  }, [])
-
   const adapterAndCaps = useMemo(() => {
-    if (phase !== 'ready' || !serverUrl) return null
+    if (phase !== 'ready' || !serverUrl || useEmbedMpv === null) return null
     return {
       adapter: createDesktopAdapter(serverUrl, { useEmbedMpv, mpvCapabilities }),
       capabilities: getDesktopCapabilities({ useEmbedMpv }),
@@ -153,8 +155,6 @@ export default function App() {
                 <Settings
                   serverUrl={serverUrl}
                   onChangeServer={handleChangeServer}
-                  playerEngine={useEmbedMpv ? 'libmpv' : 'hlsjs'}
-                  onPlayerEngineChange={handlePlayerEngineChange}
                 />
               } />
               <Route path="/admin" element={<Admin />} />

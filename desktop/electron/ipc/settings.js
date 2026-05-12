@@ -21,12 +21,12 @@ function register() {
     return { ok: true, serverUrl: preferences.get('serverUrl') }
   })
 
-  // App preferences (theme, player engine, downloads folder).
+  // App preferences (theme, downloads folder). Video engine is chosen
+  // at runtime by capability detection, not stored as a preference.
   ipcMain.handle('settings:getPreferences', () => {
     const all = preferences.getAll()
     return {
       theme: all.theme,
-      playerEngine: all.playerEngine,
       downloadsFolder: preferences.downloadsFolder(),
     }
   })
@@ -34,7 +34,6 @@ function register() {
   ipcMain.handle('settings:setPreferences', (_e, patch = {}) => {
     const allowed = {}
     if (patch.theme !== undefined) allowed.theme = patch.theme
-    if (patch.playerEngine !== undefined) allowed.playerEngine = patch.playerEngine
     if (patch.downloadsFolder !== undefined) allowed.downloadsFolder = patch.downloadsFolder
     preferences.set(allowed)
     return { ok: true }

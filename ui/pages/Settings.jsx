@@ -6,16 +6,18 @@ import { useApi, useCapabilities } from '../context/ApiContext'
 
 /**
  * Settings page. Shared between three runtimes:
- *   - Desktop (Electron): receives serverUrl/onChangeServer/playerEngine/onPlayerEngineChange
+ *   - Desktop (Electron): receives serverUrl/onChangeServer
  *   - Web browser: receives isWebMode=true
  *   - Android TV (Capacitor): receives onApiUrlChange/apiUrl/hideNavbar
+ *
+ * Video engine isn't user-configurable — the app picks libmpv when the
+ * native module is available, hls.js otherwise. Codec / transcode
+ * decisions flow through the DeviceProfile, not through this page.
  */
 export default function Settings({
   // Desktop
   serverUrl,
   onChangeServer,
-  playerEngine,
-  onPlayerEngineChange,
   // Android TV
   isWebMode,
   onApiUrlChange,
@@ -111,32 +113,6 @@ export default function Settings({
         {message && <div className="alert alert--success">{message}</div>}
         {error && <div className="alert">{error}</div>}
 
-        {/* Playback — desktop only (player engine choice) */}
-        {isDesktopMode && onPlayerEngineChange && (
-        <section className="settings-section">
-          <h2 className="settings-section-title">Playback</h2>
-
-          <div className="settings-form">
-            <div className="field">
-              <label htmlFor="player-engine" className="settings-label">Player engine</label>
-              <div className="settings-select-wrap">
-                <select
-                  id="player-engine"
-                  className="settings-select"
-                  value={playerEngine || 'libmpv'}
-                  onChange={(e) => onPlayerEngineChange(e.target.value)}
-                >
-                  <option value="libmpv">Embedded mpv</option>
-                  <option value="hlsjs">Browser (hls.js)</option>
-                </select>
-              </div>
-              <p className="settings-hint" style={{ marginTop: 6 }}>
-                Embedded mpv paints into the desktop window using libmpv directly. Handles HEVC HDR, lossless audio, and bitmap subtitles without server-side transcoding. The browser engine is a fallback if the embed module has issues.
-              </p>
-            </div>
-          </div>
-        </section>
-        )}
 
         {/* Android TV API URL */}
         {isAndroidTvMode && (

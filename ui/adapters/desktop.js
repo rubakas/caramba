@@ -63,7 +63,23 @@ export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabil
           await window.api.startEmbedMpv(url, { startTime, prefs })
           return { ...result, hlsUrl: null, streamUrl: null }
         } catch (err) {
+          // libmpv was supposed to be available (capability detection
+          // passed at bootstrap) but failed at this specific playback
+          // start. Surface it loudly — a silent degradation to hls.js
+          // would hide a real regression. The renderer still returns
+          // the hls.js URL so playback continues.
           console.warn('[desktop] libmpv start failed, falling back to hls.js:', err)
+          try {
+            const Sentry = (typeof window !== 'undefined' && window.Sentry) || null
+            Sentry?.addBreadcrumb?.({
+              category: 'desktop-player',
+              level: 'warning',
+              message: 'libmpv_start_failed_fallback_to_hlsjs',
+              data: { error: err?.message, filePath, strategy: result.strategy },
+            })
+          } catch {}
+          // Flag the fallback so the dev playback overlay can show it.
+          try { window.__caramba_engine_fallback__ = true } catch {}
         }
       }
       return result
