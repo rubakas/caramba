@@ -21,6 +21,7 @@ module Jellyfin
       # `subtitle_tracks` / `trickplay_resolutions` are optional arrays of
       # rendition descriptors; pass nil/[] to omit those groups entirely.
       def build(job:, variant_url:, total_bitrate:, video_stream: nil, audio_stream: nil,
+                output_video_codec: nil, output_audio_codec: nil,
                 subtitle_tracks: [], trickplay_resolutions: [],
                 audio_renditions: [], has_closed_captions: false,
                 is_live_stream: false)
@@ -54,6 +55,8 @@ module Jellyfin
           total_bitrate: total_bitrate,
           video_stream: video_stream,
           audio_stream: audio_stream,
+          output_video_codec: output_video_codec,
+          output_audio_codec: output_audio_codec,
           subtitle_group: subtitle_group,
           audio_group: audio_group,
           cc_group: cc_group
@@ -71,23 +74,47 @@ module Jellyfin
       # Renders the #EXT-X-STREAM-INF line + variant URL. Mirrors
       # `DynamicHlsHelper.AppendPlaylist` (lines 345-394 upstream).
       def append_playlist(variant_url:, total_bitrate:, video_stream:, audio_stream:,
+                          output_video_codec: nil, output_audio_codec: nil,
                           subtitle_group:, audio_group:, cc_group:)
         attrs = ["BANDWIDTH=#{total_bitrate}",
                  "AVERAGE-BANDWIDTH=#{total_bitrate}"]
 
-        # AppendPlaylistVideoRangeField (DynamicHlsHelper.cs:442)
+        # VIDEO-RANGE reflects what's ON THE WIRE, not the source. Software
+        # H.264 always emits SDR; copy/remux preserves the source range.
+        # Hardware encoders advertise their own capability — defer to the
+        # source flag in that case (caller can override by passing a video
+        # stream with the desired video_range_type).
         if video_stream
-          range = upstream_video_range(video_stream)
+          range = output_video_range(video_stream, output_video_codec)
           attrs << "VIDEO-RANGE=#{range}" if range
         end
 
-        # AppendPlaylistCodecsField (DynamicHlsHelper.cs:486)
+        # AppendPlaylistCodecsField (DynamicHlsHelper.cs:486). Mirrors
+        # `state.ActualOutputVideoCodec` / `ActualOutputAudioCodec`: the
+        # CODECS attribute must reflect the bytes ffmpeg actually emits,
+        # not the source. When the caller supplies output_*_codec we use
+        # that; otherwise we fall back to the stream's codec (legacy
+        # callers passing source streams for a copy/remux path).
         if video_stream
+          announced_video = (output_video_codec || video_stream.codec || 'h264').to_s
+          announced_audio = (output_audio_codec || audio_stream&.codec || 'aac').to_s
+          # When the announced video codec differs from the source's, we're
+          # transcoding — pin the announced level + profile to something the
+          # output decoder will accept regardless of the source's H.265 L5.x
+          # SPS values. CodecString.for derives the AVC fourcc from these.
+          transcoding_video = video_stream.codec && !codec_alias?(announced_video, video_stream.codec)
+          profile_hint = transcoding_video ? 'high' : video_stream.profile
+          level_hint   = if transcoding_video
+                           4.0   # H.264 High@4.0 — 1080p30 ceiling, decoder-universal
+                         elsif video_stream.level
+                           video_stream.level.to_f / 10.0
+                         end
+
           codec_str = Jellyfin::Output::CodecString.for(
-            video_codec: video_stream.codec || 'h264',
-            audio_codec: audio_stream&.codec || 'aac',
-            profile: video_stream.profile,
-            level: (video_stream.level.to_f / 10.0 if video_stream.level),
+            video_codec: announced_video,
+            audio_codec: announced_audio,
+            profile: profile_hint,
+            level: level_hint,
             audio_channels: audio_stream&.channels || 2
           )
           attrs << %(CODECS="#{codec_str}") if codec_str && !codec_str.empty?
@@ -147,6 +174,34 @@ module Jellyfin
         when 'HDR10PLUS', 'DOVI'   then 'PQ'
         else                            'SDR'
         end
+      end
+
+      # Computes the VIDEO-RANGE that ffmpeg will actually emit. Software
+      # H.264/H.265 main profile encoders without explicit HDR flags
+      # produce SDR regardless of source — announcing PQ would lie to the
+      # client about colour transfer and trigger Rec.2020 → Rec.709
+      # double-conversion in the browser.
+      def output_video_range(video_stream, output_video_codec)
+        return upstream_video_range(video_stream) if output_video_codec.nil?
+        return upstream_video_range(video_stream) if codec_alias?(output_video_codec, video_stream.codec)
+        # Transcoding to a different codec — default to SDR. HDR-preserving
+        # transcodes are a separate path (TODO: surface a flag on the job).
+        'SDR'
+      end
+
+      # Loose codec-equality that treats `h265` and `hevc` (and copy/copies
+      # of either spelling) as the same family. Used to decide whether the
+      # output codec announcement differs from the source.
+      def codec_alias?(a, b)
+        return false if a.nil? || b.nil?
+        normalize = ->(c) {
+          case c.to_s.downcase
+          when 'h265' then 'hevc'
+          when 'h264', 'avc' then 'h264'
+          else c.to_s.downcase
+          end
+        }
+        normalize.call(a) == normalize.call(b)
       end
     end
   end

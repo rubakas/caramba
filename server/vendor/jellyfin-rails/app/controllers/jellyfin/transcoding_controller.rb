@@ -4,6 +4,7 @@ require 'jellyfin/transcoding/transcode_manager'
 require 'jellyfin/transcoding/segment_waiter'
 require 'jellyfin/media_encoder/probe'
 require 'jellyfin/output/master_playlist_builder'
+require 'jellyfin/encoding/encoding_job_info'
 
 module Jellyfin
   class TranscodingController < ApplicationController
@@ -72,12 +73,29 @@ module Jellyfin
       total_bitrate = ((params_hash[:video_bitrate] || 2_000_000).to_i +
                        (params_hash[:audio_bitrate] || 128_000).to_i)
 
+      # Compute the codecs ffmpeg actually emits, using the same defaults
+      # the transcoding pipeline does (libx264 / aac). Pass them to the
+      # master playlist builder so the CODECS attribute reflects what's on
+      # the wire — see Jellyfin::Encoding::EncodingJobInfo#actual_output_*
+      # for the rationale (mirrors upstream's ActualOutputVideoCodec).
+      source_video = media_source&.default_video_stream
+      source_audio = media_source&.default_audio_stream
+      output_info = if media_source
+                      Jellyfin::Encoding::EncodingJobInfo.new(
+                        media_source: media_source,
+                        output_video_codec: params_hash[:video_codec] || 'libx264',
+                        output_audio_codec: params_hash[:audio_codec] || 'aac'
+                      )
+                    end
+
       master = Jellyfin::Output::MasterPlaylistBuilder.build(
         job: job,
         variant_url: variant_url,
         total_bitrate: total_bitrate,
-        video_stream: media_source&.default_video_stream,
-        audio_stream: media_source&.default_audio_stream,
+        video_stream: source_video,
+        audio_stream: source_audio,
+        output_video_codec: output_info&.actual_output_video_codec,
+        output_audio_codec: output_info&.actual_output_audio_codec,
         subtitle_tracks: build_subtitle_tracks(media_source, params[:token]),
         trickplay_resolutions: build_trickplay_resolutions(params[:token]),
         has_closed_captions: media_source &&

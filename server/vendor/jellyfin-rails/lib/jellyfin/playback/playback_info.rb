@@ -41,11 +41,19 @@ module Jellyfin
           }
         )
 
+        # Mirror upstream Jellyfin's MediaInfoHelper.cs:268-313: DirectStream
+        # is served through the SAME HLS pipeline as Transcode (just with
+        # `-c copy` instead of re-encoding). Both modes therefore need a
+        # transcoding URL — only DirectPlay bypasses the engine entirely.
+        # Without this branch, direct_stream decisions returned `null` URLs
+        # for both fields and clients had nothing to load.
+        needs_hls_url = decision.transcode? || decision.direct_stream?
+
         Response.new(
           method: decision.mode,
           direct_play_url: decision.direct_play? ? "#{base_url}/stream/#{token_for_direct}" : nil,
-          transcoding_url: decision.transcode? ?  "#{base_url}/transcode/#{token_for_transcode}/master.m3u8" : nil,
-          transcoding_container: decision.transcode? ? 'hls' : nil,
+          transcoding_url: needs_hls_url ? "#{base_url}/transcode/#{token_for_transcode}/master.m3u8" : nil,
+          transcoding_container: needs_hls_url ? 'hls' : nil,
           subtitle_method: subtitle_method_for(decision, subtitle_track),
           stream_id: media_source.id,
           media_source: media_source,
@@ -55,6 +63,9 @@ module Jellyfin
 
       def subtitle_method_for(decision, requested_track)
         return nil unless requested_track
+        # Burn-in only when we're actually re-encoding the video. DirectStream
+        # remuxes the source untouched so embedded subs survive — external VTT
+        # works the same as for DirectPlay.
         decision.transcode? ? :encode : :external
       end
     end

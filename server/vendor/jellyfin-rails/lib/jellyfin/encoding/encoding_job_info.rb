@@ -65,6 +65,43 @@ module Jellyfin
       def burn_subtitles?  = subtitle_method == :encode && subtitle_stream
       def stream_copy_video? = output_video_codec == 'copy'
       def stream_copy_audio? = output_audio_codec == 'copy'
+
+      # Mirror of upstream Jellyfin's EncodingJobInfo.ActualOutputVideoCodec
+      # (MediaBrowser.Controller/MediaEncoding/EncodingJobInfo.cs:420). When
+      # the output codec is `copy` we're remuxing — the bytes on the wire
+      # carry the source codec, so that's what callers must announce
+      # (HLS CODECS attribute, transcoding container negotiation, etc.).
+      # Otherwise it's the configured target codec.
+      #
+      # Normalises encoder names (libx264, h264_videotoolbox, ...) to the
+      # codec family (h264) so consumers don't have to special-case every
+      # hwaccel variant.
+      def actual_output_video_codec
+        return nil unless video_stream
+        return video_stream.codec if stream_copy_video?
+        ENCODER_TO_CODEC_FAMILY[output_video_codec.to_s] || output_video_codec
+      end
+
+      def actual_output_audio_codec
+        return nil unless audio_stream
+        return audio_stream.codec if stream_copy_audio?
+        ENCODER_TO_CODEC_FAMILY[output_audio_codec.to_s] || output_audio_codec
+      end
+
+      ENCODER_TO_CODEC_FAMILY = {
+        'libx264' => 'h264', 'h264_videotoolbox' => 'h264',
+        'h264_nvenc' => 'h264', 'h264_qsv' => 'h264',
+        'h264_vaapi' => 'h264', 'h264_amf' => 'h264', 'h264_rkmpp' => 'h264',
+        'libx265' => 'hevc', 'hevc_videotoolbox' => 'hevc',
+        'hevc_nvenc' => 'hevc', 'hevc_qsv' => 'hevc',
+        'hevc_vaapi' => 'hevc', 'hevc_amf' => 'hevc', 'hevc_rkmpp' => 'hevc',
+        'libsvtav1' => 'av1', 'libaom-av1' => 'av1', 'av1_nvenc' => 'av1',
+        'av1_qsv' => 'av1', 'av1_vaapi' => 'av1', 'av1_amf' => 'av1',
+        'libfdk_aac' => 'aac',
+        'libmp3lame' => 'mp3',
+        'libopus' => 'opus'
+      }.freeze
+      private_constant :ENCODER_TO_CODEC_FAMILY
     end
   end
 end

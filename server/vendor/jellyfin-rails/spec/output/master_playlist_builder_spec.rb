@@ -161,6 +161,73 @@ RSpec.describe 'EncodingHelper HLS live-vs-vod', type: :model do
   end
 end
 
+# Regression: the CODECS attribute must reflect what ffmpeg actually emits,
+# not the source. Without this, an HEVC source transcoded to H.264
+# produced CODECS="hev1..." in the master playlist, which Chrome/Firefox
+# reject with MEDIA_ERR_SRC_NOT_SUPPORTED before any segment loads.
+RSpec.describe Jellyfin::Output::MasterPlaylistBuilder do
+  let(:hevc_source) do
+    Jellyfin::Probing::MediaStream.new(
+      index: 0, type: :video, codec: 'hevc', width: 1920, height: 1080,
+      frame_rate: 24.0, profile: 'Main', level: 153,
+      video_range_type: 'HDR10'
+    )
+  end
+  let(:ac3_source) do
+    Jellyfin::Probing::MediaStream.new(index: 1, type: :audio, codec: 'ac3', channels: 6)
+  end
+  let(:job) { double('job') }
+
+  context 'with output codec overrides (transcode path)' do
+    it 'announces the output codecs (h264/aac), not the source (hevc/ac3)' do
+      out = described_class.build(
+        job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
+        video_stream: hevc_source, audio_stream: ac3_source,
+        output_video_codec: 'h264', output_audio_codec: 'aac'
+      )
+      expect(out).to match(/CODECS="avc1\.[0-9a-f]+,mp4a\.40\.2"/)
+      expect(out).not_to include('hev1')
+      expect(out).not_to include('hvc1')
+      expect(out).not_to include('ac-3')
+    end
+
+    it 'forces SDR VIDEO-RANGE when transcoding from HDR (software H.264 emits SDR)' do
+      out = described_class.build(
+        job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
+        video_stream: hevc_source, audio_stream: ac3_source,
+        output_video_codec: 'h264', output_audio_codec: 'aac'
+      )
+      expect(out).to include('VIDEO-RANGE=SDR')
+      expect(out).not_to include('VIDEO-RANGE=PQ')
+    end
+
+    it 'pins announced H.264 level to 4.0 regardless of source HEVC level (5.x is invalid for AVC)' do
+      out = described_class.build(
+        job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
+        video_stream: hevc_source, audio_stream: ac3_source,
+        output_video_codec: 'h264', output_audio_codec: 'aac'
+      )
+      # avc1.PPCCLL — last two hex digits are level*10 in hex.
+      # 4.0 → 0x28. Anything ≥0x33 (5.1) would be rejected by the browser
+      # for an AVC stream (those are HEVC level codes mistakenly carried over).
+      expect(out).to match(/avc1\.[0-9a-f]{2}[0-9a-f]{2}28/i)
+    end
+  end
+
+  context 'without output codec overrides (legacy callers, copy/remux path)' do
+    it 'falls back to the source codec for backward compat' do
+      out = described_class.build(
+        job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
+        video_stream: hevc_source, audio_stream: ac3_source
+      )
+      # Legacy behaviour preserved: caller passing source streams without
+      # overrides gets the source codec announcement. This is correct for
+      # direct_stream (-c copy) where the bytes ARE the source bytes.
+      expect(out).to match(/CODECS="(hev1|hvc1)\./)
+    end
+  end
+end
+
 RSpec.describe 'TranscodeManager build_encoding_options' do
   it 'maps params hash → EncodingOptions for Batch-J knobs' do
     manager = Jellyfin::Transcoding::TranscodeManager.new
