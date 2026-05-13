@@ -60,7 +60,12 @@ module Jellyfin
         @allow_h264_encoding = true
         @allow_h265_encoding = true
         @allow_av1_encoding = false
-        @enable_hardware_encoding = false
+        # Mirror upstream MediaBrowser.Model/Configuration/EncodingOptions.cs:57
+        # — hardware encoding is ON by default. The port previously defaulted
+        # to false, which combined with `hardware_acceleration_type = :none`
+        # forced libx264 software for every transcode regardless of
+        # `Jellyfin::Rails.configuration.hwaccel`.
+        @enable_hardware_encoding = true
         @prefer_system_native_hw_decoder = false
         @enable_subtitle_extraction = true
         @enable_tonemapping = true

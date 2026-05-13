@@ -59,7 +59,14 @@ module Jellyfin
       def resolve_hwaccel(job)
         return nil unless job.hw_accel?
         backend = Hwaccel.for(job.options.hardware_acceleration_type)
-        backend if backend && backend.available?(@caps)
+        return nil unless backend && backend.available?(@caps)
+        # Mirror upstream EncodingHelper.cs:333 IsVideoToolboxFullSupported:
+        # if the backend would need SW tonemap (HDR input + no HW tonemap
+        # filter), refuse the HW path entirely. Mixing SW-filter output
+        # (system-memory yuv420p) with a HW encoder fails format
+        # negotiation in ffmpeg. Falls back to all-SW (libx264 + tonemapx).
+        return nil if job.hdr_input? && !backend.full_chain_supported?(@caps)
+        backend
       end
 
       # --- segments ---
@@ -92,10 +99,32 @@ module Jellyfin
       end
 
       def video_args(job, backend: nil)
-        # Hardware encoder takes precedence when the backend can produce one.
-        hw_encoder = backend&.encoder_for(job.output_video_codec, @caps)
-        encoder = hw_encoder || CodecSelector.video_encoder_for(job.output_video_codec, @caps)
-        return ['-c:v', 'copy'] if encoder == 'copy' || job.stream_copy_video?
+        # Stream-copy short-circuit. Upstream EncodingHelper.cs:1009 checks
+        # GetVideoEncoder == "copy" the same way; keep it first so neither
+        # the backend nor CodecSelector has to deal with the copy case.
+        return ['-c:v', 'copy'] if job.stream_copy_video? || job.output_video_codec.to_s == 'copy'
+
+        # Hwaccel backends accept the codec FAMILY (h264 / hevc / av1) and
+        # return the platform-specific encoder name (h264_videotoolbox etc).
+        # Mirrors upstream EncodingHelper.GetH26xOrAv1Encoder(defaultEncoder,
+        # hwEncoder, ...) where hwEncoder is the family — see
+        # MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs:210.
+        # Previously this passed `job.output_video_codec` (defaults to
+        # 'libx264'), which no backend's case-match recognises — every
+        # transcode silently fell through to software, pegging the CPU.
+        codec_family = job.actual_output_video_codec
+        hw_encoder = backend&.encoder_for(codec_family, @caps)
+        # Only pass hw_type to CodecSelector when the backend resolver
+        # already approved the HW path. If resolve_hwaccel declined
+        # (e.g. HDR source on a build without tonemap_videotoolbox), the
+        # caller wants all-SW; passing hw_type would let CodecSelector
+        # pick h264_videotoolbox via its fallback table and reintroduce
+        # the mixed SW-filter / HW-encoder bug.
+        encoder = hw_encoder || CodecSelector.video_encoder_for(
+          codec_family || job.output_video_codec,
+          @caps,
+          hw_type: backend ? job.options.hardware_acceleration_type : nil
+        )
 
         out = ['-c:v', encoder]
         out += backend ? backend.encoder_args(job) : quality_args(job, encoder)

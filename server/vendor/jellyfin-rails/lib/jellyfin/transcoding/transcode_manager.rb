@@ -378,7 +378,7 @@ module Jellyfin
           options: build_encoding_options(job),
           output_video_codec: encoder_target(job.params[:video_codec], 'libx264'),
           output_audio_codec: encoder_target(job.params[:audio_codec], 'aac'),
-          output_video_bitrate: (job.params[:video_bitrate] || 2_000_000).to_i,
+          output_video_bitrate: resolve_video_bitrate(job.params),
           output_audio_bitrate: (job.params[:audio_bitrate] || 128_000).to_i,
           output_audio_channels: job.params[:audio_channels]&.to_i,
           output_height: job.params[:max_height]&.to_i,
@@ -399,12 +399,40 @@ module Jellyfin
         )
       end
 
+      # Mirrors upstream MediaBrowser.Model/Dlna/StreamBuilder.cs:1104-1119:
+      # when the request only carries `max_bitrate` (the total streaming
+      # cap from the client's DeviceProfile), derive the video bitrate by
+      # subtracting audio_bitrate. The port previously hardcoded 2_000_000
+      # whenever `video_bitrate` wasn't explicitly set — fine for 1080p,
+      # disastrous for 4K HDR (1080p clients saw clearly pixelated output
+      # capped at 2 Mbps regardless of what DeviceProfile asked for).
+      # 64_000 floor matches upstream's clamp.
+      def resolve_video_bitrate(params)
+        return params[:video_bitrate].to_i if params[:video_bitrate]
+        max = params[:max_bitrate]&.to_i
+        return 2_000_000 unless max && max.positive?
+        audio = (params[:audio_bitrate] || 128_000).to_i
+        [ max - audio, 64_000 ].max
+      end
+
       # Maps the request-level Batch-J knobs from job.params onto a fresh
       # EncodingOptions so EncodingHelper picks them up. The mapping mirrors
       # StreamingRequestDto → EncodingOptions in upstream Jellyfin's
       # StreamingHelpers.GetStreamingState.
       def build_encoding_options(job)
         opts = Jellyfin::Encoding::EncodingOptions.new
+        # Carry the server-wide hwaccel config into the per-job options.
+        # Upstream Jellyfin reads `EncodingOptions.HardwareAccelerationType`
+        # plus `EnableHardwareEncoding`; both have to be set, otherwise
+        # `EncodingOptions#hardware_acceleration?` returns false and
+        # EncodingHelper falls back to libx264/libx265 software. Without
+        # this wiring, `Jellyfin::Rails.configuration.hwaccel = :videotoolbox`
+        # was a no-op — every transcode pegged the CPU at 900 %+.
+        configured = Jellyfin::Rails.configuration.hwaccel
+        if configured && configured != :none
+          opts.hardware_acceleration_type = configured.to_sym
+          opts.enable_hardware_encoding = true
+        end
         p = job.params
         opts.auto_crop            = p[:auto_crop]            if p.key?(:auto_crop)
         opts.two_pass             = p[:two_pass]             if p.key?(:two_pass)

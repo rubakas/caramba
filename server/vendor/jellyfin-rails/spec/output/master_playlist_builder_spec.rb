@@ -250,4 +250,71 @@ RSpec.describe 'TranscodeManager build_encoding_options' do
     expect(opts.http_headers).to eq({ 'X-Auth' => 'bearer' })
     expect(opts.concat_parts).to eq(['/a.mkv', '/b.mkv'])
   end
+
+  # Regression: build_encoding_options used to ignore
+  # Jellyfin::Rails.configuration.hwaccel completely. EncodingOptions
+  # defaulted to enable_hardware_encoding=false / type=:none, so
+  # `hardware_acceleration?` returned false and EncodingHelper always
+  # picked libx264 — even when the host had VideoToolbox/NVENC/QSV
+  # configured. Mirrors upstream's pattern of loading EncodingOptions
+  # from the global config (configurationManager.GetConfiguration<EncodingOptions>).
+  it 'pulls Jellyfin::Rails.configuration.hwaccel into the per-job options' do
+    original = Jellyfin::Rails.configuration.hwaccel
+    Jellyfin::Rails.configuration.hwaccel = :videotoolbox
+    manager = Jellyfin::Transcoding::TranscodeManager.new
+    job = double(id: 'h', dir: '/tmp', params: {})
+    opts = manager.send(:build_encoding_options, job)
+    expect(opts.hardware_acceleration_type).to eq(:videotoolbox)
+    expect(opts.enable_hardware_encoding).to be(true)
+    expect(opts.hardware_acceleration?).to be(true)
+  ensure
+    Jellyfin::Rails.configuration.hwaccel = original
+  end
+
+  it 'leaves hwaccel disabled when configuration.hwaccel is :none' do
+    original = Jellyfin::Rails.configuration.hwaccel
+    Jellyfin::Rails.configuration.hwaccel = :none
+    manager = Jellyfin::Transcoding::TranscodeManager.new
+    job = double(id: 'h', dir: '/tmp', params: {})
+    opts = manager.send(:build_encoding_options, job)
+    expect(opts.hardware_acceleration_type).to eq(:none)
+    expect(opts.hardware_acceleration?).to be(false)
+  ensure
+    Jellyfin::Rails.configuration.hwaccel = original
+  end
+
+  # Regression: the port used to hardcode output_video_bitrate=2_000_000
+  # whenever job.params[:video_bitrate] was missing. Caramba clients send
+  # max_bitrate (total streaming cap from their DeviceProfile), not a
+  # per-stream video_bitrate — so 4K HDR sources got pinned at 2 Mbps
+  # regardless of what the client asked for, producing visibly pixelated
+  # output. Upstream derives video bitrate from max_bitrate at
+  # StreamBuilder.cs:1104-1119.
+  describe '#resolve_video_bitrate' do
+    let(:manager) { Jellyfin::Transcoding::TranscodeManager.new }
+
+    it 'derives video bitrate from max_bitrate minus audio_bitrate' do
+      params = { max_bitrate: 100_000_000, audio_bitrate: 384_000 }
+      expect(manager.send(:resolve_video_bitrate, params)).to eq(99_616_000)
+    end
+
+    it 'subtracts a 128k default audio when only max_bitrate is given' do
+      params = { max_bitrate: 8_000_000 }
+      expect(manager.send(:resolve_video_bitrate, params)).to eq(8_000_000 - 128_000)
+    end
+
+    it 'honours an explicit video_bitrate over max_bitrate' do
+      params = { video_bitrate: 4_000_000, max_bitrate: 100_000_000 }
+      expect(manager.send(:resolve_video_bitrate, params)).to eq(4_000_000)
+    end
+
+    it 'floors at 64k so an audio-heavy cap cannot starve the video stream' do
+      params = { max_bitrate: 100_000, audio_bitrate: 384_000 }
+      expect(manager.send(:resolve_video_bitrate, params)).to eq(64_000)
+    end
+
+    it 'falls back to the legacy 2_000_000 default when nothing is set' do
+      expect(manager.send(:resolve_video_bitrate, {})).to eq(2_000_000)
+    end
+  end
 end

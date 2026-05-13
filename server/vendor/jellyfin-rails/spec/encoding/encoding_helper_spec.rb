@@ -138,4 +138,160 @@ RSpec.describe Jellyfin::Encoding::EncodingHelper do
       expect(Jellyfin::Encoding::CodecSelector.can_stream_copy_video?(job)).to be(false)
     end
   end
+
+  # Regression: hwaccel backends accept the codec family (h264/hevc), not
+  # the encoder name (libx264/libx265). EncodingHelper.video_args used to
+  # pass output_video_codec — i.e. 'libx264' — to backend.encoder_for,
+  # which always returned nil. Every transcode fell through to the
+  # software encoder regardless of EncodingOptions.HardwareAccelerationType.
+  # See upstream MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs:210
+  # for the (defaultEncoder, hwEncoder=family) shape.
+  describe 'hardware encoder selection' do
+    let(:hw_caps) do
+      Class.new do
+        def supports_encoder?(name)
+          %w[libx264 libx265 aac h264_videotoolbox hevc_videotoolbox].include?(name)
+        end
+        def supports_filter?(_)  true end
+        def supports_hwaccel?(n) n == 'videotoolbox' end
+        def supports_decoder?(_) true end
+      end.new
+    end
+
+    def hw_job
+      opts = Jellyfin::Encoding::EncodingOptions.new
+      opts.hardware_acceleration_type = :videotoolbox
+      opts.enable_hardware_encoding = true
+      Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: make_source(hdr: false),
+        options: opts,
+        output_video_codec: 'libx264',
+        output_audio_codec: 'aac'
+      )
+    end
+
+    it 'selects h264_videotoolbox when EncodingOptions points at videotoolbox + caps supports it' do
+      args = described_class.command_line_arguments(
+        hw_job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts', capabilities: hw_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v h264_videotoolbox')
+      expect(flat).not_to include('-c:v libx264')
+      # Hardware decode path comes along for the ride.
+      expect(flat).to include('-hwaccel videotoolbox')
+    end
+
+    it 'falls back to libx264 when caps does not support the HW encoder (defensive)' do
+      sw_only_caps = Class.new do
+        def supports_encoder?(n) %w[libx264 aac].include?(n) end
+        def supports_filter?(_)  true end
+        def supports_hwaccel?(_) false end
+        def supports_decoder?(_) true end
+      end.new
+      args = described_class.command_line_arguments(
+        hw_job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts', capabilities: sw_only_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v libx264')
+      expect(flat).not_to include('h264_videotoolbox')
+    end
+
+    it 'stays on libx264 when hardware_acceleration_type is :none' do
+      opts = Jellyfin::Encoding::EncodingOptions.new
+      opts.hardware_acceleration_type = :none
+      job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: make_source, options: opts, output_video_codec: 'libx264'
+      )
+      args = described_class.command_line_arguments(
+        job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts', capabilities: hw_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v libx264')
+      expect(flat).not_to include('-c:v h264_videotoolbox')
+    end
+  end
+
+  # Regression: jellyfin-ffmpeg portable macOS builds ship `tonemapx`
+  # (software tonemap) but not `tonemap_videotoolbox` (HW tonemap). The
+  # port used to take the HW path anyway for HDR sources, producing a
+  # mixed chain (SW filter → HW encoder) that ffmpeg can't bridge:
+  #
+  #   Impossible to convert between the formats supported by the filter
+  #   'graph -1 input from stream 0:0' and the filter 'auto_scale_0'
+  #   [vost#0:0/h264_videotoolbox] Could not open encoder before EOF
+  #
+  # Upstream avoids this with IsVideoToolboxFullSupported (EncodingHelper.cs:333)
+  # — picks all-HW only when the HW filter set is complete, otherwise
+  # falls back to all-SW (libx264 + tonemapx). This describe pins both
+  # routes for the videotoolbox backend.
+  describe 'HDR routing on videotoolbox' do
+    let(:full_hw_caps) do
+      Class.new do
+        def supports_encoder?(n) %w[libx264 aac h264_videotoolbox hevc_videotoolbox].include?(n) end
+        def supports_filter?(n)  %w[scale tonemapx tonemap_videotoolbox scale_vt].include?(n) end
+        def supports_hwaccel?(n) n == 'videotoolbox' end
+        def supports_decoder?(_) true end
+      end.new
+    end
+
+    let(:portable_caps) do
+      # jellyfin-ffmpeg 7.1.3 portable for macOS — videotoolbox encoder
+      # present, only `tonemapx` for tonemap (no HW tonemap filter).
+      Class.new do
+        def supports_encoder?(n) %w[libx264 aac h264_videotoolbox hevc_videotoolbox].include?(n) end
+        def supports_filter?(n)  %w[scale tonemapx].include?(n) end
+        def supports_hwaccel?(n) n == 'videotoolbox' end
+        def supports_decoder?(_) true end
+      end.new
+    end
+
+    def hdr_job
+      opts = Jellyfin::Encoding::EncodingOptions.new
+      opts.hardware_acceleration_type = :videotoolbox
+      opts.enable_hardware_encoding = true
+      Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: make_source(hdr: true),
+        options: opts,
+        output_video_codec: 'libx264',
+        output_audio_codec: 'aac'
+      )
+    end
+
+    it 'HDR source on portable build (no tonemap_videotoolbox) → all-SW' do
+      args = described_class.command_line_arguments(
+        hdr_job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts',
+        capabilities: portable_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v libx264')
+      expect(flat).not_to include('h264_videotoolbox')
+    end
+
+    it 'HDR source on full-HW build (tonemap_videotoolbox present) → all-HW' do
+      args = described_class.command_line_arguments(
+        hdr_job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts',
+        capabilities: full_hw_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v h264_videotoolbox')
+      expect(flat).not_to include('-c:v libx264')
+    end
+
+    it 'SDR source on portable build → still uses h264_videotoolbox (no SW tonemap needed)' do
+      opts = Jellyfin::Encoding::EncodingOptions.new
+      opts.hardware_acceleration_type = :videotoolbox
+      opts.enable_hardware_encoding = true
+      sdr_job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: make_source(hdr: false), options: opts,
+        output_video_codec: 'libx264', output_audio_codec: 'aac'
+      )
+      args = described_class.command_line_arguments(
+        sdr_job, playlist_path: '/tmp/o.m3u8', segment_template: '/tmp/%d.ts',
+        capabilities: portable_caps
+      )
+      flat = args.join(' ')
+      expect(flat).to include('-c:v h264_videotoolbox')
+      expect(flat).not_to include('-c:v libx264')
+    end
+  end
 end

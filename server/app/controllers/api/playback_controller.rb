@@ -113,6 +113,16 @@ class Api::PlaybackController < Api::BaseController
     stream_url = is_direct_play ? decision.direct_play_url : decision.transcoding_url
     job_id = Digest::SHA1.hexdigest(transcode_token)[0, 16]
 
+    # Cancel any orphan ffmpeg process from a previous /start call in the
+    # same Rails session that didn't get a corresponding /stop. Audio +
+    # subtitle switches re-issue /start with new tokens, so the previous
+    # job's id no longer matches the new token's hash and the client's
+    # stopPlayback (which fires at player close) would only reach the
+    # newest job — orphans accumulated on every switch and pegged the CPU.
+    previous_job_id = session[:playback_session_id]
+    if previous_job_id.present? && previous_job_id != job_id
+      Jellyfin::Transcoding::TranscodeManager.instance.cancel!(previous_job_id)
+    end
     session[:playback_session_id] = job_id
 
     render json: {
@@ -141,7 +151,12 @@ class Api::PlaybackController < Api::BaseController
   def stop_playback
     session_id = params[:session]
     if session_id.present?
-      Jellyfin::Transcoding::TranscodeManager.instance.cancel!(session_id)
+      mgr = Jellyfin::Transcoding::TranscodeManager.instance
+      job_present = !!mgr.send(:find, session_id)
+      Rails.logger.info "[Playback] stop session=#{session_id} found_job=#{job_present}"
+      mgr.cancel!(session_id)
+    else
+      Rails.logger.info "[Playback] stop received with no session param"
     end
 
     time = params[:time].to_i

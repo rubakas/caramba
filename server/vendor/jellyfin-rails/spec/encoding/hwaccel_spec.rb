@@ -42,9 +42,16 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(described_class.encoder_for('h264', caps)).to eq('h264_videotoolbox')
     end
 
-    it 'emits -hwaccel videotoolbox in decode args' do
+    it 'emits -hwaccel videotoolbox + -hwaccel_output_format videotoolbox_vld in decode args' do
+      # Regression: without -hwaccel_output_format, the decoder downloads
+      # frames to system memory and tonemap_videotoolbox (which wants HW
+      # frames on CVPixelBuffer) fails:
+      #   Impossible to convert between the formats supported by the
+      #   filter 'graph -1 input' and 'auto_scale_0'
       job = make_job
-      expect(described_class.decode_args(job, caps)).to eq(['-hwaccel', 'videotoolbox'])
+      expect(described_class.decode_args(job, caps)).to eq(
+        ['-hwaccel', 'videotoolbox', '-hwaccel_output_format', 'videotoolbox_vld']
+      )
     end
 
     it 'emits a tonemap_videotoolbox filter for HDR input' do

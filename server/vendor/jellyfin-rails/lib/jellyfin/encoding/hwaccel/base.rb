@@ -25,6 +25,17 @@ module Jellyfin
 
         # Returns codec-specific args (preset, rc-mode, etc.) for the chosen encoder.
         def encoder_args(_job) = []
+
+        # Whether this backend can stay GPU-resident for the whole pipeline
+        # (decode → filter → encode) on the current ffmpeg build. When false,
+        # the resolver may refuse the HW path for jobs that need SW filters
+        # (e.g. HDR tonemap) — mixing SW filters with HW encoders fails
+        # format negotiation on jellyfin-ffmpeg portable builds.
+        # Default true so existing backends are unaffected; backends that
+        # depend on optional filters (like videotoolbox + tonemap_videotoolbox)
+        # override and check capabilities. Mirrors upstream's
+        # `IsVideoToolboxFullSupported` (EncodingHelper.cs:333).
+        def full_chain_supported?(_capabilities) = true
       end
     end
   end
