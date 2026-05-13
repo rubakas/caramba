@@ -39,13 +39,23 @@ RSpec.describe 'TranscodeManager shared sessions + restart-at-segment' do
     manager.stop!('shared')
   end
 
-  it 'keeps the job alive on reap_idle while at least one client is attached' do
+  # Updated contract (2026-05-14): reap_idle now fires regardless of
+  # ref_count, matching upstream's PingTimer behaviour
+  # (TranscodeManager.cs:174). ref_count only counts `attach!` calls and
+  # is never decremented on HTTP-level client disconnect — so it grew
+  # unbounded with every segment request and the previous "keep alive
+  # while ref_count > 0" rule turned every closed playback into an
+  # orphan ffmpeg. Clients that need to keep a job warm beyond
+  # idle_timeout must send segment/playlist requests to ping it.
+  it 'reaps an idle job even when ref_count is still positive (matches upstream PingTimer)' do
     job = manager.ensure_started(id: 'sticky', params: { path: fixture, segment_length: 1 })
-    # Drive idle_for above timeout by rewriting last_ping_at.
+    # ensure_started already auto-attached; bump it further to make the
+    # point that the count being > 1 does not save the job.
+    job.attach!; job.attach!
     job.last_ping_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) - 9999
     manager.reap_idle
-    expect(manager.find('sticky')).to equal(job)
-    manager.stop!('sticky')
+    expect(manager.find('sticky')).to be_nil
+    expect(job.alive?).to be(false)
   end
 
   it 'restarts ffmpeg with a fresh log + new -ss when client requests a far-ahead segment' do

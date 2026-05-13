@@ -258,16 +258,24 @@ module Jellyfin
         idle_timeout = Jellyfin::Rails.configuration.idle_timeout
         @mutex.synchronize do
           @jobs.values.each do |job|
-            # Don't reap shared sessions while at least one client is attached.
-            if job.ref_count.positive?
-              next
-            end
+            # Idle threshold is checked FIRST and ignores ref_count.
+            # ref_count is a shared-session attach counter; in practice
+            # it grows by one on every segment request (each call to
+            # `ensure_started` auto-attaches) and is never decremented on
+            # client disconnect — so an orphaned ffmpeg keeps ref_count
+            # positive forever. Upstream Jellyfin gates kill on HTTP-level
+            # activity instead (TranscodeManager.cs:174 OnTranscodeKillTimerStopped
+            # fires after PingTimeout = 60s regardless of any per-job
+            # reference counting). `idle_for` here is the time since the
+            # last segment was served — same signal.
             if job.idle_for > idle_timeout
               @jobs.delete(job.id)
               stop_job_internals(job)
               job.kill!
               job.cleanup!
-            elsif !job.alive?
+              next
+            end
+            unless job.alive?
               # Auto-restart: ffmpeg died while the job was still recent.
               # Mirrors upstream's restart-on-crash behavior (capped).
               if job.restart_count < 3 && job.idle_for < 30
@@ -378,7 +386,7 @@ module Jellyfin
           options: build_encoding_options(job),
           output_video_codec: encoder_target(job.params[:video_codec], 'libx264'),
           output_audio_codec: encoder_target(job.params[:audio_codec], 'aac'),
-          output_video_bitrate: resolve_video_bitrate(job.params),
+          output_video_bitrate: resolve_video_bitrate(job.params, source),
           output_audio_bitrate: (job.params[:audio_bitrate] || 128_000).to_i,
           output_audio_channels: job.params[:audio_channels]&.to_i,
           output_height: job.params[:max_height]&.to_i,
@@ -407,12 +415,35 @@ module Jellyfin
       # disastrous for 4K HDR (1080p clients saw clearly pixelated output
       # capped at 2 Mbps regardless of what DeviceProfile asked for).
       # 64_000 floor matches upstream's clamp.
-      def resolve_video_bitrate(params)
+      def resolve_video_bitrate(params, source = nil)
         return params[:video_bitrate].to_i if params[:video_bitrate]
         max = params[:max_bitrate]&.to_i
         return 2_000_000 unless max && max.positive?
         audio = (params[:audio_bitrate] || 128_000).to_i
-        [ max - audio, 64_000 ].max
+        cap_after_audio = [ max - audio, 64_000 ].max
+
+        # Clamp by the source's video bitrate. Mirrors upstream
+        # StreamBuilder.cs:1117 — `Math.Min(availableBitrateForVideo, currentValue)`
+        # where currentValue defaults to the source's BitRate. Transcoding
+        # to a higher bitrate than the source can't restore quality — it
+        # just wastes the encoder. With Caramba's DeviceProfile sending
+        # MaxStaticBitrate=1_000_000_000 (1 Gbps), the previous code asked
+        # h264_videotoolbox for ~1 Gbps output, which the encoder couldn't
+        # keep up with and the throttler perpetually paused it.
+        if source && (src_bitrate = source_video_bitrate(source))
+          return [ cap_after_audio, src_bitrate ].min
+        end
+        cap_after_audio
+      end
+
+      def source_video_bitrate(source)
+        stream = source.default_video_stream
+        return nil unless stream
+        return stream.bit_rate if stream.bit_rate && stream.bit_rate.positive?
+        # Source-level bit_rate falls back to the container's effective
+        # rate when the per-stream rate isn't carried in the metadata
+        # (common for MKV remuxes from Blu-ray).
+        source.effective_bit_rate
       end
 
       # Maps the request-level Batch-J knobs from job.params onto a fresh

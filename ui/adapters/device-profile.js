@@ -31,6 +31,44 @@ function probe(type) {
   try { return MediaSource.isTypeSupported(type) } catch { return false }
 }
 
+// Native HLS probe — used to detect what Safari (and Safari-flavoured
+// engines like Playwright webkit) can decode via the <video src=.m3u8>
+// path. Mirrors jellyfin-web's `canPlayNativeHls` + the `application/
+// x-mpegurl` codec tests in `browserDeviceProfile.js:80, 149-151`.
+// Without this, Safari's DeviceProfile only carries MSE-probed codecs
+// — which on Safari is a strict subset of what the browser actually
+// plays — and the server transcodes everything Safari could otherwise
+// stream-copy.
+function _videoTestElement() {
+  if (typeof document === 'undefined') return null
+  return document.createElement('video')
+}
+
+function nativeHlsSupported() {
+  const v = _videoTestElement()
+  if (!v || typeof v.canPlayType !== 'function') return false
+  return !!(v.canPlayType('application/x-mpegurl').replace(/no/, '') ||
+            v.canPlayType('application/vnd.apple.mpegURL').replace(/no/, ''))
+}
+
+// Probe whether the native HLS engine can play a given codec string.
+// `codecs` is the value that goes inside the MIME type's `codecs="..."`.
+function nativeHlsCanPlay(codecs) {
+  const v = _videoTestElement()
+  if (!v || typeof v.canPlayType !== 'function') return false
+  return !!(v.canPlayType(`application/x-mpegurl; codecs="${codecs}"`).replace(/no/, '') ||
+            v.canPlayType(`application/vnd.apple.mpegURL; codecs="${codecs}"`).replace(/no/, ''))
+}
+
+// Direct (non-HLS) container probe via canPlayType. Distinct from MSE:
+// Safari's native demuxer for MP4/MOV accepts a broader codec set than
+// its MSE SourceBuffer.
+function canPlayMp4(codecs) {
+  const v = _videoTestElement()
+  if (!v || typeof v.canPlayType !== 'function') return false
+  return !!v.canPlayType(`video/mp4; codecs="${codecs}"`).replace(/no/, '')
+}
+
 function isElectronRuntime() {
   if (typeof navigator === 'undefined') return false
   return /\bElectron\b/.test(navigator.userAgent || '')
@@ -189,6 +227,48 @@ export function buildBrowserProfile() {
   if (vp9 || vp9Hdr)    videoCodecs.push('vp9')
 
   const audioCodecs = Object.entries(audioFlags).filter(([_, v]) => v).map(([k]) => k)
+
+  // Native HLS extension. On Safari (and any browser that reports
+  // canPlayType('application/vnd.apple.mpegURL')), HEVC + AC-3 + E-AC-3
+  // + DTS are decodable via the native HLS engine even though MSE
+  // isTypeSupported() returns "" for them. Adding these to the codec
+  // lists flips the server's strategy from `full_transcode` to
+  // `direct_stream` (container remux only) for HEVC+AC3 sources —
+  // matches what jellyfin-web does in `browserDeviceProfile.js` lines
+  // 80, 149-160 (canPlayNativeHls + supportsAc3InHls + supportsMp3InHls
+  // + the HEVC code path on iOS/macOS).
+  if (nativeHlsSupported()) {
+    // HEVC via native HLS — Safari accepts both hvc1 / hev1 fourcc.
+    // jellyfin-web uses the bare "hvc1.1.L120" form (no constraint
+    // flags). Match that to avoid false negatives on older Safari.
+    const hevcNative =
+      nativeHlsCanPlay('hvc1.1.6.L120') ||
+      nativeHlsCanPlay('hev1.1.6.L120') ||
+      canPlayMp4('hvc1.1.6.L120') ||
+      canPlayMp4('hev1.1.6.L120')
+    if (hevcNative && !videoCodecs.includes('hevc')) videoCodecs.push('hevc', 'h265')
+
+    // AC-3 / E-AC-3 via native HLS. The probe codec strings come from
+    // jellyfin-web — they use a paired AVC+AC3 string because the HLS
+    // mime type expects both video and audio codecs together.
+    const ac3Native =
+      nativeHlsCanPlay('avc1.42E01E, ac-3') ||
+      canPlayMp4('ac-3')
+    if (ac3Native && !audioCodecs.includes('ac3')) audioCodecs.push('ac3')
+
+    const eac3Native =
+      nativeHlsCanPlay('avc1.42E01E, ec-3') ||
+      canPlayMp4('ec-3')
+    if (eac3Native && !audioCodecs.includes('eac3')) audioCodecs.push('eac3')
+
+    // DTS / DTS-HD on macOS Safari (when AppleTV's audio extension is
+    // present). Conservative — match jellyfin-web's two-form probe.
+    const dtsNative =
+      canPlayMp4('dts-') ||
+      canPlayMp4('dts+') ||
+      canPlayMp4('dts')
+    if (dtsNative && !audioCodecs.includes('dts')) audioCodecs.push('dts')
+  }
 
   // Containers MSE / <video> can demux directly. mp4 family only — MKV,
   // AVI, TS, WebM require remuxing on the server (direct_stream).

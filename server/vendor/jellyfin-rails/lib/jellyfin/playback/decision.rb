@@ -131,7 +131,14 @@ module Jellyfin
 
       def hevc_profile_ok?(stream)
         return true unless %w[hevc h265].include?(stream.codec.to_s.downcase)
-        return false if @profile.hevc_profiles.empty?
+        # Empty list means "no profile constraint, accept any" — matches
+        # `h264_profile_ok?` above and upstream Jellyfin's behaviour
+        # (CodecProfile with no Conditions = no restriction). The port
+        # previously returned false on empty, which made HEVC sources
+        # un-direct-streamable to any client that didn't explicitly
+        # populate `hevc_profiles` — that's nearly every client, since
+        # browsers reach Safari native HLS without a Main10 probe path.
+        return true if @profile.hevc_profiles.empty?
         @profile.hevc_profiles.include?(stream.profile.to_s.downcase.gsub(/[^a-z0-9]/, ''))
       end
 

@@ -52,7 +52,13 @@ Rails.application.config.after_initialize do
     c.allowed_paths = MediaFolder.enabled.pluck(:path)
     c.hwaccel = :videotoolbox
     c.segment_length = 6
-    c.idle_timeout = 15 * 60
+    # 60s matches upstream Jellyfin's PingTimeout for HLS jobs
+    # (TranscodeManager.cs:157). The reaper kills any job whose last
+    # served segment is older than this — that's our client-disconnect
+    # heuristic since the Rails port doesn't hook into HTTP response-end
+    # events. Effect: when hls.js stops fetching (paused / tab closed /
+    # crashed / forgot to call /stop), ffmpeg dies within ~60-70s.
+    c.idle_timeout = 60
   end
 rescue ActiveRecord::StatementInvalid, ActiveRecord::NoDatabaseError
   # Migrations haven't run yet — allow rails db:setup / db:create to proceed.

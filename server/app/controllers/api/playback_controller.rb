@@ -82,6 +82,20 @@ class Api::PlaybackController < Api::BaseController
     client_profile = CarambaClientProfile.build(device_profile_raw)
     media_source = Jellyfin::MediaEncoder::Probe.from_path(file_path)
 
+    # Decide the delivery method BEFORE encoding tokens — the token bakes
+    # in `video_codec` / `audio_codec`, which determines whether the
+    # engine re-encodes (libx264/aac defaults) or stream-copies. For a
+    # :direct_stream decision (codecs already match the client, only the
+    # container is wrong), we want ffmpeg `-c copy -f hls` so Safari
+    # plays HEVC+AC3 natively without a full re-encode.
+    pre_decision = Jellyfin::Playback::Decision.call(
+      media_source: media_source,
+      profile: client_profile,
+      requested: { audio_track: audio_stream_index,
+                   subtitle_track: subtitle_stream_index,
+                   max_bitrate: client_profile.max_video_bitrate }
+    )
+
     transcode_token_params = {
       path: file_path,
       audio_track: audio_stream_index,
@@ -89,6 +103,10 @@ class Api::PlaybackController < Api::BaseController
       start_time_ticks: (start_time * 10_000_000).to_i.presence,
       max_bitrate: client_profile.max_video_bitrate
     }.compact
+    if pre_decision.direct_stream?
+      transcode_token_params[:video_codec] = 'copy'
+      transcode_token_params[:audio_codec] = 'copy'
+    end
 
     direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)
     transcode_token = Jellyfin::Transcoding::Token.encode(transcode_token_params)

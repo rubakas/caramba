@@ -134,17 +134,41 @@ RSpec.describe 'Batch M — Player + streaming gaps' do
       end.new
     end
 
-    it 'splices h264_mp4toannexb into the HLS output args' do
+    # Updated contract (2026-05-14): the h264_mp4toannexb bitstream filter
+    # only applies on stream-COPY paths. Mirrors upstream Jellyfin's
+    # EncodingHelper.GetProgressiveVideoArguments which gates the filter
+    # behind `IsCopyCodec(videoCodec)`. Re-encoded output (libx264 /
+    # h264_videotoolbox / etc.) is already Annex-B for TS containers;
+    # double-applying the filter corrupts the bitstream and the browser
+    # rejects the segments with MEDIA_ERR_SRC_NOT_SUPPORTED.
+    def avc_h264_aac_source
       v = Jellyfin::Probing::MediaStream.new(index: 0, type: :video, codec: 'h264',
         width: 1920, height: 1080, frame_rate: 24.0, pixel_format: 'yuv420p',
         sample_aspect_ratio: '1:1', is_interlaced: false, video_range_type: 'SDR',
         is_avc: true)
       a = Jellyfin::Probing::MediaStream.new(index: 1, type: :audio, codec: 'aac',
         channels: 2, sample_rate: 48_000)
-      src = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [v, a])
-      job = Jellyfin::Encoding::EncodingJobInfo.new(media_source: src,
-        output_video_codec: 'h264', output_audio_codec: 'aac')
+      Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [v, a])
+    end
 
+    it 'omits -bsf:v h264_mp4toannexb when re-encoding (output != copy)' do
+      job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: avc_h264_aac_source,
+        output_video_codec: 'h264',  # transcode
+        output_audio_codec: 'aac'
+      )
+      args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+        job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
+      )
+      expect(args).not_to include('h264_mp4toannexb')
+    end
+
+    it 'emits -bsf:v h264_mp4toannexb on a stream-copy path (avcC source → TS)' do
+      job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: avc_h264_aac_source,
+        output_video_codec: 'copy',
+        output_audio_codec: 'aac'
+      )
       args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
         job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
       )

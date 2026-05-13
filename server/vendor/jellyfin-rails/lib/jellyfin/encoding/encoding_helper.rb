@@ -318,13 +318,52 @@ module Jellyfin
         Audio.itsoffset_args(job.options.audio_itsoffset_seconds)
       end
 
+      # Timestamp normalization for HLS output. Safari's native HLS engine
+      # (and Playwright webkit) computes currentTime from segment PTS, so
+      # any mismatch between the playlist's EXTINF (which says segment 0
+      # is `[0..6s]`) and the actual segment's first PTS is fatal. With
+      # default ffmpeg settings, the MPEG-TS muxer adds a 1.4s VBV
+      # pre-roll → segment 0 contains samples at `[1.4..7.4s]` → Safari
+      # decodes the first frame, then stalls (currentTime stuck at 0,
+      # waiting for content that doesn't exist) and eventually surfaces
+      # MEDIA_ERR_SRC_NOT_SUPPORTED (code 4 → "source not supported").
+      # The fix is the five-flag combo below:
+      #   -copyts                  preserve input PTS through the pipeline
+      #   -avoid_negative_ts disabled keep ffmpeg from clamping after a shift
+      #   -start_at_zero           shift first output frame to PTS=0
+      #   -muxdelay 0              don't insert TS muxer VBV pre-roll
+      #   -muxpreload 0            don't insert TS muxer demux pre-roll
+      # See `feedback_safari_native_hls_recipe` memory + upstream
+      # EncodingHelper.cs HLS path.
+      def hls_timestamp_args
+        ['-copyts', '-avoid_negative_ts', 'disabled', '-start_at_zero',
+         '-muxdelay', '0', '-muxpreload', '0']
+      end
+
       def hls_output_args(job, playlist_path:, segment_template:)
-        args = BitstreamFilters.for(
-          target_container: 'hls',
-          video_codec: job.output_video_codec,
-          audio_codec: job.output_audio_codec,
-          source_is_avc: job.video_stream&.is_avc
-        )
+        # The `h264_mp4toannexb` bitstream filter converts MP4-style avcC
+        # (length-prefixed NALs) to Annex B (start-code-prefixed) for the
+        # MPEG-TS muxer. It MUST NOT be applied when we're re-encoding —
+        # software (libx264) and HW encoders (h264_videotoolbox, etc.)
+        # output Annex B for `-f hls`/`-f mpegts` natively, so applying
+        # the filter again double-converts the bitstream and MSE rejects
+        # the segments with MEDIA_ERR_SRC_NOT_SUPPORTED (browser shows
+        # "source not supported"). Upstream Jellyfin only emits the
+        # filter inside the stream-copy branch of
+        # EncodingHelper.GetProgressiveVideoArguments
+        # (MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs); we
+        # mirror that here by gating on `stream_copy_video?`.
+        args = if job.stream_copy_video?
+                 BitstreamFilters.for(
+                   target_container: 'hls',
+                   video_codec: job.video_stream&.codec || job.output_video_codec,
+                   audio_codec: job.output_audio_codec,
+                   source_is_avc: job.video_stream&.is_avc
+                 )
+               else
+                 []
+               end
+        args.concat(hls_timestamp_args)
         # Playlist type follows EncodingJobInfo.IsSegmentedLiveStream:
         # live streams use a sliding window (`live`); finite VOD content
         # uses an event/vod-with-EXT-X-ENDLIST playlist.

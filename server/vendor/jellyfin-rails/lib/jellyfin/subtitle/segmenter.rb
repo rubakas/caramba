@@ -124,9 +124,19 @@ module Jellyfin
       end
 
       def extract_to(source_path, stream_index, out_path)
+        # `0:#{n}` selects the absolute stream index in the file (matches
+        # ffprobe's stream.index — what callers carry around). The previous
+        # `0:s:#{n}` selected the Nth SUBTITLE stream (0-indexed within
+        # subtitles only), which silently misaligned whenever the source had
+        # video + audio streams before the subtitle group: a file with 1
+        # video, 3 audio, 3 subtitle streams (typical) sent `-map 0:s:4` for
+        # global index 4 (= first subtitle), asking ffmpeg for the FIFTH
+        # subtitle stream — which doesn't exist. extract_to returned false,
+        # segmenter returned nil, and webvtt#index returned 404. Using the
+        # absolute index sidesteps the indexing-domain mismatch.
         cmd = [@ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
                '-i', source_path,
-               '-map', "0:s:#{stream_index}",
+               '-map', "0:#{stream_index}",
                '-c:s', 'webvtt',
                out_path]
         _out, _err, status = Open3.capture3(*cmd)

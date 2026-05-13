@@ -77,12 +77,33 @@ module Jellyfin
         @cancellation_token.cancel!
         @progress_reader&.stop
         return unless alive?
+        # SIGCONT first: the throttler may have SIGSTOP'd ffmpeg to throttle
+        # output. A stopped process queues SIGTERM and won't exit until
+        # resumed. Without this, kill! sends TERM, waits 5s (alive? is true
+        # because stopped processes are still "alive"), then sends KILL —
+        # which SHOULD reap a stopped proc, but in practice we've seen
+        # orphan ffmpegs survive in state T+. Resuming first lets ffmpeg
+        # handle SIGTERM cleanly (flush stderr, write final frame, etc).
+        begin
+          Process.kill('CONT', pid)
+        rescue Errno::ESRCH
+          # Already gone.
+        end
         Process.kill('TERM', pid)
         deadline = monotonic_now + 5
         while alive? && monotonic_now < deadline
           sleep 0.05
         end
-        Process.kill('KILL', pid) if alive?
+        if alive?
+          # Last-resort SIGKILL. Send CONT again in case the throttler
+          # raced and SIGSTOP'd it between our CONT and the alive? check.
+          begin
+            Process.kill('CONT', pid)
+          rescue Errno::ESRCH
+            # ok
+          end
+          Process.kill('KILL', pid)
+        end
       rescue Errno::ESRCH
         nil
       end

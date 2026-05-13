@@ -53,4 +53,25 @@ RSpec.describe Jellyfin::Transcoding::TranscodeManager do
     expect(j2).to equal(j1)
     manager.stop!('same')
   end
+
+  # Regression: ref_count grew by one on each ensure_started — which happens
+  # on every segment request — and never decremented on HTTP-level client
+  # disconnect. The previous reaper guard `next if job.ref_count.positive?`
+  # therefore skipped every idle job forever, leaving ffmpeg orphans (often
+  # SIGSTOP'd by the throttler) pegged in state T+ until the box was
+  # restarted. Reap_idle now uses HTTP-activity (idle_for) only — matches
+  # upstream's PingTimer / OnTranscodeKillTimerStopped (TranscodeManager.cs:174).
+  it 'reaps an idle job even when ref_count is still positive (HTTP-disconnect heuristic)' do
+    manager = described_class.instance
+    Jellyfin::Rails.configuration.idle_timeout = 0 # force idle threshold to fire
+    job = manager.ensure_started(id: 'orphan', params: { path: fixture, segment_length: 1 })
+    # Simulate the orphan pattern: client kept refcount positive but is
+    # no longer fetching segments.
+    job.attach!; job.attach!; job.attach!
+    expect(job.ref_count).to be >= 4
+    sleep 0.1 # ensure idle_for advances past idle_timeout=0
+    manager.send(:reap_idle)
+    expect(manager.send(:find, 'orphan')).to be_nil
+    expect(job.alive?).to be(false)
+  end
 end

@@ -114,6 +114,40 @@ RSpec.describe Jellyfin::Playback::Decision do
       expect(result.mode).to eq(:transcode)
     end
   end
+
+  # Regression: empty profile.hevc_profiles used to mean "reject all HEVC"
+  # — asymmetric with `h264_profile_ok?` where empty means "accept any".
+  # Upstream Jellyfin treats both the same (CodecProfile with no
+  # Conditions = no restriction). The asymmetric handling sent every
+  # HEVC source through `:transcode` even when the client's profile
+  # otherwise advertised HEVC support — particularly painful for
+  # Safari, whose native-HLS HEVC path doesn't surface a profile
+  # constraint via canPlayType. The fix restores symmetry.
+  describe 'HEVC profile constraint' do
+    it 'accepts HEVC when profile.hevc_profiles is empty (no constraint)' do
+      hevc = mk_video(codec: 'hevc', profile: 'Main', level: 120)
+      src = mk_source(streams: [hevc, mk_audio], container: 'mkv')
+      profile = Jellyfin::Playback::ClientProfile.new
+      profile.containers   = %w[mp4 mkv]
+      profile.video_codecs = %w[hevc h264]
+      profile.audio_codecs = %w[aac]
+      profile.hevc_profiles = []   # no constraint
+      result = described_class.call(media_source: src, profile: profile)
+      expect(result.mode).to eq(:direct_play)
+    end
+
+    it 'rejects HEVC when profile.hevc_profiles is non-empty and source profile is not in list' do
+      hevc_high = mk_video(codec: 'hevc', profile: 'Main10', level: 150)
+      src = mk_source(streams: [hevc_high, mk_audio], container: 'mkv')
+      profile = Jellyfin::Playback::ClientProfile.new
+      profile.containers   = %w[mp4 mkv]
+      profile.video_codecs = %w[hevc h264]
+      profile.audio_codecs = %w[aac]
+      profile.hevc_profiles = %w[main]  # Main10 not in list
+      result = described_class.call(media_source: src, profile: profile)
+      expect(result.mode).to eq(:transcode)
+    end
+  end
 end
 
 RSpec.describe Jellyfin::Playback::RemuxArgs do

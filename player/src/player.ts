@@ -51,6 +51,16 @@ export interface PlayerOptions {
   startAtSeconds?: number;
   /** Enable Space / Arrow keyboard shortcuts. Default: true. */
   keyboardShortcuts?: boolean;
+  /**
+   * Start the video muted. Required for unattended autoplay in every
+   * modern browser (Chrome, Firefox, Safari block `video.play()` for
+   * unmuted videos without a user gesture). When set, the player unmutes
+   * automatically once the first frame is decoded (`canplay` event) —
+   * by then the playback has been authorised by the browser and unmute
+   * doesn't pause the stream. Default: `true` when `autoplay`, else
+   * `false`.
+   */
+  muted?: boolean;
 }
 
 export class Player {
@@ -288,6 +298,17 @@ export class Player {
     video.controls = false;
     video.crossOrigin = 'anonymous';
     video.volume = this.options.volume ?? getSavedVolume();
+    // Browser autoplay policy: unmuted `.play()` from JS gets rejected
+    // without a prior user gesture. Default `muted: true` whenever
+    // autoplay is on so playback can start; auto-unmute on `canplay`
+    // below so the user still gets sound. Callers can opt out with
+    // `muted: false` (e.g. for a player surface that's only ever
+    // triggered by a click — though autoplay then becomes best-effort).
+    video.muted = this.options.muted ?? !!this.options.autoplay;
+    if (video.muted) {
+      const unmute = () => { video.muted = false; video.removeEventListener('canplay', unmute); };
+      video.addEventListener('canplay', unmute);
+    }
     this.root.appendChild(video);
 
     // Pre-create slot regions overlaid on the video.

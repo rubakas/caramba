@@ -53,6 +53,7 @@ module Jellyfin
       private
 
       def tick
+        return if @stop
         return unless @job.alive?
         # Explicit user pause (ported from TranscodingJob.IsUserPaused upstream)
         # overrides the read-ahead heuristic. Stay paused until the client
@@ -79,6 +80,11 @@ module Jellyfin
 
       def pause!
         return unless @job.pid
+        # Double-check the stop flag — the tick that called us might have
+        # raced with stop() and we're about to SIGSTOP a process that's
+        # being torn down. Without this, kill! later finds the process
+        # still suspended (T+) and SIGTERM gets queued indefinitely.
+        return if @stop
         Process.kill('STOP', @job.pid)
         @paused = true
       rescue Errno::ESRCH, Errno::EPERM
