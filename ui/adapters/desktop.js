@@ -6,38 +6,22 @@
  *   - native dialogs (download destination)
  *   - downloads (streams server raw files to disk)
  *   - external VLC launcher + library control (open-in-vlc)
- *   - embedded libmpv pointed at the server's URL (default engine)
  *   - mDNS server discovery
  *   - electron-updater
+ *
+ * Playback itself flows through the same Jellyfin Player JS runtime as the
+ * browser: the desktop adapter does not own an alternate player engine.
  */
 import { createHttpAdapter, httpCapabilities } from './http.js'
 import { buildDesktopProfile } from './device-profile.js'
 
-/**
- * @param {string} serverUrl - Rails API base URL (e.g. "http://192.168.1.10:3001")
- * @param {Object} [opts]
- * @param {boolean} [opts.useEmbedMpv=true] - When true, route playback through the
- *   embedded libmpv engine (renders into the BrowserWindow's NSView). When false,
- *   the renderer plays the server's HLS URL directly via hls.js — narrower codec
- *   coverage but no native module dependency.
- * @param {Object} [opts.mpvCapabilities] - Decoders/demuxers reported by libmpv
- *   (window.api.getMpvCapabilities()). When provided, the device profile is
- *   built dynamically from the engine's actual codec list. When omitted, a
- *   conservative hardcoded fallback profile is used.
- */
-export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabilities } = {}) {
-  // Build a profile matching the active engine. libmpv has broad codec
-  // coverage (HEVC HDR, lossless audio, PGS subs, etc.), so the server
-  // can skip transcode for far more files when the embed engine is on.
-  const buildProfile = () => buildDesktopProfile({
-    engine: useEmbedMpv ? 'libmpv' : 'browser',
-    capabilities: useEmbedMpv ? mpvCapabilities : undefined,
-  })
+export function createDesktopAdapter(serverUrl) {
+  const buildProfile = () => buildDesktopProfile()
   const http = createHttpAdapter(serverUrl, { buildProfile })
   const base = serverUrl.replace(/\/+$/, '')
 
-  // Resolve a server-relative URL (e.g. "/api/playback/hls/abc.m3u8") into an
-  // absolute URL libmpv can consume.
+  // Resolve a server-relative URL into an absolute URL for downstream tools
+  // (VLC, default-app handlers) that need the full host.
   const absoluteUrl = (url) => {
     if (!url) return url
     if (/^https?:\/\//i.test(url)) return url
@@ -47,106 +31,6 @@ export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabil
 
   return {
     ...http,
-
-    // === Playback ===
-    // Server always starts the session; if the mpv engine is selected,
-    // hand the returned URL to the in-process libmpv and suppress the
-    // renderer-side URL so VideoPlayer mounts the embed overlay instead
-    // of WebVideoPlayer.
-    startPlayback: async (filePath, startTime, prefs, options) => {
-      const result = await http.startPlayback(filePath, startTime, prefs, options)
-      if (!result || result.error) return result
-
-      if (useEmbedMpv && (result.hlsUrl || result.streamUrl)) {
-        const url = absoluteUrl(result.hlsUrl || result.streamUrl)
-        let mpvOk = false
-        let mpvError = null
-        let mpvResult = null
-        try {
-          mpvResult = await window.api.startEmbedMpv(url, { startTime, prefs })
-          // libmpv's start IPC currently returns { ok: true, duration, tracks }
-          // even when it silently fails to load the file (the binding
-          // queues `loadfile` and returns synchronously without waiting
-          // for MPV_EVENT_FILE_LOADED). Detect silent failure by
-          // checking whether mpv produced track or duration info — a
-          // successful load always populates both.
-          const reportsLoad = mpvResult && mpvResult.ok &&
-                              (mpvResult.duration > 0 ||
-                               (Array.isArray(mpvResult.audioStreams) && mpvResult.audioStreams.length > 0))
-          if (reportsLoad) {
-            mpvOk = true
-          } else {
-            mpvError = new Error('libmpv start returned without loading the file (duration=0, tracks=0) — engine stalled silently')
-          }
-        } catch (err) {
-          mpvError = err
-        }
-
-        if (mpvOk) {
-          return { ...result, hlsUrl: null, streamUrl: null }
-        }
-
-        // Fallback to hls.js. Surface loudly — silent degradation hides
-        // libmpv regressions, and we still want a working renderer.
-        console.warn('[desktop] libmpv start failed, falling back to hls.js:', mpvError?.message || mpvError)
-        try {
-          const Sentry = (typeof window !== 'undefined' && window.Sentry) || null
-          Sentry?.addBreadcrumb?.({
-            category: 'desktop-player',
-            level: 'warning',
-            message: 'libmpv_start_failed_fallback_to_hlsjs',
-            data: { error: mpvError?.message, filePath, strategy: result.strategy },
-          })
-        } catch {}
-        try { window.__caramba_engine_fallback__ = true } catch {}
-        // Also stop the mpv handle so it doesn't compete for the
-        // BrowserWindow's NSView while hls.js renders <video>.
-        try { await window.api.stopEmbedMpv() } catch {}
-      }
-      return result
-    },
-
-    stopPlayback: async (finalTime, finalDuration, context) => {
-      if (useEmbedMpv) {
-        try { await window.api.stopEmbedMpv() } catch {}
-      }
-      return http.stopPlayback(finalTime, finalDuration, context)
-    },
-
-    seekPlayback: async (seekTime) => {
-      if (useEmbedMpv) {
-        try { await window.api.embedSeek(seekTime); return { ok: true } } catch {}
-      }
-      return http.seekPlayback(seekTime)
-    },
-
-    pausePlayback: async () => {
-      if (useEmbedMpv) {
-        try { await window.api.embedPause(); return { ok: true } } catch {}
-      }
-      return http.pausePlayback()
-    },
-
-    resumePlayback: async () => {
-      if (useEmbedMpv) {
-        try { await window.api.embedResume(); return { ok: true } } catch {}
-      }
-      return http.resumePlayback()
-    },
-
-    switchAudio: useEmbedMpv
-      ? async (id) => { try { return await window.api.embedSwitchAudio(id) } catch { return null } }
-      : http.switchAudio,
-
-    switchSubtitle: useEmbedMpv
-      ? async (id) => { try { return await window.api.embedSwitchSubtitle(id) } catch { return null } }
-      : http.switchSubtitle,
-
-    // libmpv live-state events. In hls.js mode these never fire;
-    // PlayerContext only subscribes when capabilities.hasMpvEmbedPlayer is true.
-    onPlaybackState: (cb) => window.api.onPlaybackState(cb),
-    onPlaybackTracks: (cb) => window.api.onPlaybackTracks(cb),
-    onPlaybackEnded: (cb) => window.api.onPlaybackEnded(cb),
 
     // === External VLC / Open in default app ===
     // The renderer passes { filePath, episodeId, movieId, title }. We start a
@@ -183,8 +67,6 @@ export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabil
     vlcSetVolume: (level) => window.api.vlcSetVolume(level),
 
     // === Downloads (electron-only) ===
-    // Server exposes raw file streams at /api/media/{episodes,movies}/:id
-    // — the desktop just streams them to disk and tracks progress in memory.
     downloadEpisode: ({ episodeId, label, originalName, filePath } = {}) => {
       if (!episodeId) return Promise.resolve({ error: 'No episodeId' })
       const url = `${base}/api/media/episodes/${episodeId}`
@@ -229,18 +111,13 @@ export function createDesktopAdapter(serverUrl, { useEmbedMpv = true, mpvCapabil
     downloadUpdate: () => window.api.downloadUpdate(),
     installUpdate: () => window.api.installUpdate(),
 
-    // === Desktop preferences (server URL, player engine, downloads folder) ===
+    // === Desktop preferences (server URL, downloads folder) ===
     getDesktopPreferences: () => window.api.getPreferences(),
     setDesktopPreferences: (prefs) => window.api.setPreferences(prefs),
   }
 }
 
-/**
- * Default capabilities for the desktop client. `hasMpvEmbedPlayer` mirrors
- * the `useEmbedMpv` option passed into createDesktopAdapter — toggle the
- * two together when the user changes the player engine in Settings.
- */
-export function getDesktopCapabilities({ useEmbedMpv = true } = {}) {
+export function getDesktopCapabilities() {
   return {
     ...httpCapabilities,
     canPlay: true,
@@ -248,7 +125,6 @@ export function getDesktopCapabilities({ useEmbedMpv = true } = {}) {
     canOpenExternal: true,
     hasNowPlaying: true,
     hasSettings: true,
-    hasMpvEmbedPlayer: useEmbedMpv,
     hasUpdater: true,
     hasServerDiscovery: true,
     hasVlcLibrary: true,

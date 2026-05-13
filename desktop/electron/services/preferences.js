@@ -5,9 +5,8 @@
 // URL, theme, downloads folder. Per-show / per-movie playback preferences
 // live on the server now (via /api/playback/preferences). Codec/transcode
 // decisions are driven by the DeviceProfile sent on each playback start —
-// no manual toggle. The video engine is chosen at runtime based on
-// capability detection (libmpv when the native module loads, hls.js
-// otherwise) — not a user preference.
+// no manual toggle. Playback runs through Jellyfin Player JS — no per-user
+// engine selection.
 
 const fs = require('fs')
 const path = require('path')

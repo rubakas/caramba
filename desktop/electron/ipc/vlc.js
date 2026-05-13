@@ -2,11 +2,11 @@
 // feature and the NowPlaying scrubber that controls an external VLC
 // subprocess over its HTTP interface.
 //
-// The in-process libmpv playback engine lives in ipc/mpv-embed.js;
-// these two surfaces are independent. The external VLC code path is
-// kept because some users prefer to watch in a separate window with
-// VLC's full UI, and because Caramba's NowPlaying bar surfaces
-// playback progress when VLC is the active player.
+// The in-app playback engine lives in ui/components/VideoPlayer.jsx
+// (Jellyfin Player JS). The external VLC code path is kept because
+// some users prefer to watch in a separate window with VLC's full UI,
+// and because Caramba's NowPlaying bar surfaces playback progress when
+// VLC is the active player.
 const { ipcMain, shell, BrowserWindow } = require('electron')
 const libvlc = require('../services/libvlc-player')
 

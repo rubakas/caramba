@@ -1,0 +1,10 @@
+source 'https://rubygems.org'
+
+gemspec
+
+group :development, :test do
+  gem 'rspec-rails', '~> 7.0'
+  gem 'rubocop', '~> 1.60', require: false
+  gem 'rubocop-rails', '~> 2.23', require: false
+  gem 'rubocop-rspec', '~> 3.0', require: false
+end

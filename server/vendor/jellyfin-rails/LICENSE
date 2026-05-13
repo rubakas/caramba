@@ -1,0 +1,55 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 2, June 1991
+
+ Copyright (C) 1989, 1991 Free Software Foundation, Inc.,
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+This project is a derivative work of Jellyfin (https://github.com/jellyfin/jellyfin)
+and jellyfin-web (https://github.com/jellyfin/jellyfin-web), both licensed under
+GPL-2.0. The Ruby port of `MediaBrowser.Controller.MediaEncoding.EncodingHelper`
+and the extracted `htmlVideoPlayer` are derivative works and are therefore
+licensed under the same terms.
+
+The full text of GPL-2.0 is available at:
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+By using this software you agree to the terms of GPL-2.0.
+
+                    GNU GENERAL PUBLIC LICENSE
+   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+  0. This License applies to any program or other work which contains
+a notice placed by the copyright holder saying it may be distributed
+under the terms of this General Public License.
+
+  1. You may copy and distribute verbatim copies of the Program's
+source code as you receive it, in any medium, provided that you
+conspicuously and appropriately publish on each copy an appropriate
+copyright notice and disclaimer of warranty.
+
+  2. You may modify your copy or copies of the Program or any portion
+of it, thus forming a work based on the Program, and copy and
+distribute such modifications under the terms of Section 1 above,
+provided that you also meet all of these conditions:
+
+    a) You must cause the modified files to carry prominent notices
+    stating that you changed the files and the date of any change.
+
+    b) You must cause any work that you distribute or publish, that
+    in whole or in part contains or is derived from the Program, to
+    be licensed as a whole at no charge to all third parties under
+    the terms of this License.
+
+  (Sections 3–12 omitted for brevity; refer to the canonical GPL-2.0
+  text at https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt for
+  the complete license, including warranty disclaimers and patent
+  provisions which form part of the license.)
+
+  NO WARRANTY
+
+  BECAUSE THE PROGRAM IS LICENSED FREE OF CHARGE, THERE IS NO
+WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.
+EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR
+OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND.

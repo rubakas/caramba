@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@caramba/ui": "workspace:*",
+    "@jellyfin-rails/player": "workspace:*",
     "@sentry/react": "^10.52.0"
   },
   "devDependencies": {

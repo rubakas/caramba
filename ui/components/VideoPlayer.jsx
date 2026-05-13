@@ -1,20 +1,11 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
-import Hls from 'hls.js'
+import { Player } from '@jellyfin-rails/player'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi, useCapabilities } from '../context/ApiContext'
 import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
-import MpvOverlay from './MpvOverlay'
-
-// Circuit-breaker budget for hls.js fatal errors. Without a cap, fatal
-// NETWORK_ERROR → startLoad() loops indefinitely whenever the server is
-// behind playback (e.g. 4K full_transcode under VideoToolbox), producing a
-// request storm against /api/playback/{playlist,segment}. Reset on every
-// successful frag/level load so a transient blip doesn't burn the budget.
-const HLS_MAX_FATAL_RECOVERIES = 3
-const HLS_FATAL_BACKOFF_MS = [1000, 2000, 4000]
 
 // Human-readable language names for common ISO 639 codes
 const LANG_NAMES = {
@@ -66,28 +57,17 @@ function subtitleLabel(stream) {
   return info ? `${lang} — ${info}` : lang
 }
 
-function strategyLabel(strategy) {
-  switch (strategy) {
-    case 'direct_play':     return 'Direct Play'
-    case 'audio_transcode': return 'Transcoding audio'
-    case 'full_transcode':  return 'Transcoding'
-    default:                return null
-  }
-}
-
 // Dev-only overlay that surfaces what the playback pipeline is actually doing —
 // which strategy was picked, source codec/res/bitrate, HDR transfer, audio
-// layout. Visible only when Vite is in dev mode (production builds tree-shake
-// the branch). Discreet pill in the top-right; pointer-events disabled so it
-// never intercepts player clicks.
+// layout. Visible only when Vite is in dev mode.
 function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
   if (!import.meta.env.DEV) return null
 
   const STRATEGY_COLOR = {
-    direct_play:     '#34c759', // green — best
-    direct_stream:   '#34c759', // green — remux only
-    audio_transcode: '#ffd60a', // yellow
-    full_transcode:  '#ff453a', // red — most expensive
+    direct_play:     '#34c759',
+    direct_stream:   '#34c759',
+    audio_transcode: '#ffd60a',
+    full_transcode:  '#ff453a',
   }
   const HDR_TRANSFERS = new Set(['smpte2084', 'arib-std-b67'])
   const isHdr = !!video?.color_transfer && HDR_TRANSFERS.has(video.color_transfer)
@@ -141,20 +121,6 @@ function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
           <span style={dim}>audio </span>
           {(audioStream.codec || '?').toUpperCase()} {audioStream.channels}ch
           {audioStream.language && audioStream.language !== 'und' && ` ${audioStream.language}`}
-          {(strategy === 'audio_transcode' || strategy === 'full_transcode') && (
-            <span style={{ color: '#ffd60a' }}>
-              {' → AAC '}
-              {Math.min(audioStream.channels || 2, 6)}ch
-            </span>
-          )}
-        </div>
-      )}
-      {strategy === 'full_transcode' && video && (
-        <div>
-          <span style={dim}>video out </span>
-          <span style={{ color: '#ffd60a' }}>
-            H.264 {video.width >= 2560 && video.color_transfer && HDR_TRANSFERS.has(video.color_transfer) ? '1920×1080 (downscaled)' : `${video.width}×${video.height}`} 8-bit
-          </span>
         </div>
       )}
     </div>
@@ -177,270 +143,128 @@ const SUB_STYLES = [
 ]
 
 // Native player branch — when the CarambaPlayer Capacitor plugin is present
-// (Android TV native build) we skip the entire WebView <video> + hls.js path
-// and let the plugin's full-screen ExoPlayer Activity render playback. This
-// component owns nothing visible; it just shuttles lifecycle events between
-// the plugin and PlayerContext so the rest of the app keeps working as if
-// the WebView player were running.
+// (Android TV native build) we skip the Player JS runtime entirely and let
+// the plugin's full-screen ExoPlayer Activity render playback.
 function NativeVideoPlayer() {
   const { playerState, launching, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
-  // Track what we last handed the plugin so we can decide between
-  // present()/updateStream()/dismiss() on each render.
   const lastRef = useRef({ open: false, hlsUrl: null, streamUrl: null, subtitleUrl: null, seekBase: 0, activeAudioIndex: null, activeSubtitleIndex: null })
-  // Has plugin.present() been called for the current open lifecycle?
-  // Set when we fire the stub `present` on launching=true, cleared on
-  // dismiss. This lets us decide between present (first time) vs
-  // updateStream (mid-session) without depending on URL-diff heuristics.
   const presentedRef = useRef(false)
-  // The listener callbacks below close over playerState; bounce through a
-  // ref so they always see the latest values without re-subscribing.
   const stateRef = useRef(playerState)
   useEffect(() => { stateRef.current = playerState }, [playerState])
 
-  const plugin = (typeof window !== 'undefined' && window.Capacitor?.Plugins?.CarambaPlayer) || null
-
-  // Open the Activity the *moment* `launching` flips on, before
-  // /api/playback/start has even returned. The Activity opens with its own
-  // loading spinner (no media yet) and covers the WebView right away —
-  // there's no longer a visible gap between "click play" and "Activity on
-  // screen", and no need for a React overlay.
   useEffect(() => {
+    const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
     if (!plugin) return
-    if (launching && !presentedRef.current) {
-      const stub = { sessionId: 'pending', pending: true, strategy: 'pending' }
-      Promise.resolve(plugin.present(stub)).catch(err => console.error('[CarambaPlayer] stub present failed', err))
-      presentedRef.current = true
-    } else if (!launching && !playerState.open && presentedRef.current) {
-      // launching ended without opening (server error, user cancelled).
-      // Tear down the stub Activity.
-      Promise.resolve(plugin.dismiss()).catch(() => {})
-      presentedRef.current = false
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plugin, launching, playerState.open])
 
-  // Open / update / dismiss
-  useEffect(() => {
-    if (!plugin) return
-    const last = lastRef.current
+    const apiBase = api.baseUrl?.() || ''
 
-    // Promise.resolve() wraps both Promise and sync returns so .catch() is
-    // always safe — same reason as the listener-registration guard below.
-    if (!playerState.open && last.open) {
-      Promise.resolve(plugin.dismiss()).catch(() => {})
-      lastRef.current = { open: false, hlsUrl: null, streamUrl: null, subtitleUrl: null, seekBase: 0, activeAudioIndex: null, activeSubtitleIndex: null }
-      presentedRef.current = false
-      return
-    }
-    if (!playerState.open) return
-
-    const payload = buildNativePayload(playerState, api.apiBase || '')
-    // The stub present() in the launching effect already opened the
-    // Activity, so subsequent calls are always updateStream — even on the
-    // first arrival of real session data. presentedRef is the source of
-    // truth for "is the Activity alive?".
-    if (!presentedRef.current) {
-      Promise.resolve(plugin.present(payload)).catch(err => console.error('[CarambaPlayer] present failed', err))
-      presentedRef.current = true
-    } else if (
-      !last.open ||
-      last.hlsUrl !== playerState.hlsUrl ||
-      last.streamUrl !== playerState.streamUrl ||
-      last.subtitleUrl !== playerState.subtitleUrl ||
-      last.seekBase !== playerState.seekBase ||
-      last.activeAudioIndex !== playerState.activeAudioIndex ||
-      last.activeSubtitleIndex !== playerState.activeSubtitleIndex
-    ) {
-      Promise.resolve(plugin.updateStream(payload)).catch(err => console.error('[CarambaPlayer] updateStream failed', err))
-    }
-
-    lastRef.current = {
-      open: true,
-      hlsUrl: playerState.hlsUrl,
-      streamUrl: playerState.streamUrl,
-      subtitleUrl: playerState.subtitleUrl,
-      seekBase: playerState.seekBase,
-      activeAudioIndex: playerState.activeAudioIndex,
-      activeSubtitleIndex: playerState.activeSubtitleIndex,
-    }
-  }, [
-    plugin,
-    playerState.open,
-    playerState.hlsUrl,
-    playerState.streamUrl,
-    playerState.subtitleUrl,
-    playerState.seekBase,
-    playerState.activeAudioIndex,
-    playerState.activeSubtitleIndex,
-  ])
-
-  // Listener wiring — set up once, kept stable via stateRef closures.
-  useEffect(() => {
-    if (!plugin) return
-    const handles = []
-    // Capacitor 6+ returns a Promise<PluginListenerHandle> from addListener,
-    // but some Capacitor builds / shims return the handle synchronously
-    // (the same defensive pattern lives in http.js for CarambaUpdater).
-    // Without this guard we'd hit "g.then is not a function" on the
-    // minified runtime.
-    const remember = (result) => {
-      if (result && typeof result.then === 'function') {
-        result.then(h => handles.push(h)).catch(() => {})
-      } else if (result) {
-        handles.push(result)
+    if (playerState.open && !lastRef.current.open) {
+      if (launching && !presentedRef.current) {
+        plugin.present?.({ apiBase, episodeId: playerState.episodeId || 0, movieId: playerState.movieId || 0 }).catch(() => {})
+        presentedRef.current = true
       }
+      lastRef.current = { open: true }
     }
 
-    remember(plugin.addListener('progress', ({ position, duration }) => {
-      const s = stateRef.current
-      const ctx = { episodeId: s.episodeId, movieId: s.movieId, watchHistoryId: s.watchHistoryId }
-      api.reportProgress?.(position, duration, ctx)?.catch?.(() => {})
-    }))
-
-    remember(plugin.addListener('requestSeek', ({ absoluteTime }) => {
-      seekPlayback(absoluteTime)
-    }))
-
-    remember(plugin.addListener('requestAudioSwitch', ({ audioStreamIndex, currentVideoTime }) => {
-      // The native menu picked a track; route through PlayerContext so
-      // the saved-pref + URL-swap chain runs the same as in the WebView UI.
-      switchAudio(audioStreamIndex, currentVideoTime || 0)
-    }))
-
-    remember(plugin.addListener('requestSubtitleSwitch', ({ subtitleStreamIndex, isBitmap, currentVideoTime }) => {
-      // -1 / null both mean "Off" in PlayerContext.switchSubtitle.
-      const idx = subtitleStreamIndex == null || subtitleStreamIndex < 0 ? null : subtitleStreamIndex
-      if (isBitmap) {
-        switchBitmapSubtitle(idx, currentVideoTime || 0)
+    if (playerState.open && !launching && (playerState.hlsUrl || playerState.streamUrl)) {
+      const payload = {
+        sessionId: String(playerState.sessionId ?? ''),
+        streamUrl: playerState.streamUrl ?? null,
+        hlsUrl: playerState.hlsUrl ?? null,
+        subtitleUrl: playerState.subtitleUrl ?? null,
+        strategy: playerState.strategy ?? 'direct_stream',
+        duration: playerState.duration || 0,
+        startTime: playerState.startTime || 0,
+        seekBase: playerState.seekBase || 0,
+        title: playerState.title || '',
+        subtitle: playerState.subtitle || '',
+        audioStreams: playerState.audioStreams || [],
+        subtitleStreams: playerState.subtitleStreams || [],
+        activeAudioIndex: playerState.activeAudioIndex ?? null,
+        activeSubtitleIndex: playerState.activeSubtitleIndex ?? null,
+        isBitmapSubtitle: !!playerState.isBitmapSubtitle,
+        video: playerState.video ?? null,
+        apiBase,
+        episodeId: playerState.episodeId || 0,
+        movieId: playerState.movieId || 0,
+        watchHistoryId: playerState.watchHistoryId || 0,
+      }
+      if (presentedRef.current) {
+        plugin.updateStream?.(payload).catch(() => {})
       } else {
-        switchSubtitle(idx)
+        plugin.present?.(payload).catch(() => {})
+        presentedRef.current = true
       }
-    }))
+      lastRef.current = { open: true, ...payload }
+    }
 
-    remember(plugin.addListener('requestSubtitleAppearance', ({ subtitleSize, subtitleStyle }) => {
-      const next = {}
-      if (subtitleSize) next.subtitleSize = subtitleSize
-      if (subtitleStyle) next.subtitleStyle = subtitleStyle
-      if (Object.keys(next).length > 0) setSubtitleAppearance?.(next)
-    }))
+    if (!playerState.open && lastRef.current.open) {
+      plugin.dismiss?.().catch(() => {})
+      presentedRef.current = false
+      lastRef.current = { open: false }
+    }
+  }, [api, playerState, launching])
 
-    remember(plugin.addListener('ended', ({ position, duration }) => {
-      const s = stateRef.current
-      if (s.type === 'episode') {
-        playNextEpisode()
-      } else {
-        closePlayer(position, duration)
-      }
-    }))
+  useEffect(() => {
+    const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
+    if (!plugin) return
 
-    remember(plugin.addListener('dismissed', ({ position, duration }) => {
-      closePlayer(position, duration)
-    }))
-
-    remember(plugin.addListener('error', (e) => {
-      console.error('[CarambaPlayer] error', e)
-    }))
+    const onClosed = plugin.addListener?.('playerClosed', () => {
+      const cur = stateRef.current
+      closePlayer(cur.currentTime || 0, cur.duration || 0)
+    })
+    const onEnded = plugin.addListener?.('playbackEnded', () => {
+      const cur = stateRef.current
+      if (cur.type === 'episode') playNextEpisode()
+      else closePlayer(cur.currentTime || 0, cur.duration || 0)
+    })
 
     return () => {
-      handles.forEach(h => { try { h.remove?.() } catch {} })
+      onClosed?.then(h => h.remove?.())
+      onEnded?.then(h => h.remove?.())
     }
-  // closePlayer/seekPlayback/playNextEpisode are stable useCallback refs from
-  // PlayerContext — safe to omit from deps.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plugin])
+  }, [closePlayer, playNextEpisode])
 
-  // No React UI at all — the native Activity is on screen the whole time.
   return null
 }
 
-function buildNativePayload(state, apiBase) {
-  return {
-    sessionId: String(state.sessionId ?? ''),
-    streamUrl: state.streamUrl ?? null,
-    hlsUrl: state.hlsUrl ?? null,
-    subtitleUrl: state.subtitleUrl ?? null,
-    strategy: state.strategy ?? 'direct_stream',
-    duration: state.duration || 0,
-    startTime: state.startTime || 0,
-    seekBase: state.seekBase || 0,
-    title: state.title || '',
-    subtitle: state.subtitle || '',
-    audioStreams: state.audioStreams || [],
-    subtitleStreams: state.subtitleStreams || [],
-    activeAudioIndex: state.activeAudioIndex ?? null,
-    activeSubtitleIndex: state.activeSubtitleIndex ?? null,
-    isBitmapSubtitle: !!state.isBitmapSubtitle,
-    video: state.video ?? null,
-    // Direct-to-server reporting context, read by PlayerActivity.java.
-    // The Activity POSTs progress straight to Rails because the Capacitor
-    // bridge is unreliable while the WebView's MainActivity is paused.
-    apiBase: apiBase || '',
-    episodeId: state.episodeId || 0,
-    movieId: state.movieId || 0,
-    watchHistoryId: state.watchHistoryId || 0,
-  }
-}
-
-// Public component exported as the player surface. When the native player
-// plugin is present (Android TV native build), delegate playback to it
-// entirely; the WebView player only renders in browser/web mode.
+// Public component exported as the player surface.
 export default function VideoPlayer() {
   const capabilities = useCapabilities()
-  const { playerState } = usePlayer()
   if (capabilities.hasNativePlayer) {
     return <NativeVideoPlayer />
-  }
-  // libmpv engine when the platform exposes it AND the current session
-  // isn't a server-transcoded HLS source (hybrid-remote falls back to
-  // <video> + hls.js for the remote stream).
-  if (capabilities.hasMpvEmbedPlayer && !playerState.streamUrl) {
-    return <MpvOverlay />
   }
   return <WebVideoPlayer />
 }
 
 function WebVideoPlayer() {
-  const { playerState, closePlayer, playNextEpisode, seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const { playerState, closePlayer, playNextEpisode, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
   const { showToast } = useToast()
-  const videoRef = useRef(null)
+  const playerMountRef = useRef(null)
+  const playerRef = useRef(null)
   const containerRef = useRef(null)
   const hideTimerRef = useRef(null)
-   const trackMenuRef = useRef(null)
-   const clickTimerRef = useRef(null)
-   const isTouchRef = useRef(false)
-   const playBtnRef = useRef(null)  // For TV auto-focus
+  const trackMenuRef = useRef(null)
+  const clickTimerRef = useRef(null)
+  const isTouchRef = useRef(false)
+  const playBtnRef = useRef(null)
 
-  // Detect Android TV for different control scheme
   const isAndroidTV = typeof window !== 'undefined' &&
     window.Capacitor?.isNativePlatform?.() === true
 
-  // seekBase: the absolute time (in the source file) that corresponds to
-  // video.currentTime === 0 in the current stream.  After a seek/restart,
-  // ffmpeg starts from seekBase, so the video element's timeline resets to 0.
-  // Absolute time = seekBase + video.currentTime.
-  const seekBaseRef = useRef(0)
-
-  // Scrubber drag + seek-in-flight flags. Declared at the top of the
-  // component (not next to their handlers below) so the rAF/timeupdate
-  // `updateTime` closure below can reference them without relying on
-  // temporal-dead-zone gymnastics — Vite Fast Refresh has been known to
-  // leave closures pointing at stale ref bindings otherwise.
   const seekingRef = useRef(false)
   const seekBarDragging = useRef(false)
   const seekBarTarget = useRef(null)
 
   const [paused, setPaused] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0) // absolute time for display
+  const [currentTime, setCurrentTime] = useState(0)
   const [buffering, setBuffering] = useState(true)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [volume, setVolume] = useState(1)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [trackMenuOpen, setTrackMenuOpen] = useState(false)
-  // Bumped on every seek/audio switch so the <track> element remounts
-  const [subtitleVersion, setSubtitleVersion] = useState(0)
-  // TV mode: 'seek' (default) or 'settings'
   const [tvMode, setTvMode] = useState('seek')
 
   const totalDuration = playerState.duration || 0
@@ -453,32 +277,26 @@ function WebVideoPlayer() {
   const utilityPillGlass = useGlassConfig('utility-pill')
   const trackPopoverGlass = useGlassConfig('track-popover')
 
-  // Reset local state when player opens with new session
+  // Reset local state when a new session opens.
   useEffect(() => {
     if (playerState.open) {
-      seekBaseRef.current = playerState.seekBase ?? playerState.startTime ?? 0
-      setCurrentTime(seekBaseRef.current)
+      setCurrentTime(playerState.seekBase ?? playerState.startTime ?? 0)
       setPaused(false)
       setBuffering(true)
       setControlsVisible(true)
       setTrackMenuOpen(false)
       setTvMode('seek')
-      // Start the auto-hide timer
       clearTimeout(hideTimerRef.current)
-      hideTimerRef.current = setTimeout(() => {
-        setControlsVisible(false)
-      }, 3000)
+      hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000)
     }
   }, [playerState.sessionId, playerState.open])
 
-  // Lock body scroll when player is open
   useEffect(() => {
     if (!playerState.open) return
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
   }, [playerState.open])
 
-  // Clean up all timers when player closes
   useEffect(() => {
     if (!playerState.open) {
       clearTimeout(hideTimerRef.current)
@@ -488,445 +306,83 @@ function WebVideoPlayer() {
     }
   }, [playerState.open])
 
-  // ── Source attachment ─────────────────────────────────────────────
-  // All platforms are fed an HLS manifest from the Rails server:
-  //   - Safari / iOS — native HLS via <video src="…m3u8">
-  //   - Chromium / Firefox / Android WebView / Electron — hls.js
-  const hlsRef = useRef(null)
-  const fatalAttemptsRef = useRef(0)
-  const fatalTimerRef = useRef(null)
-
-  const cleanupSource = useCallback(() => {
-    if (fatalTimerRef.current) {
-      clearTimeout(fatalTimerRef.current)
-      fatalTimerRef.current = null
-    }
-    fatalAttemptsRef.current = 0
-    if (hlsRef.current) {
-      const v = videoRef.current
-      const handler = hlsRef.current.__carambaVideoErrorHandler
-      if (v && handler) {
-        try { v.removeEventListener('error', handler) } catch {}
-      }
-      try { hlsRef.current.destroy() } catch {}
-      hlsRef.current = null
-    }
-  }, [])
-
+  // Instantiate Player JS for the current session. Recreated when the URL
+  // changes (every audio/subtitle switch produces a new HLS master URL).
   useEffect(() => {
     if (!playerState.open) return
-    const video = videoRef.current
-    if (!video) return
+    const mount = playerMountRef.current
+    if (!mount) return
+    const url = playerState.hlsUrl || playerState.streamUrl
+    if (!url) return
 
-    const manifestUrl = playerState.hlsUrl || playerState.streamUrl
-    if (!manifestUrl) return
+    const player = new Player(mount, {
+      source: { hlsUrl: url },
+      controls: false,
+      keyboardShortcuts: false,
+      autoplay: true,
+      startAtSeconds: playerState.startTime || 0,
+    })
+    playerRef.current = player
 
-    cleanupSource()
-
-    // direct_play (card #55): the source is browser-native — no ffmpeg, no
-    // HLS. Point <video> straight at the streamUrl; the protocol handler
-    // serves the file with HTTP Range so the element can seek by byte. This
-    // skips every layer that can fall behind on high-bitrate content.
-    if (playerState.strategy === 'direct_play') {
-      console.log('[Player] direct_play:', manifestUrl)
-      video.src = manifestUrl
-      video.load()
-      const onLoaded = () => {
-        if (playerState.startTime > 0) {
-          try { video.currentTime = playerState.startTime } catch {}
-        }
-        video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
+    const offPlay   = player.on('play',    () => setPaused(false))
+    const offPause  = player.on('pause',   () => setPaused(true))
+    const offReady  = player.on('ready',   () => setBuffering(false))
+    const offWait   = player.on('waiting', () => setBuffering(true))
+    const offProg   = player.on('progress', ({ currentTime: t }) => {
+      if (seekBarDragging.current) return
+      if (seekingRef.current) return
+      setCurrentTime(t)
+      setBuffering(false)
+      if (playerState.type === 'episode' || playerState.type === 'movie') {
+        api.reportProgress(t, playerState.duration || 0, {
+          type: playerState.type,
+          episodeId: playerState.episodeId,
+          movieId: playerState.movieId,
+          watchHistoryId: playerState.watchHistoryId,
+        })
       }
-      video.addEventListener('loadedmetadata', onLoaded, { once: true })
-      return () => {
-        video.removeEventListener('loadedmetadata', onLoaded)
-        const v = videoRef.current
-        if (v) {
-          v.removeAttribute('src')
-          v.load()
-        }
-      }
-    }
+    })
+    const offEnded  = player.on('ended', () => {
+      if (playerState.type === 'episode') playNextEpisode()
+      else closePlayer(playerState.duration || 0, playerState.duration || 0)
+    })
+    const offError  = player.on('error', ({ message }) => {
+      console.warn('[Player] error:', message)
+      showToast('Playback failed: ' + (message || 'unknown error'), { type: 'error', duration: 6000 })
+      closePlayer()
+    })
+    const offVol    = player.on('volumechange', ({ volume: v }) => setVolume(v))
 
-    // Safari (macOS + iOS) → prefer native HLS. Safari's built-in HLS
-    // player handles HEVC, HEVC Main 10 (HDR), AC3, EAC3, DTS, TrueHD,
-    // multi-channel audio — everything WebKit supports — far better than
-    // Safari's MSE, which has narrow codec support. Jellyfin's web client
-    // does the same (jellyfin-web/src/components/htmlMediaHelper.js
-    // enableHlsJsPlayerForCodecs returns false on Safari for non-VP9
-    // content). Without this gate, Safari shows:
-    //   - audio_transcode HEVC HDR → nothing plays (MSE rejects HEVC 10-bit)
-    //   - direct_stream H.264 + AC3 → spinner (MSE rejects AC3)
-    //   - audio_transcode + TrueHD source → A/V out of sync
-    // All three resolve when Safari uses native HLS playback.
-    //
-    // Detection: UA-sniff for "Safari" + not "Chrome" + not "Android"
-    // (Android Chrome shows "Safari" in UA). Electron's bundled
-    // Chromium also matches "Safari" string, so explicitly exclude
-    // Electron.
-    const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : ''
-    const isSafari = /Safari/.test(ua) &&
-                     !/Chrome|Chromium|Edg\/|OPR\/|Android/.test(ua) &&
-                     !/\bElectron\b/.test(ua)
-    const canNativeHls = video.canPlayType('application/vnd.apple.mpegurl') !== ''
-
-    if (isSafari && canNativeHls) {
-      console.log('[Player] native HLS (Safari):', manifestUrl)
-      video.src = manifestUrl
-      video.load()
-      const onLoaded = () => {
-        try { video.currentTime = 0 } catch {}
-        video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
-      }
-      video.addEventListener('loadedmetadata', onLoaded, { once: true })
-      return () => {
-        video.removeEventListener('loadedmetadata', onLoaded)
-        const v = videoRef.current
-        if (v) {
-          v.removeAttribute('src')
-          v.load()
-        }
-      }
-    }
-
-    // Prefer hls.js whenever MSE is available — covers every Chromium
-    // environment (Electron, Chrome, Android WebView). Fall back to native
-    // HLS only for Safari/iOS. Android WebView can return "maybe" for
-    // `application/vnd.apple.mpegurl` even though it cannot actually play
-    // HLS natively, so checking Hls.isSupported() first avoids the
-    // infinite-spinner trap.
-    if (Hls.isSupported()) {
-      console.log('[Player] hls.js:', manifestUrl)
-      // Adaptive buffer: shrink to 6s on high-bitrate sources (≥25 Mbps).
-      // Counterintuitive but Jellyfin proven — a smaller buffer recovers
-      // from stalls faster because there's less to flush and fewer
-      // in-flight segment fetches competing with the live edge. Skip on
-      // Android TV WebView (tight memory budget — keep small either way).
-      const isAndroidTv = typeof navigator !== 'undefined' &&
-        /Android.*TV|Caramba\/AndroidTV/i.test(navigator.userAgent || '')
-      const highBitrate = (playerState.bitrate || 0) >= 25_000_000
-      const maxBuf = (highBitrate && !isAndroidTv) ? 6 : 30
-      const maxMaxBuf = (highBitrate && !isAndroidTv) ? 6 : 60
-
-      const hls = new Hls({
-        // Always start at the beginning of the new playlist, regardless of
-        // whatever stale currentTime the <video> element is carrying from
-        // a previous session. Without this, hls.js defaults to -1 which
-        // means "auto-pick based on playlist type" — and for EVENT playlists
-        // without ENDLIST (ours, while ffmpeg is still transcoding), it
-        // treats them as live and seeks near the live edge, honouring the
-        // video element's stale currentTime if non-zero.
-        startPosition: 0,
-        // Buffer caps — see comment above.
-        maxBufferLength: maxBuf,
-        maxMaxBufferLength: maxMaxBuf,
-        maxBufferSize: 60 * 1024 * 1024,    // 60 MB
-        backBufferLength: 15,               // seconds behind playhead
-        // Transient retry — ffmpeg may lag one segment behind playback on
-        // slower encodes. Manifest retries are tuned wider than fragment
-        // retries because cold-start of a 4K HEVC HDR session under
-        // tonemap can keep the playlist file unwritten for 6-10s, and a
-        // 503 "Playlist not ready" from the server has to fall inside the
-        // client's retry budget OR the user sees "first play hangs" until
-        // they switch audio (which restarts ffmpeg with warm caches).
-        manifestLoadingMaxRetry: 12,
-        manifestLoadingRetryDelay: 1000,
-        levelLoadingMaxRetry: 8,
-        levelLoadingRetryDelay: 1000,
-        fragLoadingMaxRetry: 8,
-        fragLoadingRetryDelay: 500,
-      })
-      hlsRef.current = hls
-
-      const isTestOrDev = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV) ||
-        (typeof localStorage !== 'undefined' && localStorage.getItem('__caramba_test_run__') === '1')
-      if (isTestOrDev && typeof window !== 'undefined') {
-        window.__caramba_hls__ = hls
-        window.__caramba_hls_errors__ = []
-      }
-
-      hls.loadSource(manifestUrl)
-      hls.attachMedia(video)
-
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // Belt-and-suspenders with startPosition: 0 above — explicitly snap
-        // to zero once the new manifest is parsed, in case the <video>
-        // element still holds an old session's currentTime.
-        try { video.currentTime = 0 } catch {}
-        video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
-      })
-
-      const resetFatalBudget = () => {
-        fatalAttemptsRef.current = 0
-      }
-      hls.on(Hls.Events.FRAG_LOADED, resetFatalBudget)
-      hls.on(Hls.Events.LEVEL_LOADED, resetFatalBudget)
-
-      // Multi-step recovery state machine (Jellyfin-style).
-      //   network: startLoad() ×N
-      //   media:   attempt 0 → recoverMediaError()
-      //            attempt 1 → swapAudioCodec() + recoverMediaError()
-      //            attempt 2 → fail
-      // The swapAudioCodec() step is the key trick: when ffmpeg's HLS
-      // audio container shifts mid-stream (E-AC3 announced but bytes
-      // arrive as AC3, or vice versa), hls.js's decoder gets stuck and
-      // simple recoverMediaError() loops forever. Swapping the codec
-      // family forces hls.js to rebuild its SourceBuffer and re-attach.
-      const runRecovery = (kind /* 'network' | 'media' */) => {
-        if (hlsRef.current !== hls) return
-        const attempt = fatalAttemptsRef.current
-        if (attempt >= HLS_MAX_FATAL_RECOVERIES) {
-          console.warn('[Player] hls.js exceeded recovery budget — giving up')
-          cleanupSource()
-          showToast("Playback failed — server can't keep up", { type: 'error', duration: 6000 })
-          closePlayer()
-          return
-        }
-
-        const delay = HLS_FATAL_BACKOFF_MS[Math.min(attempt, HLS_FATAL_BACKOFF_MS.length - 1)]
-        fatalAttemptsRef.current = attempt + 1
-        if (fatalTimerRef.current) clearTimeout(fatalTimerRef.current)
-        fatalTimerRef.current = setTimeout(() => {
-          fatalTimerRef.current = null
-          if (hlsRef.current !== hls) return
-          try {
-            if (kind === 'network') {
-              hls.startLoad()
-            } else {
-              // attempt 0 = simple recover; attempt 1 = swap then recover
-              if (attempt >= 1) {
-                try { hls.swapAudioCodec() } catch (err) {
-                  console.warn('[Player] swapAudioCodec threw:', err?.message)
-                }
-              }
-              hls.recoverMediaError()
-            }
-          } catch (err) {
-            console.warn('[Player] recovery threw:', err?.message)
-          }
-        }, delay)
-      }
-
-      // Expose for the <video>.error handler (registered separately).
-      hls.__carambaRunRecovery = runRecovery
-
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (typeof window !== 'undefined' && Array.isArray(window.__caramba_hls_errors__)) {
-          window.__caramba_hls_errors__.push({
-            fatal: !!data.fatal,
-            type: data.type,
-            details: data.details,
-            ts: Date.now(),
-          })
-        }
-        if (!data.fatal) {
-          console.log('[Player] hls.js non-fatal:', data.type, data.details)
-          return
-        }
-        console.warn('[Player] hls.js fatal:', data.type, data.details)
-
-        // HTTP error category split — don't retry a 4xx, that's a
-        // permanent server-side rejection (404 manifest, 401 expired
-        // session). code 0 with NETWORK_ERROR is a CORS / DNS failure;
-        // also unrecoverable for our LAN setup.
-        const responseCode = data.response?.code
-        if (responseCode >= 400 && responseCode < 500) {
-          cleanupSource()
-          showToast('Playback failed — server error', { type: 'error' })
-          closePlayer()
-          return
-        }
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && responseCode === 0) {
-          cleanupSource()
-          showToast('Playback failed — network error', { type: 'error' })
-          closePlayer()
-          return
-        }
-
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          runRecovery('network')
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          runRecovery('media')
-        } else {
-          cleanupSource()
-          showToast('Playback failed', { type: 'error' })
-          closePlayer()
-        }
-      })
-
-      // Route <video> element errors into the same recovery state machine.
-      // Decoder failures (MEDIA_ERR_DECODE) and MSE buffer rejections can
-      // fire on the <video> element without surfacing through hls.js's
-      // ERROR event, leaving the recovery path unused. Mirror Jellyfin's
-      // htmlVideoPlayer onError → handleHlsJsMediaError dispatch.
-      const onVideoError = () => {
-        const err = video.error
-        if (!err) return
-        console.warn('[Player] <video> error:', err.code, err.message)
-        // MEDIA_ERR_ABORTED (1) — user-driven; skip.
-        if (err.code === 1) return
-        // MEDIA_ERR_NETWORK (2)
-        if (err.code === 2) {
-          runRecovery('network')
-          return
-        }
-        // MEDIA_ERR_DECODE (3) — most likely fixable by swapAudioCodec.
-        if (err.code === 3) {
-          runRecovery('media')
-          return
-        }
-        // MEDIA_ERR_SRC_NOT_SUPPORTED (4) — terminal.
-        cleanupSource()
-        showToast('Format not supported', { type: 'error' })
-        closePlayer()
-      }
-      video.addEventListener('error', onVideoError)
-      hls.__carambaVideoErrorHandler = onVideoError
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      console.log('[Player] Native HLS:', manifestUrl)
-      video.src = manifestUrl
-      video.load()
-      video.play().catch((err) => console.warn('[Player] play rejected:', err.message))
-    } else {
-      console.warn('[Player] No HLS support; falling back to direct src')
-      video.src = manifestUrl
-      video.load()
-      video.play().catch(() => {})
-    }
+    player.load().catch((err) => {
+      console.error('[Player] load failed', err)
+    })
 
     return () => {
-      cleanupSource()
-      const v = videoRef.current
-      if (v) {
-        v.removeAttribute('src')
-        v.load()
-      }
+      offPlay?.(); offPause?.(); offReady?.(); offWait?.(); offProg?.()
+      offEnded?.(); offError?.(); offVol?.()
+      try { player.destroy() } catch {}
+      playerRef.current = null
     }
-  }, [playerState.open, playerState.streamUrl, playerState.hlsUrl, playerState.sessionId, playerState.strategy, playerState.startTime, playerState.bitrate, cleanupSource])
+  }, [playerState.open, playerState.sessionId, playerState.hlsUrl, playerState.streamUrl,
+      playerState.startTime, playerState.type, playerState.episodeId, playerState.movieId,
+      playerState.watchHistoryId, playerState.duration, api, closePlayer, playNextEpisode, showToast])
 
-  // Helper: disable all text tracks on the video element.
-  const disableAllTextTracks = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    for (let i = 0; i < video.textTracks.length; i++) {
-      video.textTracks[i].mode = 'disabled'
-    }
-  }, [])
-
-  // When subtitleUrl becomes null (subs turned off), disable all text tracks
-  useEffect(() => {
-    if (playerState.open && !playerState.subtitleUrl) {
-      disableAllTextTracks()
-    }
-  }, [playerState.open, playerState.subtitleUrl, disableAllTextTracks])
-
-  // Force subtitle track to 'showing' — Chromium often ignores the `default` attribute
-  const subtitleActiveRef = useRef(false)
-  useEffect(() => {
-    subtitleActiveRef.current = !!(playerState.open && playerState.subtitleUrl)
-  }, [playerState.open, playerState.subtitleUrl])
-
-   useEffect(() => {
-     if (!playerState.open || !playerState.subtitleUrl) return
-
-     const forceShowSubtitles = () => {
-       if (!subtitleActiveRef.current) return
-       const video = videoRef.current
-       if (!video) return
-       for (let i = 0; i < video.textTracks.length; i++) {
-         if (video.textTracks[i].kind === 'subtitles') {
-           console.log(`[Subtitle] Track ${i}: mode=${video.textTracks[i].mode}, cues=${video.textTracks[i].cues?.length || 0}`)
-           video.textTracks[i].mode = 'showing'
-         }
-       }
-     }
-
-     const video = videoRef.current
-     if (!video) return
-
-     console.log(`[Subtitle] Loading URL: ${playerState.subtitleUrl}`)
-     forceShowSubtitles()
-     video.addEventListener('loadedmetadata', forceShowSubtitles)
-     video.addEventListener('loadeddata', forceShowSubtitles)
-     video.addEventListener('canplay', forceShowSubtitles)
-     const interval = setInterval(forceShowSubtitles, 1000)
-
-     return () => {
-       video.removeEventListener('loadedmetadata', forceShowSubtitles)
-       video.removeEventListener('loadeddata', forceShowSubtitles)
-       video.removeEventListener('canplay', forceShowSubtitles)
-       clearInterval(interval)
-       disableAllTextTracks()
-     }
-   }, [playerState.open, playerState.subtitleUrl, subtitleVersion, disableAllTextTracks])
-
-  // Inject dynamic <style> for ::cue
+  // Inject dynamic ::cue styling for the current size/style preset.
   useEffect(() => {
     const sizeObj = SUB_SIZES.find(s => s.id === subtitleSize) || SUB_SIZES[1]
     const styleObj = SUB_STYLES.find(s => s.id === subtitleStyle) || SUB_STYLES[0]
 
     const styleEl = document.createElement('style')
-    styleEl.textContent = `.video-player-video::cue { font-size: ${sizeObj.em}; font-family: inherit; ${styleObj.css} }`
+    styleEl.textContent = `.jellyfin-player video::cue { font-size: ${sizeObj.em}; font-family: inherit; ${styleObj.css} }`
     document.head.appendChild(styleEl)
 
     return () => { document.head.removeChild(styleEl) }
   }, [subtitleSize, subtitleStyle])
 
-  // --- requestAnimationFrame time polling ---
-  // Absolute time = seekBase + video.currentTime.
-  // Skip while the user is dragging the scrubber OR a seek is in flight —
-  // in both cases seekBaseRef and video.currentTime belong to different
-  // sessions and would produce a bogus display time.
-  // Display time updates come ONLY from the video element's `timeupdate`
-  // event, which only fires while the video is actively playing. We used
-  // to run a requestAnimationFrame loop alongside this for smoother updates,
-  // but that loop kept firing during the ~500ms seek roundtrip and wrote
-  // `newSeekBase + oldVideoCurrentTime` into the scrubber — which
-  // manifested as "click at start, scrubber jumps forward by however long
-  // the old stream had been playing". Relying on `timeupdate` + natural
-  // pause semantics eliminates the race entirely.
-  useEffect(() => {
-    if (!playerState.open) return
-    const video = videoRef.current
-    if (!video) return
-
-    const onTimeUpdate = () => {
-      if (seekBarDragging.current) return
-      if (seekingRef.current) return
-      if (video.paused || !isFinite(video.currentTime) || video.currentTime <= 0) return
-      setCurrentTime(seekBaseRef.current + video.currentTime)
-    }
-
-    video.addEventListener('timeupdate', onTimeUpdate)
-    return () => {
-      video.removeEventListener('timeupdate', onTimeUpdate)
-    }
-  }, [playerState.open, playerState.sessionId])
-
-  // Report progress periodically (absolute time)
-  useEffect(() => {
-    if (!playerState.open) return
-
-    const timer = setInterval(() => {
-      const video = videoRef.current
-      if (video && !video.paused && isFinite(video.currentTime) && video.currentTime > 0) {
-        api.reportProgress(seekBaseRef.current + video.currentTime, totalDuration, {
-          type: playerState.type,
-          episodeId: playerState.episodeId,
-          movieId: playerState.movieId,
-        })
-      }
-    }, 3000)
-
-    return () => clearInterval(timer)
-  }, [playerState.open, playerState.type, playerState.episodeId, playerState.movieId, totalDuration])
-
-  // Show/hide controls on mouse activity
   const showControls = useCallback(() => {
     setControlsVisible(true)
     clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
-      // Don't hide if paused, menu open, or in settings mode on TV
       if (!paused && !trackMenuOpen && (!isAndroidTV || tvMode === 'seek')) {
         setControlsVisible(false)
       }
@@ -942,19 +398,16 @@ function WebVideoPlayer() {
     }
   }, [paused, trackMenuOpen, showControls])
 
-  // On Android TV, auto-focus play button when controls become visible
   useEffect(() => {
     if (isAndroidTV && controlsVisible && playBtnRef.current && !trackMenuOpen) {
-      // Only focus if nothing else is focused
       const activeEl = document.activeElement
-      const isVideoOrBody = !activeEl || activeEl === document.body || activeEl === videoRef.current
+      const isVideoOrBody = !activeEl || activeEl === document.body
       if (isVideoOrBody) {
         playBtnRef.current.focus({ preventScroll: true })
       }
     }
   }, [controlsVisible, isAndroidTV, trackMenuOpen])
 
-  // Close track menu when clicking outside
   useEffect(() => {
     if (!trackMenuOpen) return
     const handleClickOutside = (e) => {
@@ -971,111 +424,43 @@ function WebVideoPlayer() {
     }
   }, [trackMenuOpen])
 
-  // Fullscreen change listener (handles both standard and iOS fullscreen)
   useEffect(() => {
-    const handler = () => {
-      const video = videoRef.current
-      const isStandardFullscreen = !!document.fullscreenElement
-      const isIOSFullscreen = video && video.webkitDisplayingFullscreen
-      setIsFullscreen(isStandardFullscreen || isIOSFullscreen)
-    }
+    const handler = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handler)
-    videoRef.current?.addEventListener('webkitbeginfullscreen', handler)
-    videoRef.current?.addEventListener('webkitendfullscreen', handler)
-    return () => {
-      document.removeEventListener('fullscreenchange', handler)
-      videoRef.current?.removeEventListener('webkitbeginfullscreen', handler)
-      videoRef.current?.removeEventListener('webkitendfullscreen', handler)
-    }
+    return () => document.removeEventListener('fullscreenchange', handler)
   }, [])
 
-  // --- Callbacks ---
-
   const handleClose = useCallback(() => {
-    const video = videoRef.current
-    const absTime = video && isFinite(video.currentTime) ? seekBaseRef.current + video.currentTime : 0
+    const absTime = playerRef.current?.currentTime ?? 0
     const dur = totalDuration
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    }
-    // Exit iOS fullscreen if active
-    if (video?.webkitDisplayingFullscreen) {
-      video.webkitExitFullscreen?.()
-    }
+    if (document.fullscreenElement) document.exitFullscreen()
     closePlayer(absTime, dur)
   }, [closePlayer, totalDuration])
 
   const handleEnded = useCallback(() => {
-    if (playerState.type === 'episode') {
-      playNextEpisode()
-    } else {
-      handleClose()
-    }
+    if (playerState.type === 'episode') playNextEpisode()
+    else handleClose()
   }, [playerState.type, playNextEpisode, handleClose])
 
-  // Seek: for direct_play just move <video>.currentTime; for transcoded
-  // streams ask the server to restart ffmpeg at target time and reload.
-  const doSeek = useCallback(async (absoluteTime) => {
-    if (seekingRef.current) return
+  const doSeek = useCallback((absoluteTime) => {
+    const player = playerRef.current
+    if (!player) return
     seekingRef.current = true
-
-    // direct_play: <video> seeks itself via byte-range; no IPC, no reload.
-    // seekBase stays 0 so display time tracks video.currentTime directly.
-    if (playerState.strategy === 'direct_play') {
-      const v = videoRef.current
-      if (v) {
-        try { v.currentTime = absoluteTime } catch {}
-      }
-      seekBaseRef.current = 0
-      setCurrentTime(absoluteTime)
-      seekingRef.current = false
-      return
-    }
-
-    // Pre-commit the intended display position and pause the old stream.
-    // Pausing stops the old video element from advancing its currentTime
-    // during the ~300-800ms server roundtrip — otherwise the rAF loop keeps
-    // computing display = oldSeekBase + oldCurrentTime and visually "chases"
-    // the old playback position instead of staying put at the seek target.
-    seekBaseRef.current = absoluteTime
+    try { player.seek(absoluteTime) } catch {}
     setCurrentTime(absoluteTime)
-    const video = videoRef.current
-    if (video) {
-      try { video.pause() } catch {}
-    }
-
-    try {
-      setBuffering(true)
-      disableAllTextTracks()
-
-      const result = await seekPlayback(absoluteTime)
-      if (result) {
-        // seekPlayback updates playerState.hlsUrl + seekBase + sessionId,
-        // which triggers the source useEffect to set up a new stream.
-        seekBaseRef.current = result.seekBase ?? absoluteTime
-        setCurrentTime(absoluteTime)
-        setSubtitleVersion(v => v + 1)
-      }
-    } catch (err) {
-      console.error('Seek failed:', err)
-    } finally {
-      seekingRef.current = false
-    }
-  }, [disableAllTextTracks, seekPlayback, playerState.strategy])
+    // Player emits 'progress' shortly after — clear the flag after a tick.
+    setTimeout(() => { seekingRef.current = false }, 100)
+  }, [])
 
   const handleSeekRelative = useCallback((delta) => {
-    const video = videoRef.current
-    if (!video) return
+    const player = playerRef.current
+    if (!player) return
     if (totalDuration <= 0) return
-
-    const currentAbs = seekBaseRef.current + (isFinite(video.currentTime) ? video.currentTime : 0)
+    const currentAbs = player.currentTime || 0
     const newTime = Math.max(0, Math.min(currentAbs + delta, totalDuration))
-
     doSeek(newTime)
   }, [totalDuration, doSeek])
 
-  // Seek bar: drag updates visual position, commit triggers actual seek.
-  // (Refs declared at the top of the component.)
   const handleSeekBarInput = useCallback((e) => {
     seekBarDragging.current = true
     seekBarTarget.current = parseFloat(e.target.value)
@@ -1087,309 +472,172 @@ function WebVideoPlayer() {
     seekBarDragging.current = false
     const newTime = seekBarTarget.current
     seekBarTarget.current = null
-
     doSeek(newTime)
   }, [doSeek])
 
   const handleSwitchAudio = useCallback(async (audioStreamIndex) => {
-    const video = videoRef.current
-    if (!video) return
-
-    // Direct-play fast-path: file is byte-for-byte the source, so every
-    // audio track is already muxed into the same MP4 the browser is
-    // decoding. Flip <video>.audioTracks[i].enabled instead of restarting
-    // ffmpeg. Audio swap is instantaneous, video keeps playing, no seek
-    // jump. Requires the browser to expose the HTMLMediaElement
-    // audioTracks API — Chrome/Edge/Safari yes, Firefox no.
-    if (playerState.strategy === 'direct_play' &&
-        typeof video.audioTracks !== 'undefined' &&
-        video.audioTracks?.length > 1) {
-      const targetPos = playerState.audioStreams.findIndex(
-        s => (s.id ?? s.index) === audioStreamIndex
-      )
-      if (targetPos >= 0 && targetPos < video.audioTracks.length) {
-        for (let i = 0; i < video.audioTracks.length; i++) {
-          video.audioTracks[i].enabled = (i === targetPos)
-        }
-        applyDirectPlayAudio(audioStreamIndex)
-        return
-      }
-      // Fall through to server round-trip if the index doesn't map
-      // (e.g. browser only exposed a subset of tracks).
-    }
-
-    const currentVideoTime = isFinite(video.currentTime) ? video.currentTime : 0
-
+    const player = playerRef.current
+    const currentVideoTime = player?.currentTime || 0
     setBuffering(true)
     const result = await switchAudio(audioStreamIndex, currentVideoTime)
-    if (result && (result.streamUrl || result.hlsUrl)) {
-      // switchAudio updates playerState.streamUrl/hlsUrl + seekBase + sessionId,
-      // which triggers the source useEffect to set up a new stream.
-      const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
-      seekBaseRef.current = resumeBase
-      setCurrentTime(resumeBase)
-      setSubtitleVersion(v => v + 1)
-    } else {
-      setBuffering(false)
-    }
-  }, [switchAudio, applyDirectPlayAudio, playerState.strategy, playerState.audioStreams])
+    if (!result) setBuffering(false)
+  }, [switchAudio])
 
   const handleSwitchSubtitle = useCallback(async (subtitleStreamIndex) => {
-    disableAllTextTracks()
-    await switchSubtitle(subtitleStreamIndex)
-  }, [switchSubtitle, disableAllTextTracks])
+    setBuffering(true)
+    const result = await switchSubtitle(subtitleStreamIndex)
+    if (!result) setBuffering(false)
+  }, [switchSubtitle])
 
   const handleSwitchBitmapSubtitle = useCallback(async (subtitleStreamIndex) => {
-    const video = videoRef.current
-    if (!video) return
-
-    const currentVideoTime = isFinite(video.currentTime) ? video.currentTime : 0
-
-    disableAllTextTracks()
+    const player = playerRef.current
+    const currentVideoTime = player?.currentTime || 0
     setBuffering(true)
     const result = await switchBitmapSubtitle(subtitleStreamIndex, currentVideoTime)
-    if (result && (result.streamUrl || result.hlsUrl)) {
-      // switchBitmapSubtitle updates playerState.streamUrl/hlsUrl + seekBase + sessionId,
-      // which triggers the source useEffect to set up a new stream.
-      const resumeBase = result.seekBase ?? (seekBaseRef.current + currentVideoTime)
-      seekBaseRef.current = resumeBase
-      setCurrentTime(resumeBase)
-      setSubtitleVersion(v => v + 1)
-    } else {
-      setBuffering(false)
-    }
-  }, [switchBitmapSubtitle, disableAllTextTracks])
+    if (!result) setBuffering(false)
+  }, [switchBitmapSubtitle])
 
   const toggleFullscreen = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-
-    // Try to detect if we're on iOS
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-
-    if (isIOS) {
-      // On iOS, use webkitEnterFullscreen / webkitExitFullscreen
-      if (video.webkitDisplayingFullscreen) {
-        video.webkitExitFullscreen?.()
-      } else {
-        video.webkitEnterFullscreen?.()
-      }
-    } else {
-      // On other platforms, use standard fullscreen API
-      if (document.fullscreenElement) {
-        document.exitFullscreen()
-      } else if (containerRef.current) {
-        containerRef.current.requestFullscreen?.()
-      }
+    if (document.fullscreenElement) {
+      document.exitFullscreen()
+    } else if (containerRef.current) {
+      containerRef.current.requestFullscreen?.()
     }
   }, [])
 
   const handleVolumeChange = useCallback((e) => {
     const val = parseFloat(e.target.value)
     setVolume(val)
-    if (videoRef.current) {
-      videoRef.current.volume = val
-      if (val > 0 && videoRef.current.muted) {
-        videoRef.current.muted = false
-      }
-    }
+    playerRef.current?.setVolume(val)
   }, [])
 
-  // --- Keyboard controls ---
-
-  // Handle Android TV back button via Capacitor App plugin
   useEffect(() => {
     if (!playerState.open || !isAndroidTV) return
 
     const setupBackHandler = async () => {
       try {
         const { App } = await import('@capacitor/app')
-
         const backHandler = App.addListener('backButton', () => {
-          console.log('[Player] Android TV back button pressed, tvMode:', tvMode)
-          if (tvMode === 'audio' || tvMode === 'subtitles') {
-            setTvMode('seek')
-          } else if (trackMenuOpen) {
-            setTrackMenuOpen(false)
-          } else {
-            handleClose()
-          }
+          if (tvMode === 'audio' || tvMode === 'subtitles') setTvMode('seek')
+          else if (trackMenuOpen) setTrackMenuOpen(false)
+          else handleClose()
         })
-
-        return () => {
-          backHandler.then(h => h.remove())
-        }
+        return () => { backHandler.then(h => h.remove()) }
       } catch (err) {
-        console.warn('[Player] Could not set up back handler:', err)
+        console.warn('[Player] back handler unavailable:', err)
       }
     }
 
     const cleanup = setupBackHandler()
-    return () => {
-      cleanup?.then(fn => fn?.())
-    }
+    return () => { cleanup?.then(fn => fn?.()) }
   }, [playerState.open, isAndroidTV, trackMenuOpen, handleClose, tvMode])
 
   useEffect(() => {
     if (!playerState.open) return
 
     const handleKey = (e) => {
-      const video = videoRef.current
-      if (!video) return
-
-      // Android TV has two modes: 'seek' and 'settings'
-      // In seek mode: Left/Right = seek, Enter = play/pause, Up = go to settings
-      // In settings mode: D-pad navigates menu, Back = return to seek mode
+      const player = playerRef.current
+      if (!player) return
 
       if (isAndroidTV) {
         switch (e.key) {
           case 'Enter':
             e.preventDefault()
-            if (tvMode === 'seek') {
-              video.paused ? video.play() : video.pause()
-            }
-            // In settings mode, let browser handle button clicks
+            if (tvMode === 'seek') player.paused ? player.play() : player.pause()
             break
           case 'Escape':
           case 'GoBack':
             e.preventDefault()
-            if (tvMode === 'audio' || tvMode === 'subtitles') {
-              setTvMode('seek')
-            } else {
-              handleClose()
-            }
+            if (tvMode === 'audio' || tvMode === 'subtitles') setTvMode('seek')
+            else handleClose()
             break
           case 'ArrowLeft':
-            if (tvMode === 'seek') {
-              e.preventDefault()
-              handleSeekRelative(-10)
-              showControls()
-            }
-            // In settings mode, let browser handle D-pad
+            if (tvMode === 'seek') { e.preventDefault(); handleSeekRelative(-10); showControls() }
             break
           case 'ArrowRight':
-            if (tvMode === 'seek') {
-              e.preventDefault()
-              handleSeekRelative(10)
-              showControls()
-            }
-            // In settings mode, let browser handle D-pad
+            if (tvMode === 'seek') { e.preventDefault(); handleSeekRelative(10); showControls() }
             break
           case 'ArrowUp':
-            if (tvMode === 'seek') {
-              e.preventDefault()
-              setTvMode('audio')
-            }
-            // In settings mode, let browser handle D-pad for menu navigation (don't preventDefault)
+            if (tvMode === 'seek') { e.preventDefault(); setTvMode('audio') }
             break
           case 'ArrowDown':
-            if (tvMode === 'seek') {
-              e.preventDefault()
-              setTvMode('subtitles')
-            }
-            // In settings mode, let browser handle D-pad for menu navigation (don't preventDefault)
+            if (tvMode === 'seek') { e.preventDefault(); setTvMode('subtitles') }
             break
           case 'MediaPlayPause':
           case 'MediaPlay':
           case 'MediaPause':
             e.preventDefault()
-            video.paused ? video.play() : video.pause()
+            player.paused ? player.play() : player.pause()
             break
           case 'MediaStop':
-            e.preventDefault()
-            handleClose()
-            break
+            e.preventDefault(); handleClose(); break
           case 'MediaRewind':
-            e.preventDefault()
-            handleSeekRelative(-30)
-            break
+            e.preventDefault(); handleSeekRelative(-30); break
           case 'MediaFastForward':
-            e.preventDefault()
-            handleSeekRelative(30)
-            break
+            e.preventDefault(); handleSeekRelative(30); break
         }
         return
       }
 
-      // Desktop controls (unchanged)
       switch (e.key) {
         case ' ':
         case 'k':
-          e.preventDefault()
-          video.paused ? video.play() : video.pause()
-          break
         case 'Enter':
           e.preventDefault()
-          video.paused ? video.play() : video.pause()
+          player.paused ? player.play() : player.pause()
           break
         case 'Escape':
           e.preventDefault()
-          if (trackMenuOpen) {
-            setTrackMenuOpen(false)
-          } else {
-            handleClose()
-          }
+          if (trackMenuOpen) setTrackMenuOpen(false)
+          else handleClose()
           break
         case 'f':
-          e.preventDefault()
-          toggleFullscreen()
-          break
+          e.preventDefault(); toggleFullscreen(); break
         case 'ArrowLeft':
-          e.preventDefault()
-          handleSeekRelative(-10)
-          showControls()
-          break
+          e.preventDefault(); handleSeekRelative(-10); showControls(); break
         case 'ArrowRight':
-          e.preventDefault()
-          handleSeekRelative(10)
-          showControls()
-          break
+          e.preventDefault(); handleSeekRelative(10); showControls(); break
         case 'ArrowUp':
           e.preventDefault()
-          video.volume = Math.min(1, video.volume + 0.1)
-          setVolume(video.volume)
+          player.setVolume(Math.min(1, (player.volume ?? volume) + 0.1))
           break
         case 'ArrowDown':
           e.preventDefault()
-          video.volume = Math.max(0, video.volume - 0.1)
-          setVolume(video.volume)
+          player.setVolume(Math.max(0, (player.volume ?? volume) - 0.1))
           break
         case 'm':
           e.preventDefault()
-          video.muted = !video.muted
+          // Player doesn't expose mute; toggle via volume → 0.
+          if ((player.volume ?? volume) > 0) {
+            player.setVolume(0)
+          } else {
+            player.setVolume(1)
+          }
           break
         case 'MediaPlayPause':
         case 'MediaPlay':
         case 'MediaPause':
           e.preventDefault()
-          video.paused ? video.play() : video.pause()
+          player.paused ? player.play() : player.pause()
           break
         case 'MediaStop':
-          e.preventDefault()
-          handleClose()
-          break
+          e.preventDefault(); handleClose(); break
         case 'MediaRewind':
-          e.preventDefault()
-          handleSeekRelative(-30)
-          break
+          e.preventDefault(); handleSeekRelative(-30); break
         case 'MediaFastForward':
-          e.preventDefault()
-          handleSeekRelative(30)
-          break
+          e.preventDefault(); handleSeekRelative(30); break
       }
     }
 
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [playerState.open, showControls, handleClose, toggleFullscreen, handleSeekRelative, trackMenuOpen, isAndroidTV, tvMode])
+  }, [playerState.open, showControls, handleClose, toggleFullscreen, handleSeekRelative, trackMenuOpen, isAndroidTV, tvMode, volume])
 
   if (!playerState.open) return null
 
   const progressPct = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0
 
-  // Android TV: Simplified UI with two modes
   if (isAndroidTV) {
-    // TV controls visibility state
     const tvControlsHidden = !controlsVisible && !paused && !buffering && tvMode === 'seek'
     const isSettingsMode = tvMode === 'audio' || tvMode === 'subtitles'
 
@@ -1404,39 +652,9 @@ function WebVideoPlayer() {
           bitrate={playerState.bitrate}
           audioStream={playerState.audioStreams?.find(s => s.index === playerState.activeAudioIndex)}
         />
-        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-        <video
-          ref={videoRef}
-          className="video-player-video"
-          crossOrigin="anonymous"
-          autoPlay
-          playsInline
-          muted={true}
-          controls={false}
-          onPlay={() => { console.log('[Video] play event'); setPaused(false) }}
-          onPause={() => { console.log('[Video] pause event', new Error().stack); setPaused(true) }}
-          onWaiting={() => { console.log('[Video] waiting event'); setBuffering(true) }}
-          onStalled={() => console.log('[Video] stalled event')}
-          onSuspend={() => console.log('[Video] suspend event')}
-          onCanPlay={() => {
-            setBuffering(false)
-            const v = videoRef.current
-            if (v && v.paused) v.play().catch(() => {})
-            if (v && v.muted) v.muted = false
-          }}
-          onPlaying={() => {
-            setBuffering(false)
-            const v = videoRef.current
-            if (v && v.muted) v.muted = false
-          }}
-          onEnded={handleEnded}
-        >
-          {playerState.subtitleUrl && (
-            <track key={playerState.subtitleUrl + '-' + subtitleVersion} kind="subtitles" src={playerState.subtitleUrl + '&v=' + subtitleVersion} label="Subtitles" default crossOrigin="anonymous" />
-          )}
-        </video>
 
-        {/* Top: Title info */}
+        <div ref={playerMountRef} className="video-player-mount" style={{ position: 'absolute', inset: 0 }} />
+
         {!tvControlsHidden && (
           <div className="video-player-tv-top">
             <span className="video-player-bottom-title">{playerState.title}</span>
@@ -1446,7 +664,6 @@ function WebVideoPlayer() {
           </div>
         )}
 
-        {/* Center: Show pause icon or spinner only when paused/buffering */}
         {(paused || buffering) && (
           <div className="video-player-tv-center">
             {buffering ? (
@@ -1460,7 +677,6 @@ function WebVideoPlayer() {
           </div>
         )}
 
-        {/* TV Seek Mode: Show seek bar at bottom */}
         {tvMode === 'seek' && !tvControlsHidden && (
           <div className="video-player-tv-bottom">
             <div className="video-player-tv-seek">
@@ -1482,7 +698,6 @@ function WebVideoPlayer() {
           </div>
         )}
 
-        {/* TV Audio Settings (Up arrow) */}
         {tvMode === 'audio' && (
           <div className="video-player-tv-settings" onClick={(e) => e.stopPropagation()}>
             <div className="tv-settings-panel">
@@ -1491,9 +706,7 @@ function WebVideoPlayer() {
                 {playerState.audioStreams.length > 1 ? (
                   playerState.audioStreams.map((s, idx) => {
                     const handleSelect = () => {
-                      if (s.index !== playerState.activeAudioIndex) {
-                        handleSwitchAudio(s.index)
-                      }
+                      if (s.index !== playerState.activeAudioIndex) handleSwitchAudio(s.index)
                       setTvMode('seek')
                     }
                     return (
@@ -1506,7 +719,7 @@ function WebVideoPlayer() {
                         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
                       >
                         <span className="track-popover-check">
-                          {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
+                          {s.index === playerState.activeAudioIndex ? '✓' : ''}
                         </span>
                         <span className="track-popover-label">{audioLabel(s)}</span>
                       </button>
@@ -1514,7 +727,7 @@ function WebVideoPlayer() {
                   })
                 ) : (
                   <button tabIndex={0} autoFocus className="track-popover-item active" onClick={() => setTvMode('seek')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setTvMode('seek') } }}>
-                    <span className="track-popover-check">{'\u2713'}</span>
+                    <span className="track-popover-check">{'✓'}</span>
                     <span className="track-popover-label">{playerState.audioStreams[0] ? audioLabel(playerState.audioStreams[0]) : 'Default'}</span>
                   </button>
                 )}
@@ -1528,11 +741,9 @@ function WebVideoPlayer() {
           </div>
         )}
 
-        {/* TV Subtitles Settings (Down arrow) */}
         {tvMode === 'subtitles' && (
           <div className="video-player-tv-settings" onClick={(e) => e.stopPropagation()}>
             <div className="tv-settings-panel">
-              {/* Column 1: Subtitles */}
               <div className="track-popover-section">
                 <div className="track-popover-heading">Subtitles</div>
                 {playerState.subtitleStreams.length > 0 ? (
@@ -1540,11 +751,8 @@ function WebVideoPlayer() {
                     {(() => {
                       const handleOffSelect = () => {
                         if (playerState.activeSubtitleIndex != null) {
-                          if (playerState.isBitmapSubtitle) {
-                            handleSwitchBitmapSubtitle(null)
-                          } else {
-                            handleSwitchSubtitle(null)
-                          }
+                          if (playerState.isBitmapSubtitle) handleSwitchBitmapSubtitle(null)
+                          else handleSwitchSubtitle(null)
                         }
                         setTvMode('seek')
                       }
@@ -1557,7 +765,7 @@ function WebVideoPlayer() {
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleOffSelect() } }}
                         >
                           <span className="track-popover-check">
-                            {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
+                            {playerState.activeSubtitleIndex == null ? '✓' : ''}
                           </span>
                           <span className="track-popover-label">Off</span>
                         </button>
@@ -1567,16 +775,12 @@ function WebVideoPlayer() {
                       const handleSelect = () => {
                         if (s.isText) {
                           if (playerState.isBitmapSubtitle) {
-                            handleSwitchBitmapSubtitle(null).then(() => {
-                              handleSwitchSubtitle(s.index)
-                            })
+                            handleSwitchBitmapSubtitle(null).then(() => handleSwitchSubtitle(s.index))
                           } else {
                             handleSwitchSubtitle(s.index)
                           }
-                        } else {
-                          if (s.index !== playerState.activeSubtitleIndex) {
-                            handleSwitchBitmapSubtitle(s.index)
-                          }
+                        } else if (s.index !== playerState.activeSubtitleIndex) {
+                          handleSwitchBitmapSubtitle(s.index)
                         }
                         setTvMode('seek')
                       }
@@ -1589,7 +793,7 @@ function WebVideoPlayer() {
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
                         >
                           <span className="track-popover-check">
-                            {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
+                            {s.index === playerState.activeSubtitleIndex ? '✓' : ''}
                           </span>
                           <span className="track-popover-label">
                             {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
@@ -1600,13 +804,12 @@ function WebVideoPlayer() {
                   </>
                 ) : (
                   <button tabIndex={0} autoFocus className="track-popover-item active" onClick={() => setTvMode('seek')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); setTvMode('seek') } }}>
-                    <span className="track-popover-check">{'\u2713'}</span>
+                    <span className="track-popover-check">{'✓'}</span>
                     <span className="track-popover-label">None Available</span>
                   </button>
                 )}
               </div>
 
-              {/* Column 2: Size - always show, disable if no text subtitles */}
               <div className="track-popover-section">
                 <div className="track-popover-heading">Size</div>
                 {SUB_SIZES.map((s) => {
@@ -1623,7 +826,7 @@ function WebVideoPlayer() {
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
                     >
                       <span className="track-popover-check">
-                        {s.id === subtitleSize ? '\u2713' : ''}
+                        {s.id === subtitleSize ? '✓' : ''}
                       </span>
                       <span className="track-popover-label">{s.label}</span>
                     </button>
@@ -1631,7 +834,6 @@ function WebVideoPlayer() {
                 })}
               </div>
 
-              {/* Column 3: Style - always show, disable if no text subtitles */}
               <div className="track-popover-section">
                 <div className="track-popover-heading">Style</div>
                 {SUB_STYLES.map((s) => {
@@ -1648,7 +850,7 @@ function WebVideoPlayer() {
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); handleSelect() } }}
                     >
                       <span className="track-popover-check">
-                        {s.id === subtitleStyle ? '\u2713' : ''}
+                        {s.id === subtitleStyle ? '✓' : ''}
                       </span>
                       <span className="track-popover-label">{s.label}</span>
                     </button>
@@ -1667,7 +869,6 @@ function WebVideoPlayer() {
     )
   }
 
-  // Desktop UI (unchanged)
   const activeAudio = playerState.audioStreams?.find(s => s.index === playerState.activeAudioIndex)
   return (
     <div
@@ -1682,72 +883,31 @@ function WebVideoPlayer() {
         bitrate={playerState.bitrate}
         audioStream={activeAudio}
       />
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-       <video
-         ref={videoRef}
-         className="video-player-video"
-         crossOrigin="anonymous"
-         autoPlay
-         playsInline
-         muted={true}
-         controls={false}
-         style={{ WebkitPlaysinline: 'true' }}
-         onTouchStart={(e) => {
-           // Mark this as a touch event so onClick ignores it
-           isTouchRef.current = true
-           e.stopPropagation()
-           showControls()
-         }}
-         onClick={(e) => {
-           e.stopPropagation()
-           // Ignore click if it came from a touch event
-           if (isTouchRef.current) {
-             isTouchRef.current = false
-             return
-           }
 
-           showControls()
-           if (trackMenuOpen) { setTrackMenuOpen(false); return }
-
-           if (clickTimerRef.current) {
-             clearTimeout(clickTimerRef.current)
-             clickTimerRef.current = null
-             toggleFullscreen()
-           } else {
-             clickTimerRef.current = setTimeout(() => {
-               clickTimerRef.current = null
-               const v = videoRef.current
-               if (v) v.paused ? v.play() : v.pause()
-             }, 250)
-           }
-         }}
-         onPlay={() => { console.log('[Video] play event'); setPaused(false) }}
-         onPause={() => { console.log('[Video] pause event', new Error().stack); setPaused(true) }}
-         onWaiting={() => { console.log('[Video] waiting event'); setBuffering(true) }}
-         onStalled={() => console.log('[Video] stalled event')}
-         onSuspend={() => console.log('[Video] suspend event')}
-         onCanPlay={() => {
-          setBuffering(false)
-          // Ensure playback starts — autoPlay may not fire with MSE
-          const v = videoRef.current
-          if (v && v.paused) v.play().catch(() => {})
-          // Unmute after video can play (iOS requires muted for autoplay)
-          if (v && v.muted) v.muted = false
+      <div
+        ref={playerMountRef}
+        className="video-player-mount"
+        style={{ position: 'absolute', inset: 0 }}
+        onTouchStart={(e) => { isTouchRef.current = true; e.stopPropagation(); showControls() }}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (isTouchRef.current) { isTouchRef.current = false; return }
+          showControls()
+          if (trackMenuOpen) { setTrackMenuOpen(false); return }
+          if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current)
+            clickTimerRef.current = null
+            toggleFullscreen()
+          } else {
+            clickTimerRef.current = setTimeout(() => {
+              clickTimerRef.current = null
+              const p = playerRef.current
+              if (p) p.paused ? p.play() : p.pause()
+            }, 250)
+          }
         }}
-        onPlaying={() => {
-          setBuffering(false)
-          // Unmute when playback starts
-          const v = videoRef.current
-          if (v && v.muted) v.muted = false
-        }}
-        onEnded={handleEnded}
-      >
-        {playerState.subtitleUrl && (
-          <track key={playerState.subtitleUrl + '-' + subtitleVersion} kind="subtitles" src={playerState.subtitleUrl + '&v=' + subtitleVersion} label="Subtitles" default crossOrigin="anonymous" />
-        )}
-      </video>
+      />
 
-      {/* Top-right: close button */}
       <div
         className={`video-player-top${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
@@ -1759,7 +919,6 @@ function WebVideoPlayer() {
         </refractive.button>
       </div>
 
-      {/* Center playback controls: skip back, play/pause, skip forward */}
       <div
         className={`video-player-center${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
@@ -1776,8 +935,8 @@ function WebVideoPlayer() {
           className="video-player-play-btn"
           tabIndex={0}
           onClick={() => {
-            const v = videoRef.current
-            if (v) v.paused ? v.play() : v.pause()
+            const p = playerRef.current
+            if (p) p.paused ? p.play() : p.pause()
           }}
           refraction={playBtnGlass}
         >
@@ -1798,7 +957,6 @@ function WebVideoPlayer() {
         </refractive.button>
       </div>
 
-      {/* Bottom: title + utilities + seek */}
       <div
         className={`video-player-bottom${controlsVisible ? ' visible' : ''}`}
         onClick={(e) => e.stopPropagation()}
@@ -1810,10 +968,8 @@ function WebVideoPlayer() {
           )}
         </div>
 
-        {/* Utility group: single glass pill, right column */}
         <div className="video-player-track-menu-anchor" ref={trackMenuRef}>
           <refractive.div className="video-player-utilities" refraction={utilityPillGlass}>
-            {/* Volume slider */}
             <input
               type="range"
               className="video-player-volume-slider"
@@ -1825,12 +981,13 @@ function WebVideoPlayer() {
               onChange={handleVolumeChange}
               style={{ background: `linear-gradient(to right, #fff 0%, #fff ${volume * 100}%, rgba(255,255,255,.3) ${volume * 100}%, rgba(255,255,255,.3) 100%)` }}
             />
-            {/* Volume icon (mute toggle) */}
             <button className="video-player-util-icon video-player-volume-btn" tabIndex={0} onClick={() => {
-              const v = videoRef.current
-              if (v) {
-                v.muted = !v.muted
-                setVolume(v.muted ? 0 : v.volume)
+              const p = playerRef.current
+              if (!p) return
+              if ((p.volume ?? volume) > 0) {
+                p.setVolume(0); setVolume(0)
+              } else {
+                p.setVolume(1); setVolume(1)
               }
             }}>
               {volume === 0 ? (
@@ -1843,7 +1000,6 @@ function WebVideoPlayer() {
                 </svg>
               )}
             </button>
-            {/* Settings icon */}
             <button
               className={`video-player-util-icon${trackMenuOpen ? ' active' : ''}`}
               tabIndex={0}
@@ -1854,7 +1010,6 @@ function WebVideoPlayer() {
                 <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </button>
-            {/* Fullscreen icon */}
             <button className="video-player-util-icon" tabIndex={0} onClick={toggleFullscreen}>
               {isFullscreen ? (
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1865,132 +1020,119 @@ function WebVideoPlayer() {
                   <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 3 14 10"/><polyline points="3 21 10 14"/>
                 </svg>
               )}
-             </button>
-           </refractive.div>
+            </button>
+          </refractive.div>
 
-           {trackMenuOpen && (
-             <refractive.div className="video-player-track-popover" refraction={trackPopoverGlass}>
-               {/* Audio section */}
-               {playerState.audioStreams.length > 1 && (
-                 <div className="track-popover-section">
-                   <div className="track-popover-heading">Audio</div>
-                   {playerState.audioStreams.map((s, idx) => (
-                     <button
-                       key={s.index}
-                       tabIndex={0}
-                       autoFocus={idx === 0}
-                       className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
-                       onClick={() => {
-                         if (s.index !== playerState.activeAudioIndex) {
-                           handleSwitchAudio(s.index)
-                         }
-                         setTrackMenuOpen(false)
-                       }}
-                     >
-                       <span className="track-popover-check">
-                         {s.index === playerState.activeAudioIndex ? '\u2713' : ''}
-                       </span>
-                       <span className="track-popover-label">{audioLabel(s)}</span>
-                     </button>
-                   ))}
-                 </div>
-               )}
+          {trackMenuOpen && (
+            <refractive.div className="video-player-track-popover" refraction={trackPopoverGlass}>
+              {playerState.audioStreams.length > 1 && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Audio</div>
+                  {playerState.audioStreams.map((s, idx) => (
+                    <button
+                      key={s.index}
+                      tabIndex={0}
+                      autoFocus={idx === 0}
+                      className={`track-popover-item${s.index === playerState.activeAudioIndex ? ' active' : ''}`}
+                      onClick={() => {
+                        if (s.index !== playerState.activeAudioIndex) handleSwitchAudio(s.index)
+                        setTrackMenuOpen(false)
+                      }}
+                    >
+                      <span className="track-popover-check">
+                        {s.index === playerState.activeAudioIndex ? '✓' : ''}
+                      </span>
+                      <span className="track-popover-label">{audioLabel(s)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
-               {/* Subtitles section */}
-               {playerState.subtitleStreams.length > 0 && (
-                 <div className="track-popover-section">
-                   <div className="track-popover-heading">Subtitles</div>
-                   <button
-                     tabIndex={0}
-                     autoFocus={playerState.audioStreams.length <= 1}
-                     className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
-                     onClick={() => {
-                       if (playerState.activeSubtitleIndex != null) {
-                         if (playerState.isBitmapSubtitle) {
-                           handleSwitchBitmapSubtitle(null)
-                         } else {
-                           handleSwitchSubtitle(null)
-                         }
-                       }
-                       setTrackMenuOpen(false)
-                     }}
-                   >
-                     <span className="track-popover-check">
-                       {playerState.activeSubtitleIndex == null ? '\u2713' : ''}
-                     </span>
-                     <span className="track-popover-label">Off</span>
-                   </button>
-                   {playerState.subtitleStreams.map((s) => (
-                     <button
-                       key={s.index}
-                       tabIndex={0}
-                       className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
-                       onClick={() => {
-                         if (s.isText) {
-                           if (playerState.isBitmapSubtitle) {
-                             handleSwitchBitmapSubtitle(null).then(() => {
-                               handleSwitchSubtitle(s.index)
-                             })
-                           } else {
-                             handleSwitchSubtitle(s.index)
-                           }
-                         } else {
-                           if (s.index !== playerState.activeSubtitleIndex) {
-                             handleSwitchBitmapSubtitle(s.index)
-                           }
-                         }
-                         setTrackMenuOpen(false)
-                       }}
-                     >
-                       <span className="track-popover-check">
-                         {s.index === playerState.activeSubtitleIndex ? '\u2713' : ''}
-                       </span>
-                       <span className="track-popover-label">
-                         {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
-                       </span>
-                     </button>
-                   ))}
-                 </div>
-               )}
+              {playerState.subtitleStreams.length > 0 && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Subtitles</div>
+                  <button
+                    tabIndex={0}
+                    autoFocus={playerState.audioStreams.length <= 1}
+                    className={`track-popover-item${playerState.activeSubtitleIndex == null ? ' active' : ''}`}
+                    onClick={() => {
+                      if (playerState.activeSubtitleIndex != null) {
+                        if (playerState.isBitmapSubtitle) handleSwitchBitmapSubtitle(null)
+                        else handleSwitchSubtitle(null)
+                      }
+                      setTrackMenuOpen(false)
+                    }}
+                  >
+                    <span className="track-popover-check">
+                      {playerState.activeSubtitleIndex == null ? '✓' : ''}
+                    </span>
+                    <span className="track-popover-label">Off</span>
+                  </button>
+                  {playerState.subtitleStreams.map((s) => (
+                    <button
+                      key={s.index}
+                      tabIndex={0}
+                      className={`track-popover-item${s.index === playerState.activeSubtitleIndex ? ' active' : ''}`}
+                      onClick={() => {
+                        if (s.isText) {
+                          if (playerState.isBitmapSubtitle) {
+                            handleSwitchBitmapSubtitle(null).then(() => handleSwitchSubtitle(s.index))
+                          } else {
+                            handleSwitchSubtitle(s.index)
+                          }
+                        } else if (s.index !== playerState.activeSubtitleIndex) {
+                          handleSwitchBitmapSubtitle(s.index)
+                        }
+                        setTrackMenuOpen(false)
+                      }}
+                    >
+                      <span className="track-popover-check">
+                        {s.index === playerState.activeSubtitleIndex ? '✓' : ''}
+                      </span>
+                      <span className="track-popover-label">
+                        {subtitleLabel(s)}{!s.isText ? ' (Bitmap)' : ''}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
 
-               {/* Subtitle Size */}
-               {!playerState.isBitmapSubtitle && (
-               <div className="track-popover-section">
-                 <div className="track-popover-heading">Size</div>
-                 <div className="track-popover-sizes">
-                   {SUB_SIZES.map((s) => (
-                     <button
-                       key={s.id}
-                       className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
-                       onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
-                     >
-                       {s.label}
-                     </button>
-                   ))}
-                 </div>
-               </div>
-               )}
+              {!playerState.isBitmapSubtitle && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Size</div>
+                  <div className="track-popover-sizes">
+                    {SUB_SIZES.map((s) => (
+                      <button
+                        key={s.id}
+                        className={`track-popover-size-btn${s.id === subtitleSize ? ' active' : ''}`}
+                        onClick={() => setSubtitleAppearance({ subtitleSize: s.id })}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-               {/* Subtitle Appearance */}
-               {!playerState.isBitmapSubtitle && (
-               <div className="track-popover-section">
-                 <div className="track-popover-heading">Appearance</div>
-                 {SUB_STYLES.map((s) => (
-                   <button
-                     key={s.id}
-                     className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
-                     onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
-                   >
-                     <span className="track-popover-check">
-                       {s.id === subtitleStyle ? '\u2713' : ''}
-                     </span>
-                     <span className="track-popover-label">{s.label}</span>
-                   </button>
-                 ))}
-               </div>
-               )}
+              {!playerState.isBitmapSubtitle && (
+                <div className="track-popover-section">
+                  <div className="track-popover-heading">Appearance</div>
+                  {SUB_STYLES.map((s) => (
+                    <button
+                      key={s.id}
+                      className={`track-popover-item${s.id === subtitleStyle ? ' active' : ''}`}
+                      onClick={() => setSubtitleAppearance({ subtitleStyle: s.id })}
+                    >
+                      <span className="track-popover-check">
+                        {s.id === subtitleStyle ? '✓' : ''}
+                      </span>
+                      <span className="track-popover-label">{s.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </refractive.div>
-           )}
+          )}
         </div>
 
         <div className="video-player-seek-left">
@@ -2015,7 +1157,7 @@ function WebVideoPlayer() {
           </div>
           <span className="video-player-time-remaining">-{formatTime(Math.max(0, Math.round(totalDuration - currentTime)))}</span>
         </div>
-       </div>
-     </div>
-   )
- }
+      </div>
+    </div>
+  )
+}

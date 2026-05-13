@@ -3,6 +3,7 @@ packages:
   - desktop
   - web
   - android-tv
+  - player
   - tests
 allowBuilds:
   '3': true

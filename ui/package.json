@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@hashintel/refractive": "^0.0.3",
+    "@jellyfin-rails/player": "workspace:*",
     "hls.js": "^1.6.16"
   },
   "devDependencies": {

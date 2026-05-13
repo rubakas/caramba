@@ -116,10 +116,6 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
     },
     setPlaybackEpisode: noopAsync, // folded into server-side session state
     setPlaybackMovie: noopAsync,   // folded into server-side session state
-    seekPlayback: async (seekTime) => {
-      if (!activeSessionId) return null
-      return post('/api/playback/seek', { session: activeSessionId, seekTime })
-    },
     pausePlayback: noopAsync,
     resumePlayback: noopAsync,
     addExternalSubtitle: noopAsync,
@@ -142,29 +138,6 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
       return get(`/api/playback/preferences?${qs}`)
     },
     savePlaybackPreferences: (prefs) => post('/api/playback/preferences', prefs),
-    switchAudio: async (audioStreamIndex, currentVideoTime) => {
-      if (!activeSessionId) return null
-      return post('/api/playback/switch_audio', {
-        session: activeSessionId,
-        audioStreamIndex,
-        currentVideoTime
-      })
-    },
-    switchSubtitle: async (subtitleStreamIndex) => {
-      if (!activeSessionId) return null
-      return post('/api/playback/switch_subtitle', {
-        session: activeSessionId,
-        subtitleStreamIndex
-      })
-    },
-    switchBitmapSubtitle: async (subtitleStreamIndex, currentVideoTime) => {
-      if (!activeSessionId) return null
-      return post('/api/playback/switch_bitmap_subtitle', {
-        session: activeSessionId,
-        subtitleStreamIndex,
-        currentVideoTime
-      })
-    },
 
     // VLC — no-ops
     checkVlc: async () => false,

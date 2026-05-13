@@ -1,0 +1,29 @@
+Jellyfin::Rails.configure do |c|
+  # Path to the jellyfin-ffmpeg binary. Install jellyfin-ffmpeg from
+  # https://repo.jellyfin.org and point at it here. Stock ffmpeg will work but
+  # loses HDR tone mapping and most HW acceleration features.
+  c.ffmpeg_path  = ENV.fetch('JELLYFIN_FFMPEG', '/usr/lib/jellyfin-ffmpeg/ffmpeg')
+  c.ffprobe_path = ENV.fetch('JELLYFIN_FFPROBE', '/usr/lib/jellyfin-ffmpeg/ffprobe')
+
+  # Where transcoded HLS segments are written. Cleaned up automatically.
+  c.transcode_dir = Rails.root.join('tmp/transcodes')
+
+  # HMAC secret used to sign transcode tokens. Generate one with `rails secret`.
+  c.token_secret = Rails.application.credentials.dig(:jellyfin, :token_secret) ||
+                   ENV['JELLYFIN_TOKEN_SECRET'] ||
+                   '<%= SecureRandom.hex(32) %>'
+
+  # Path-traversal guard. Only paths inside one of these directories can be
+  # transcoded — every other path returns 403.
+  c.allowed_paths = ['/srv/media']
+
+  # Hardware acceleration. One of: :none, :videotoolbox (macOS),
+  # :vaapi (Linux Intel/AMD), :nvenc (NVIDIA), :qsv (Intel Media SDK).
+  c.hwaccel = :none
+
+  # How long an idle transcode session lingers before its files are GC'd.
+  c.idle_timeout = 15 * 60
+
+  # HLS segment duration in seconds. 6 is a good balance of latency vs. overhead.
+  c.segment_length = 6
+end

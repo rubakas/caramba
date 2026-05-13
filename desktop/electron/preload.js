@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 // The desktop renderer talks to the Rails server over HTTP for everything
 // data-related. The bridge below is just the electron-only surface:
-// dialogs, downloads, mpv embed, external VLC, mDNS, updater, prefs.
+// dialogs, downloads, external VLC, mDNS, updater, prefs.
 contextBridge.exposeInMainWorld('api', {
   // Server URL + app preferences
   getServerConfig: () => ipcRenderer.invoke('settings:getServerConfig'),
@@ -15,31 +15,6 @@ contextBridge.exposeInMainWorld('api', {
 
   // mDNS discovery
   discoverServers: () => ipcRenderer.invoke('discovery:scan'),
-
-  // Embedded libmpv playback engine
-  startEmbedMpv: (url, opts) => ipcRenderer.invoke('mpv:embedStart', url, opts),
-  stopEmbedMpv: () => ipcRenderer.invoke('mpv:embedStop'),
-  embedSeek: (seconds) => ipcRenderer.invoke('mpv:embedSeek', seconds),
-  embedPause: () => ipcRenderer.invoke('mpv:embedPause'),
-  embedResume: () => ipcRenderer.invoke('mpv:embedResume'),
-  embedSwitchAudio: (id) => ipcRenderer.invoke('mpv:embedSwitchAudio', id),
-  embedSwitchSubtitle: (id) => ipcRenderer.invoke('mpv:embedSwitchSubtitle', id),
-  getMpvCapabilities: () => ipcRenderer.invoke('mpv:capabilities'),
-  onPlaybackState: (cb) => {
-    const handler = (_e, state) => cb(state)
-    ipcRenderer.on('playback:state', handler)
-    return () => ipcRenderer.removeListener('playback:state', handler)
-  },
-  onPlaybackTracks: (cb) => {
-    const handler = (_e, tracks) => cb(tracks)
-    ipcRenderer.on('playback:tracks', handler)
-    return () => ipcRenderer.removeListener('playback:tracks', handler)
-  },
-  onPlaybackEnded: (cb) => {
-    const handler = (_e, info) => cb(info)
-    ipcRenderer.on('playback:ended', handler)
-    return () => ipcRenderer.removeListener('playback:ended', handler)
-  },
 
   // External VLC subprocess
   checkVlc: () => ipcRenderer.invoke('vlc:checkInstalled'),

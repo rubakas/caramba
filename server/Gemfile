@@ -15,6 +15,7 @@ gem "sentry-ruby", "~> 6.5"
 gem "sentry-rails", "~> 6.5"
 gem "dotenv-rails"
 gem "rexml"
+gem "jellyfin-rails", path: "vendor/jellyfin-rails"
 
 group :development, :test do
   gem "debug", platforms: %i[ mri ], require: "debug/prelude"

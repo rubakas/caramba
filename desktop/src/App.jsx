@@ -39,14 +39,6 @@ export default function App() {
   const [phase, setPhase] = useState('loading')
   const [serverUrl, setServerUrl] = useState(null)
   const [setupReason, setSetupReason] = useState(null)
-  // libmpv when capability detection says the native module is available,
-  // hls.js otherwise. This is a runtime fact, not a user preference —
-  // libmpv is strictly a superset (broader codec coverage, fewer
-  // transcodes) and the DeviceProfile already declares per-engine
-  // capabilities to the server. Surfaced as `useEmbedMpv` for the
-  // adapter; null while detection is in flight.
-  const [useEmbedMpv, setUseEmbedMpv] = useState(null)
-  const [mpvCapabilities, setMpvCapabilities] = useState(null)
 
   // Initial bootstrap: load saved server URL + probe health.
   useEffect(() => {
@@ -56,31 +48,6 @@ export default function App() {
         const cfg = await window.api.getServerConfig()
         if (cancelled) return
         const url = cfg?.serverUrl || ''
-
-        // libmpv embed is intentionally disabled — see plan file Part 2
-        // notes. mpv 0.41 + Electron on macOS can't be embedded
-        // cleanly (mpv creates its own NSWindow that we can't make
-        // visually indistinguishable from Electron's, and the
-        // mpv_render_context path needs more native work than is
-        // justified for an Electron shell). Desktop uses hls.js
-        // through the same VideoPlayer the web client uses. Re-enable
-        // by setting VITE_CARAMBA_FORCE_LIBMPV=1 if you want to try
-        // the embed path again.
-        const forceLibmpv = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_CARAMBA_FORCE_LIBMPV === '1') ||
-                            (typeof window !== 'undefined' && window.__caramba_force_libmpv__ === true)
-        let mpvAvailable = false
-        if (forceLibmpv && window.api?.getMpvCapabilities) {
-          try {
-            const caps = await window.api.getMpvCapabilities()
-            if (!cancelled && caps && !caps.error && Array.isArray(caps.decoders) && caps.decoders.length > 0) {
-              setMpvCapabilities(caps)
-              mpvAvailable = true
-            }
-          } catch (err) {
-            console.warn('[App] mpv capability probe failed; using hls.js engine:', err?.message)
-          }
-        }
-        if (!cancelled) setUseEmbedMpv(mpvAvailable)
 
         if (!url) {
           setSetupReason('First launch — let’s find your Caramba server.')
@@ -124,12 +91,12 @@ export default function App() {
   }, [])
 
   const adapterAndCaps = useMemo(() => {
-    if (phase !== 'ready' || !serverUrl || useEmbedMpv === null) return null
+    if (phase !== 'ready' || !serverUrl) return null
     return {
-      adapter: createDesktopAdapter(serverUrl, { useEmbedMpv, mpvCapabilities }),
-      capabilities: getDesktopCapabilities({ useEmbedMpv }),
+      adapter: createDesktopAdapter(serverUrl),
+      capabilities: getDesktopCapabilities(),
     }
-  }, [phase, serverUrl, useEmbedMpv, mpvCapabilities])
+  }, [phase, serverUrl])
 
   if (phase === 'loading') {
     return (

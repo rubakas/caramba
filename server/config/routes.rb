@@ -1,6 +1,9 @@
 Rails.application.routes.draw do
   get "up" => "rails/health#show", as: :rails_health_check
 
+  # Mounted internally; clients hit `/api/playback/*` which shims to these.
+  mount Jellyfin::Rails::Engine, at: "/_jellyfin"
+
   namespace :api do
     get "health", to: "health#show"
 
@@ -36,25 +39,8 @@ Rails.application.routes.draw do
       get :preferences
       post :preferences, action: :save_preferences, as: :save_preferences
       post :start
-      post :seek
       post :stop, action: :stop_playback
-      get :subtitles
-      post :switch_audio
-      post :switch_subtitle
-      post :switch_bitmap_subtitle
     end
-
-    # HLS stream: serves the master/single playlist, variant playlists,
-    # init segments (one per variant in multi-rendition mode), and media
-    # segments. Variant names ([A-Za-z0-9]+) come from the ladder labels
-    # set in TranscoderService#build_hls_ffmpeg_args (1080p, 720p, 480p,
-    # audio).
-    get "playback/hls/:session_id/playlist.m3u8", to: "playback#hls_playlist", as: :playback_hls_playlist
-    get "playback/hls/:session_id/:asset", to: "playback#hls_asset", as: :playback_hls_asset,
-        constraints: { asset: /(?:init\.mp4|init_[A-Za-z0-9]+\.mp4|segment_\d+\.(?:m4s|ts)|[A-Za-z0-9]+_segment_\d+\.(?:m4s|ts)|[A-Za-z0-9]+_playlist\.m3u8)/ }
-
-    # direct_play file stream (card #55): served as-is with HTTP Range support
-    get "playback/file/:session_id", to: "playback#file", as: :playback_file
 
     # Media file streaming
     get "media/episodes/:id", to: "media#episode", as: :media_episode

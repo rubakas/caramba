@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ruby:
+    name: Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ['3.2', '3.3']
+        rails: ['7.1', '7.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Run RSpec
+        run: bundle exec rspec
+        env:
+          RAILS_VERSION: ${{ matrix.rails }}
+
+  player:
+    name: '@jellyfin-rails/player'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/player/package-lock.json
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

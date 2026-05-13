@@ -1,6 +1,4 @@
 class Api::PlaybackController < Api::BaseController
-  # ── Existing endpoints ──────────────────────────────────────────────
-
   # POST /api/playback/report_progress
   def report_progress
     time = params[:time].to_i
@@ -57,67 +55,70 @@ class Api::PlaybackController < Api::BaseController
     render json: true
   end
 
-  # ── Streaming endpoints ─────────────────────────────────────────────
-
   # POST /api/playback/start
   # Body: { filePath, startTime, prefs, deviceProfile }
-  # Returns: { hlsUrl, sessionId, duration, startTime, seekBase, strategy, ... }
+  #
+  # Resolves the playback URL the client should hit. Delegates probing,
+  # strategy selection, token signing, and HLS orchestration to the
+  # jellyfin-rails engine (mounted at /_jellyfin). Caramba keeps ownership of
+  # track auto-selection (language/codec/channels precedence) and the
+  # PlaybackPreference + WatchHistory bookkeeping around playback.
   def start
     file_path = params[:filePath]
     start_time = (params[:startTime] || 0).to_f
     prefs = params[:prefs]
-    device_profile = parse_device_profile(params[:deviceProfile])
+    device_profile_raw = parse_device_profile(params[:deviceProfile])
 
     return render(json: { error: "filePath required" }, status: :unprocessable_entity) unless file_path.present?
     return render(json: { error: "File not found: #{file_path}" }, status: :unprocessable_entity) unless File.exist?(file_path)
 
-    # Prefer cached probe data on the Episode/Movie row (written at scan
-    # time by TechProbeJob). Falls back to a live ffprobe when missing.
     record = find_record_for(file_path)
-    info = (record && TechProbeService.probe_for(record)) || TranscoderService.probe(file_path)
+    info = (record && TechProbeService.probe_for(record)) || TechProbeService.probe(file_path)
+    return render(json: { error: "Probe failed" }, status: :unprocessable_entity) unless info
 
-    audio_stream_index = select_audio_track(info[:audioStreams], prefs, device_profile)
-    subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs, device_profile)
+    audio_stream_index = select_audio_track(info[:audioStreams], prefs, device_profile_raw)
+    subtitle_stream_index, is_bitmap = select_subtitle_track(info[:subtitleStreams], prefs, device_profile_raw)
 
-    session_id = SecureRandom.hex(8)
+    client_profile = CarambaClientProfile.build(device_profile_raw)
+    media_source = Jellyfin::MediaEncoder::Probe.from_path(file_path)
 
-    result = TranscoderService.start_session(session_id, file_path, start_time,
-      audio_stream_index: audio_stream_index,
-      burn_subtitle_index: is_bitmap ? subtitle_stream_index : nil,
-      subtitle_stream_index: subtitle_stream_index,
-      duration: info[:duration],
-      device_profile: device_profile,
-      # Hand the probe we already ran (cached via TechProbeService or
-      # live ffprobe a few lines up) into start_session so it doesn't
-      # re-probe the file. Re-probing a 4K HEVC HDR source over USB
-      # SSD costs ~3-5s of cold-start latency before ffmpeg even
-      # launches — the user sees it as "wait 20s before video plays".
-      probe_result: info)
+    transcode_token_params = {
+      path: file_path,
+      audio_track: audio_stream_index,
+      subtitle_track: is_bitmap ? subtitle_stream_index : nil,
+      start_time_ticks: (start_time * 10_000_000).to_i.presence,
+      max_bitrate: client_profile.max_video_bitrate
+    }.compact
 
-    session[:playback_session_id] = session_id
+    direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)
+    transcode_token = Jellyfin::Transcoding::Token.encode(transcode_token_params)
 
-    is_direct_play = result[:strategy] == :direct_play
-    stream_url =
-      if is_direct_play
-        "#{api_base_url}/api/playback/file/#{session_id}"
-      else
-        "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8"
-      end
-    subtitle_url = subtitle_stream_index && !is_bitmap ? "#{api_base_url}/api/playback/subtitles?session=#{session_id}" : nil
+    decision = Jellyfin::Playback::PlaybackInfo.for(
+      media_source: media_source,
+      profile: client_profile,
+      audio_track: audio_stream_index,
+      subtitle_track: subtitle_stream_index,
+      max_bitrate: client_profile.max_video_bitrate,
+      base_url: api_base_url,
+      token_for_direct: direct_token,
+      token_for_transcode: transcode_token
+    )
+
+    strategy = derive_strategy(decision, info, audio_stream_index, client_profile, is_bitmap)
+    is_direct_play = decision.method == :direct_play
+    stream_url = is_direct_play ? decision.direct_play_url : decision.transcoding_url
+    job_id = Digest::SHA1.hexdigest(transcode_token)[0, 16]
+
+    session[:playback_session_id] = job_id
 
     render json: {
-      # `hlsUrl` historically named the manifest URL; for direct_play it's
-      # actually a file URL. The renderer reads strategy and routes the
-      # element accordingly.
       hlsUrl: stream_url,
       streamUrl: stream_url,
-      sessionId: session_id,
+      sessionId: job_id,
       duration: info[:duration],
       startTime: start_time,
-      # direct_play: <video>.currentTime is absolute, so seekBase is 0.
-      # For ffmpeg-fed strategies seekBase tracks the -ss offset.
-      seekBase: is_direct_play ? 0 : start_time,
-      subtitleUrl: subtitle_url,
+      seekBase: 0,
+      subtitleUrl: nil,
       video: info[:video],
       bitrate: info[:bitrate],
       audioStreams: info[:audioStreams],
@@ -125,42 +126,19 @@ class Api::PlaybackController < Api::BaseController
       activeAudioIndex: audio_stream_index,
       activeSubtitleIndex: subtitle_stream_index,
       isBitmapSubtitle: is_bitmap,
-      strategy: result[:strategy].to_s
+      strategy: strategy
     }
   rescue => e
     Rails.logger.error "[Playback] start error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
     render json: { error: e.message }, status: :internal_server_error
   end
 
-  # POST /api/playback/seek
-  # Body: { session, seekTime }
-  #
-  # Kills ffmpeg and restarts at the target time. Returns the new HLS URL
-  # (cache-busted) for the client to reload.
-  def seek
-    session_id = params[:session]
-    seek_time = params[:seekTime].to_f
-
-    info = TranscoderService.session_info(session_id)
-    return render(json: { error: "No active session" }, status: :not_found) unless info
-
-    TranscoderService.seek_session(session_id, seek_time)
-
-    hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
-    render json: {
-      hlsUrl: hls_url,
-      seekTime: seek_time,
-      seekBase: seek_time
-    }
-  rescue => e
-    Rails.logger.error "[Playback] seek error: #{e.message}"
-    render json: { error: e.message }, status: :internal_server_error
-  end
-
   # POST /api/playback/stop
   def stop_playback
     session_id = params[:session]
-    TranscoderService.stop_session(session_id) if session_id.present?
+    if session_id.present?
+      Jellyfin::Transcoding::TranscodeManager.instance.cancel!(session_id)
+    end
 
     time = params[:time].to_i
     duration = params[:duration].to_i
@@ -186,308 +164,8 @@ class Api::PlaybackController < Api::BaseController
     render json: { ok: true }
   end
 
-  # GET /api/playback/subtitles?session=X
-  #
-  # Serves WebVTT subtitles with timestamps shifted by the current seek
-  # offset. Long-polls up to 30 seconds while extract_subtitles_async is
-  # still running so the player's HTTP fetch blocks transparently — no
-  # client-side polling needed. Returns empty VTT if extraction failed
-  # or the session was reset.
-  def subtitles
-    session_id = params[:session]
-    vtt = TranscoderService.get_session_subtitle(session_id)
-
-    if vtt.blank? && TranscoderService.subtitle_extracting?(session_id)
-      deadline = Time.now + 30
-      while vtt.blank? &&
-            TranscoderService.subtitle_extracting?(session_id) &&
-            Time.now < deadline
-        sleep 0.5
-        vtt = TranscoderService.get_session_subtitle(session_id)
-      end
-      # One last read in case extraction finished in the gap between the
-      # loop guard and the read.
-      vtt ||= TranscoderService.get_session_subtitle(session_id)
-    end
-
-    if vtt.blank?
-      return render plain: "WEBVTT\n\n", content_type: "text/vtt"
-    end
-
-    seek_base = TranscoderService.current_seek_time(session_id)
-    shifted = TranscoderService.shift_vtt(vtt, seek_base)
-
-    response.headers["Cache-Control"] = "no-cache, no-store"
-    render plain: shifted, content_type: "text/vtt"
-  end
-
-  # POST /api/playback/switch_audio
-  # Body: { session, audioStreamIndex, currentVideoTime }
-  def switch_audio
-    session_id = params[:session]
-    audio_index = params[:audioStreamIndex].to_i
-    current_time = params[:currentVideoTime].to_f
-
-    info = TranscoderService.session_info(session_id)
-    return render(json: { error: "No active session" }, status: :not_found) unless info
-
-    active_sub_index = info[:active_subtitle_index]
-    had_subtitle = TranscoderService.get_session_subtitle(session_id).present?
-
-    abs_time = (info[:seek_time] || 0) + current_time
-
-    TranscoderService.start_session(session_id, info[:file_path], abs_time,
-      audio_stream_index: audio_index,
-      burn_subtitle_index: info[:burn_subtitle_index],
-      duration: info[:duration],
-      device_profile: info[:device_profile])
-
-    if had_subtitle && active_sub_index
-      vtt = TranscoderService.extract_subtitles(info[:file_path], active_sub_index)
-      TranscoderService.set_session_subtitle(session_id, vtt, stream_index: active_sub_index) if vtt
-    end
-
-    hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
-    render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
-  rescue => e
-    render json: { error: e.message }, status: :internal_server_error
-  end
-
-  # POST /api/playback/switch_subtitle
-  def switch_subtitle
-    session_id = params[:session]
-    stream_index = params[:subtitleStreamIndex]
-
-    info = TranscoderService.session_info(session_id)
-    return render(json: { error: "No active session" }, status: :not_found) unless info
-
-    TranscoderService.set_session_subtitle(session_id, nil)
-
-    if stream_index.blank? || stream_index.to_i < 0
-      Rails.logger.info "[Subtitle] Disabled subtitles"
-      return render(json: { subtitleUrl: nil })
-    end
-
-    Rails.logger.info "[Subtitle] Switching to subtitle stream #{stream_index} for file: #{info[:file_path]}"
-    # Kick off extraction in the background and return the URL immediately.
-    # The /subtitles endpoint long-polls while ffmpeg works, so the player
-    # just waits on its HTTP fetch instead of staring at a blocked switch
-    # request for 10-15 seconds.
-    TranscoderService.extract_subtitles_async(session_id, info[:file_path], stream_index.to_i)
-    subtitle_url = "#{api_base_url}/api/playback/subtitles?session=#{session_id}&t=#{Time.now.to_i}"
-    render json: { subtitleUrl: subtitle_url }
-  rescue => e
-    Rails.logger.error "[Subtitle] switch_subtitle error: #{e.message}\n#{e.backtrace.first(5).join("\n")}"
-    render json: { error: e.message }, status: :internal_server_error
-  end
-
-  # POST /api/playback/switch_bitmap_subtitle
-  def switch_bitmap_subtitle
-    session_id = params[:session]
-    sub_index = params[:subtitleStreamIndex]
-    current_time = params[:currentVideoTime].to_f
-
-    info = TranscoderService.session_info(session_id)
-    return render(json: { error: "No active session" }, status: :not_found) unless info
-
-    TranscoderService.set_session_subtitle(session_id, nil)
-
-    burn_index = sub_index.present? && sub_index.to_i >= 0 ? sub_index.to_i : nil
-    abs_time = (info[:seek_time] || 0) + current_time
-
-    TranscoderService.start_session(session_id, info[:file_path], abs_time,
-      audio_stream_index: info[:audio_stream_index],
-      burn_subtitle_index: burn_index,
-      duration: info[:duration],
-      device_profile: info[:device_profile])
-
-    hls_url = "#{api_base_url}/api/playback/hls/#{session_id}/playlist.m3u8?t=#{Time.now.to_f}"
-    render json: { hlsUrl: hls_url, seekTime: abs_time, seekBase: abs_time }
-  rescue => e
-    render json: { error: e.message }, status: :internal_server_error
-  end
-
-  # ── direct_play endpoint ────────────────────────────────────────────
-  #
-  # GET /api/playback/file/:session_id
-  #
-  # Serves the source file with full HTTP byte-range support so the player
-  # (ExoPlayer / browser <video>) can seek without having to download the
-  # whole multi-gigabyte file. Rails's `send_file` did NOT honour the
-  # Range header on the test rig — every request returned 200 OK with
-  # zero or full body — so we parse the Range manually and stream the
-  # requested slice via Enumerator. ExoPlayer issues many small range
-  # requests (initial header, MKV Cues at end, then sequential reads
-  # from the playhead) and each one resolves in ~10ms.
-  CHUNK_BYTES = 64 * 1024
-  RANGE_HEADER = /\Abytes=(\d+)-(\d*)\z/
-
-  def file
-    session_id = params[:session_id]
-    file_path = TranscoderService.direct_play_file_path(session_id)
-    return head(:not_found) unless file_path
-    return head(:not_found) unless File.exist?(file_path)
-
-    size = File.size(file_path)
-    content_type = direct_play_content_type(file_path)
-
-    response.headers["Accept-Ranges"] = "bytes"
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Content-Type"] = content_type
-    response.headers["Content-Disposition"] = "inline; filename=\"#{File.basename(file_path)}\""
-
-    range_header = request.headers["Range"]
-    if range_header.present? && (m = range_header.match(RANGE_HEADER))
-      start_byte = m[1].to_i
-      end_byte = m[2].present? ? m[2].to_i : size - 1
-      end_byte = [ end_byte, size - 1 ].min
-      if start_byte > end_byte || start_byte >= size
-        response.headers["Content-Range"] = "bytes */#{size}"
-        return head(:requested_range_not_satisfiable)
-      end
-      length = end_byte - start_byte + 1
-
-      response.headers["Content-Range"] = "bytes #{start_byte}-#{end_byte}/#{size}"
-      response.headers["Content-Length"] = length.to_s
-
-      if request.head?
-        # HEAD must mirror the GET status (206 Partial Content) and ship
-        # the same headers, but no body. `head :partial_content` sets
-        # status to 206 while keeping the headers we just stamped.
-        return head(:partial_content)
-      end
-
-      response.status = 206
-      self.response_body = Enumerator.new do |yielder|
-        File.open(file_path, "rb") do |f|
-          f.seek(start_byte)
-          remaining = length
-          while remaining.positive?
-            chunk = f.read([ remaining, CHUNK_BYTES ].min)
-            break if chunk.nil? || chunk.empty?
-            yielder << chunk
-            remaining -= chunk.bytesize
-          end
-        end
-      end
-      return
-    end
-
-    response.headers["Content-Length"] = size.to_s
-
-    if request.head?
-      # HEAD before the player picks a range — this is what ffmpeg's
-      # lavf HTTP demuxer issues first to learn Content-Type / size.
-      # Must return 200 with headers, never 204 (which mpv interprets
-      # as "the URL has no content" and gives up without trying GET).
-      return head(:ok)
-    end
-
-    self.response_body = Enumerator.new do |yielder|
-      File.open(file_path, "rb") do |f|
-        while (chunk = f.read(CHUNK_BYTES))
-          yielder << chunk
-        end
-      end
-    end
-  end
-
-  def direct_play_content_type(file_path)
-    case File.extname(file_path).downcase
-    when ".mp4", ".m4v" then "video/mp4"
-    when ".mov"         then "video/quicktime"
-    when ".mkv"         then "video/x-matroska"
-    when ".webm"        then "video/webm"
-    when ".avi"         then "video/x-msvideo"
-    when ".ts", ".m2ts" then "video/mp2t"
-    else                     "application/octet-stream"
-    end
-  end
-
-  # ── HLS endpoints ──────────────────────────────────────────────────
-
-  # GET /api/playback/hls/:session_id/playlist.m3u8
-  #
-  # Returns a complete VOD playlist (PLAYLIST-TYPE:VOD + every EXTINF
-  # + EXT-X-ENDLIST) generated from session metadata, not from what
-  # ffmpeg has written so far. Safari's native HLS player needs a
-  # terminated VOD playlist to advance currentTime — see the doc on
-  # TranscoderService#generate_vod_playlist.
-  def hls_playlist
-    session_id = params[:session_id]
-
-    return head :not_found unless TranscoderService.active?(session_id)
-
-    playlist = TranscoderService.generate_vod_playlist(session_id)
-    return render(plain: "Session has no duration", status: :bad_request) unless playlist
-
-    response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
-    response.headers["Cache-Control"] = "no-store"
-    render plain: playlist
-  end
-
-  # GET /api/playback/hls/:session_id/:asset
-  # Serves init.mp4 and segment_N.{ts,m4s}.
-  #
-  # We tried mirroring Jellyfin's `DynamicHlsController.cs:1428` model
-  # — kill+restart ffmpeg when a requested segment is more than 4
-  # ahead of ffmpeg's current frontier. In Caramba it backfires: a
-  # cold-starting session ffmpeg has no segments yet, Safari fires a
-  # burst of 5 prefetch requests in parallel (segment_0 through
-  # segment_5), and the segment_5 request triggers a relocate that
-  # kills ffmpeg mid-write of segment_0 — the file Safari actually
-  # needs to play. The legitimate forward-seek path runs through
-  # /api/playback/seek (our custom scrubber controls), which already
-  # restarts ffmpeg correctly. The remaining 404 noise is harmless:
-  # Safari prefetches a few segments ahead, long-poll covers
-  # whatever ffmpeg is about to write, anything further out 404s
-  # cleanly and Safari retries when it actually catches up.
-  def hls_asset
-    session_id = params[:session_id]
-    asset_name = params[:asset]
-
-    return head :not_found unless TranscoderService.active?(session_id)
-
-    asset_path = TranscoderService.hls_asset_path(session_id, asset_name)
-    return head :bad_request unless asset_path
-
-    # Long-poll for ffmpeg to write the segment. 18 s stays inside
-    # hls.js's default fragLoadingTimeOut (20 s) so a brief lag
-    # doesn't trip a retry storm. Under-realtime ffmpeg surfaces via
-    # Sentry breadcrumb from monitor_ffmpeg_stderr.
-    90.times do
-      break if File.exist?(asset_path)
-      sleep 0.2
-    end
-
-    return head :not_found unless File.exist?(asset_path)
-
-    # Must not cache: segment filenames reset to segment_0 on every
-    # seek/session restart, so the same URL carries different content
-    # across sessions. Caching would hand back stale bytes and desync
-    # hls.js's PTS tracking.
-    response.headers["Cache-Control"] = "no-store"
-
-    # Variant playlists (`<name>_playlist.m3u8`) need the HLS content type.
-    # MPEG-TS segments (`*.ts`) need `video/mp2t`. fMP4 segments (`*.m4s`)
-    # and init segments (`init*.mp4`) use `video/mp4`.
-    content_type = if asset_name.end_with?(".m3u8")
-                     "application/vnd.apple.mpegurl"
-    elsif asset_name.end_with?(".ts")
-                     "video/mp2t"
-    else
-                     "video/mp4"
-    end
-    send_file asset_path,
-      type: content_type,
-      disposition: "inline"
-  end
-
   private
 
-  # Locate the Episode or Movie row backing a given file path, so the
-  # cached tech_metadata can be reused on playback start. nil when the
-  # file isn't tracked yet (e.g. ad-hoc playback of a path).
   def find_record_for(file_path)
     Episode.find_by(file_path: file_path) || Movie.find_by(file_path: file_path)
   end
@@ -512,17 +190,14 @@ class Api::PlaybackController < Api::BaseController
     }
   end
 
-  # Pick the audio track. Selection precedence (most specific first):
-  #   1. Saved (language, codec, channels) — disambiguates AAC stereo vs
-  #      AAC 5.1 from the same source where lang+codec are identical.
+  # Audio track selection. Precedence (most specific first):
+  #   1. Saved (language, codec, channels) — disambiguates AAC stereo vs 5.1.
   #   2. Saved (language, codec) — handles TrueHD eng + AC3 eng pairs.
-  #   3. Saved language alone — prefer a profile-decodable codec to stay
-  #      direct_stream / direct_play.
-  #   4. English with same playable preference.
-  #   5. First available track (biased to cheap-to-transcode codecs to
-  #      keep cold-start under the player's patience window).
+  #   3. Saved language — prefer a profile-decodable codec to stay direct.
+  #   4. English with same preference.
+  #   5. First available track, biased to cheap-to-transcode codecs.
   def select_audio_track(audio_streams, prefs, device_profile)
-    return nil if audio_streams.empty?
+    return nil if audio_streams.blank?
 
     saved_lang     = prefs && prefs[:audioLanguage].presence
     saved_codec    = prefs && prefs[:audioCodec].presence
@@ -548,16 +223,10 @@ class Api::PlaybackController < Api::BaseController
     in_lang = audio_streams.select { |s| matches_language?(s[:language], desired_lang) }
     in_lang = audio_streams if in_lang.empty?
 
-    profile = DeviceProfile.new(device_profile)
-    playable = in_lang.find { |s| profile.audio_codec_supported?(s[:codec]) }
+    supported = supported_audio_codecs(device_profile)
+    playable = in_lang.find { |s| supported.include?(s[:codec].to_s.downcase) }
     return playable[:index] if playable
 
-    # Even when no codec is direct-playable, bias toward simple codecs
-    # that re-encode quickly. TrueHD/DTS-HD MA decoders need 1-2 seconds
-    # of warmup before producing samples; on a cold first play that pushes
-    # the first HLS segment past the client's patience window and the user
-    # sees "playback fails until I switch audio." Picking AC3/AAC/etc. as
-    # the source keeps cold start under the timeout.
     cheap = in_lang.find { |s| CHEAP_AUDIO_CODECS.include?(s[:codec]) }
     (cheap || in_lang.first)[:index]
   end
@@ -566,40 +235,26 @@ class Api::PlaybackController < Api::BaseController
 
   def matches_language?(stream_language, requested)
     return true if stream_language.to_s == requested.to_s
-    # ffprobe sometimes returns the 2-letter ISO code, sometimes the 3-letter.
     requested == "eng" && stream_language.to_s == "en" ||
       requested == "en" && stream_language.to_s == "eng"
   end
 
   # Pick a subtitle track and decide whether the server must burn it in.
-  # Returns [stream_index, burn_required].
-  #
-  # Burn-required flag is true ONLY for bitmap subtitles the client can't
-  # render. Text subtitles (SRT/ASS/SSA/VTT/...) always fall back to VTT
-  # extraction — the burn-in filter chain uses ffmpeg's `overlay` which
-  # only accepts a bitmap subtitle stream as a video input; trying to
-  # overlay an SRT stream errors ffmpeg out and the player spins forever.
+  # Returns [stream_index, burn_required]. burn=true only for bitmap subs the
+  # client can't render (PGS/DVB/DVD with no Embed entry in SubtitleProfiles).
   def select_subtitle_track(subtitle_streams, prefs, device_profile)
-    return [ nil, false ] if subtitle_streams.empty?
+    return [ nil, false ] if subtitle_streams.blank?
     return [ nil, false ] if prefs && prefs[:subtitleOff]
 
-    profile = DeviceProfile.new(device_profile)
     picked = pick_subtitle_track(subtitle_streams, prefs)
     return [ nil, false ] unless picked
 
-    method = profile.subtitle_method_for(picked[:codec])
-    # Profile covers it → server hands off to client (Embed or External).
+    method = subtitle_method_for(device_profile, picked[:codec])
     return [ picked[:index], false ] if method
-    # Text sub not covered → extract as WebVTT sidecar (no burn).
     return [ picked[:index], false ] if picked[:isText]
-    # Bitmap sub not covered → server burns it into the video stream.
     [ picked[:index], true ]
   end
 
-  # Saved language → text first, then bitmap. No preference → first text
-  # track. Bitmap-only catalogs return the first stream so the player has
-  # something to render (server will burn it if the profile doesn't list
-  # the bitmap format).
   def pick_subtitle_track(streams, prefs)
     if prefs && prefs[:subtitleLanguage].present?
       lang = prefs[:subtitleLanguage]
@@ -611,13 +266,64 @@ class Api::PlaybackController < Api::BaseController
     streams.find { |s| s[:isText] }
   end
 
-  # Accept the deviceProfile param either as a parsed Hash (Rails
-  # auto-parses JSON request bodies) or as a JSON string (defensive).
+  def supported_audio_codecs(device_profile)
+    Set.new(Array(device_profile&.dig("DirectPlayProfiles")).flat_map { |entry|
+      entry["AudioCodec"].to_s.split(/\s*,\s*/).map(&:downcase)
+    })
+  end
+
+  # Walk SubtitleProfiles for an entry whose Format matches the source codec.
+  # Returns the Method string ("External" or "Embed"), or nil if no entry
+  # covers it (caller falls back to burn-in for bitmap subs).
+  def subtitle_method_for(device_profile, codec)
+    return nil if device_profile.nil?
+    normalized = subtitle_codec_alias(codec)
+    Array(device_profile["SubtitleProfiles"]).each do |entry|
+      formats = entry["Format"].to_s.downcase.split(/\s*,\s*/)
+      return entry["Method"] if formats.include?(normalized)
+    end
+    nil
+  end
+
+  def subtitle_codec_alias(codec)
+    case codec.to_s.downcase
+    when "subrip" then "srt"
+    when "ass" then "ssa"
+    when "hdmv_pgs_subtitle" then "pgssub"
+    else codec.to_s.downcase
+    end
+  end
+
+  # Maps engine decision + Caramba's burn flag to Caramba's four legacy
+  # strategy labels. Strategy is informational on the client (dev-mode pill);
+  # the actual delivery is determined by which URL was returned.
+  def derive_strategy(decision, info, audio_stream_index, client_profile, is_bitmap)
+    return "direct_play" if decision.method == :direct_play
+    return "direct_stream" if decision.method == :direct_stream
+    return "full_transcode" if is_bitmap
+
+    audio_codec = info[:audioStreams].to_a.find { |s| s[:index] == audio_stream_index }&.dig(:codec)
+    video_codec = info.dig(:video, :codec)
+    video_ok = client_profile.video_codecs.map(&:downcase).include?(video_codec.to_s.downcase)
+    audio_ok = audio_codec && client_profile.audio_codecs.map(&:downcase).include?(audio_codec.to_s.downcase)
+
+    if video_ok && !audio_ok
+      "audio_transcode"
+    else
+      "full_transcode"
+    end
+  end
+
   def parse_device_profile(raw)
     return nil if raw.nil?
-    return raw.to_unsafe_h if raw.respond_to?(:to_unsafe_h)
-    return raw if raw.is_a?(Hash)
-    JSON.parse(raw.to_s)
+    parsed = if raw.respond_to?(:to_unsafe_h)
+               raw.to_unsafe_h
+    elsif raw.is_a?(Hash)
+               raw
+    else
+               JSON.parse(raw.to_s)
+    end
+    parsed.deep_stringify_keys
   rescue JSON::ParserError
     nil
   end

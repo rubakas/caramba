@@ -1,25 +1,10 @@
-# Technical probe (codec, duration, resolution) via ffprobe.
-#
-# Mirror of `example.rb` MediaIdentifier::TechProbe (lines 118-136), but
-# shells out to the ffprobe binary directly instead of pulling in
-# streamio-ffmpeg. Reuses the binary-resolution helper from
-# TranscoderService so vendored vs. system lookup stays in one place.
-#
-# The shape returned matches TranscoderService.probe exactly, so the same
-# data can drive both the at-scan-time cache (TechProbeJob writes
-# tech_metadata) and the live playback start path (which historically
-# called TranscoderService.probe directly).
-#
-# Public API:
-#   TechProbeService.probe(file_path) -> Hash | nil
-#     Live ffprobe call. Returns nil on failure.
-#
-#   TechProbeService.probe_for(record) -> Hash
-#     Returns cached tech_metadata if present (and file size matches),
-#     otherwise probes live, caches, and returns. Always returns a hash
-#     unless the file is unreadable.
+# Technical probe wrapper. Delegates ffprobe orchestration to
+# Jellyfin::MediaEncoder::Probe and adapts its MediaSourceInfo POD into the
+# Hash shape Caramba consumers already use (audio/subtitle selection, device
+# profile matching, dev-mode playback pill). The record-level cache on
+# Episode/Movie#tech_metadata stays — it survives server restarts and is keyed
+# on file size, which is what we want for invalidation.
 
-require "open3"
 require "json"
 
 class TechProbeService
@@ -33,36 +18,24 @@ class TechProbeService
     subviewer subviewer1 vplayer
   ].freeze
 
-  # Bump whenever the probe result shape changes in a way the consumers
-  # depend on. Cache rows tagged with an older version are treated as
-  # misses by `probe_for` and silently re-probed on next play. Lets us
-  # add fields (e.g. video.color_transfer for HDR detection) without
-  # having to manually re-scan the library.
-  CACHE_SCHEMA_VERSION = 4
+  CACHE_SCHEMA_VERSION = 5
 
   class << self
-    # Live ffprobe call. Returns nil on failure (never raises).
+    # Live probe. Returns nil on failure (never raises).
     def probe(file_path)
       return nil if file_path.blank? || !File.file?(file_path)
 
-      args = %w[-v error -print_format json -show_format -show_streams]
-      args << file_path
-
-      stdout, stderr, status = Open3.capture3(TranscoderService.ffprobe_path, *args)
-      unless status.success?
-        Rails.logger.warn("[TechProbe] ffprobe exited #{status.exitstatus} for #{file_path}: #{stderr.to_s[0..200]}")
-        return nil
-      end
-
-      build_result(JSON.parse(stdout), file_path)
+      media_source = Jellyfin::MediaEncoder::Probe.from_path(file_path)
+      build_result(media_source, file_path)
+    rescue Jellyfin::MediaEncoder::Probe::ProbeFailed => e
+      Rails.logger.warn("[TechProbe] ffprobe failed for #{file_path}: #{e.message}")
+      nil
     rescue => e
       Sentry.capture_exception(e, tags: { subsystem: "tech_probe" }) if defined?(Sentry) && Sentry.initialized?
       Rails.logger.warn("[TechProbe] failed for #{file_path}: #{e.message}")
       nil
     end
 
-    # Return cached probe data for a record, or probe live and cache.
-    # Symbolized keys to match the existing TranscoderService.probe shape.
     def probe_for(record)
       file_path = record&.file_path
       return nil unless file_path.present?
@@ -103,68 +76,56 @@ class TechProbeService
       0
     end
 
-    # Builds the result hash. Keys match TranscoderService.probe so this
-    # can be used as a drop-in replacement at the playback layer.
-    def build_result(data, file_path)
-      streams = data["streams"] || []
-      video_stream = streams.find { |s| s["codec_type"] == "video" && s["codec_name"] != "mjpeg" }
-      audio_streams = streams.select { |s| s["codec_type"] == "audio" }
-      subtitle_streams = streams.select { |s| s["codec_type"] == "subtitle" }
-
-      duration = data.dig("format", "duration").to_f
-      bitrate = data.dig("format", "bit_rate")&.to_i
-      format_name = data.dig("format", "format_name").to_s.downcase
+    # Adapts MediaSourceInfo → Caramba's legacy Hash shape.
+    def build_result(media_source, file_path)
+      video = media_source.default_video_stream
+      audio_streams = media_source.audio_streams
+      subtitle_streams = media_source.subtitle_streams
 
       {
-        "duration" => duration,
-        "formatName" => format_name,
-        "bitrate" => bitrate,
+        "duration" => media_source.duration_seconds.to_f,
+        "formatName" => media_source.format_name.to_s.downcase,
+        "bitrate" => media_source.bit_rate,
         "size_bytes" => safe_size(file_path),
-        "video" => video_stream && {
-          "codec" => video_stream["codec_name"],
-          "width" => video_stream["width"],
-          "height" => video_stream["height"],
-          "profile" => video_stream["profile"],
-          # ffprobe returns level as an integer matching the codec spec
-          # (HEVC level_idc: 120=4.0, 150=5.0, 153=5.1, 156=5.2; H.264
-          # level_idc: 40=4.0, 51=5.1). Used by DeviceProfile CodecProfile
-          # VideoLevel conditions.
-          "level" => video_stream["level"],
-          # Frame rate as ffprobe "num/den" string; consumers (DeviceProfile)
-          # parse it for VideoFramerate conditions.
-          "r_frame_rate" => video_stream["r_frame_rate"],
-          "avg_frame_rate" => video_stream["avg_frame_rate"],
-          "pix_fmt" => video_stream["pix_fmt"],
-          "color_transfer" => video_stream["color_transfer"],
-          "color_primaries" => video_stream["color_primaries"],
-          "color_space" => video_stream["color_space"]
+        "video" => video && {
+          "codec" => video.codec,
+          "width" => video.width,
+          "height" => video.height,
+          "profile" => video.profile,
+          "level" => video.level,
+          "r_frame_rate" => video.frame_rate,
+          "avg_frame_rate" => video.avg_frame_rate,
+          "pix_fmt" => video.pixel_format,
+          "color_transfer" => video.color_transfer,
+          "color_primaries" => video.color_primaries,
+          "color_space" => video.color_space,
+          "video_range_type" => video.video_range_type
         },
         "audioStreams" => audio_streams.map { |s|
           {
-            "index" => s["index"],
-            "codec" => s["codec_name"],
-            "channels" => s["channels"],
-            "language" => s.dig("tags", "language") || "und",
-            "title" => s.dig("tags", "title")
+            "index" => s.index,
+            "codec" => s.codec,
+            "channels" => s.channels,
+            "language" => s.language.presence || "und",
+            "title" => s.title
           }
         },
         "subtitleStreams" => subtitle_streams.map { |s|
+          codec = s.codec.to_s.downcase
           {
-            "index" => s["index"],
-            "codec" => s["codec_name"],
-            "language" => s.dig("tags", "language") || "und",
-            "title" => s.dig("tags", "title"),
-            "isText" => TEXT_SUBTITLE_CODECS.include?(s["codec_name"])
+            "index" => s.index,
+            "codec" => s.codec,
+            "language" => s.language.presence || "und",
+            "title" => s.title,
+            "isText" => TEXT_SUBTITLE_CODECS.include?(codec)
           }
         },
-        "has_bitmap_subtitle" => subtitle_streams.any? { |s| BITMAP_SUBTITLE_CODECS.include?(s["codec_name"]) },
+        "has_bitmap_subtitle" => subtitle_streams.any? { |s| BITMAP_SUBTITLE_CODECS.include?(s.codec.to_s.downcase) },
         "probed_at" => Time.current.iso8601,
         "_schema_v" => CACHE_SCHEMA_VERSION
       }
     end
 
-    # Recursively convert string keys to symbols at the top two levels
-    # (matches the legacy TranscoderService.probe shape).
     def symbolize(data)
       return data unless data.is_a?(Hash)
       result = {}

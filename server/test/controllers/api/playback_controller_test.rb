@@ -342,4 +342,77 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       assert_equal 1, select(streams, nil, aac_only_profile)
     end
   end
+
+  # Regression: derive_strategy reads `decision.method`, not predicate methods.
+  # PlaybackInfo.for returns a Response struct whose mode lives on `.method`
+  # (`:direct_play` / `:direct_stream` / `:transcode`). An earlier version
+  # called `decision.direct_play?` which raised NoMethodError at runtime —
+  # caught only by the user trying to play something. These tests pin the
+  # mapping for every mode against the actual struct the engine returns.
+  class StrategyMappingTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+    end
+
+    def response_with(mode)
+      Jellyfin::Playback::PlaybackInfo::Response.new(method: mode)
+    end
+
+    def info
+      {
+        video: { codec: "h264" },
+        audioStreams: [ { index: 1, codec: "aac", channels: 2, language: "eng" } ]
+      }
+    end
+
+    def profile
+      p = Jellyfin::Playback::ClientProfile.modern_browser
+      p.video_codecs = %w[h264]
+      p.audio_codecs = %w[aac]
+      p
+    end
+
+    def derive(mode, is_bitmap: false, audio_idx: 1, info_override: nil, profile_override: nil)
+      @controller.send(:derive_strategy,
+        response_with(mode),
+        info_override || info,
+        audio_idx,
+        profile_override || profile,
+        is_bitmap)
+    end
+
+    test ":direct_play decision maps to 'direct_play'" do
+      assert_equal "direct_play", derive(:direct_play)
+    end
+
+    test ":direct_stream decision maps to 'direct_stream'" do
+      assert_equal "direct_stream", derive(:direct_stream)
+    end
+
+    test "burn-in forces 'full_transcode' regardless of decision" do
+      assert_equal "full_transcode", derive(:transcode, is_bitmap: true)
+    end
+
+    test ":transcode with audio-only re-encode maps to 'audio_transcode'" do
+      # Video codec direct-playable, audio codec NOT in profile → audio-only.
+      bad_audio_info = info.deep_dup
+      bad_audio_info[:audioStreams] = [ { index: 1, codec: "truehd", channels: 8, language: "eng" } ]
+      assert_equal "audio_transcode", derive(:transcode, info_override: bad_audio_info)
+    end
+
+    test ":transcode with video re-encode maps to 'full_transcode'" do
+      # Video codec NOT in profile → full transcode.
+      bad_video_info = info.deep_dup
+      bad_video_info[:video] = { codec: "hevc" }
+      assert_equal "full_transcode", derive(:transcode, info_override: bad_video_info)
+    end
+
+    test "Response struct exposes mode via .method (regression for predicate-call bug)" do
+      # Lock the contract: if upstream renames .method or adds predicate
+      # methods, this test should be the first thing to fail.
+      r = Jellyfin::Playback::PlaybackInfo::Response.new(method: :direct_play)
+      assert_equal :direct_play, r.method
+      assert_not_respond_to r, :direct_play?
+    end
+  end
 end

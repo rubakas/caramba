@@ -1,0 +1,26 @@
+*.gem
+*.rbc
+/.bundle/
+/.yardoc
+/Gemfile.lock
+/_yardoc/
+/coverage/
+/doc/
+/pkg/
+/spec/reports/
+/tmp/
+.byebug_history
+.rspec_status
+
+# JS
+packages/player/node_modules/
+packages/player/dist/
+packages/player/coverage/
+packages/player/.vite/
+*.tsbuildinfo
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

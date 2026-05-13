@@ -2,13 +2,11 @@ const Sentry = require('./sentry')
 const { app, BrowserWindow, shell, ipcMain } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const mpvEmbed = require('./services/mpv-embed-player')
 
 // IPC modules — server-only desktop. No SQLite, no library scanning, no
 // metadata fetching, no transcoder; the Rails server owns all of that.
 const settingsIpc = require('./ipc/settings')
 const dialogsIpc = require('./ipc/dialogs')
-const mpvEmbedIpc = require('./ipc/mpv-embed')
 const vlcIpc = require('./ipc/vlc')
 const updaterIpc = require('./ipc/updater')
 const downloadsIpc = require('./ipc/downloads')
@@ -37,11 +35,9 @@ function createWindow() {
 
   mainWindow = new BrowserWindow(windowOpts)
 
-  // Register IPC handlers. mpv-embed needs the window for getNativeWindowHandle();
-  // dialogs needs it to anchor the file-picker sheet.
+  // Register IPC handlers. dialogs needs the window to anchor the file-picker sheet.
   settingsIpc.register()
   dialogsIpc.register(mainWindow)
-  mpvEmbedIpc.register(mainWindow)
   vlcIpc.register(mainWindow)
   updaterIpc.register(mainWindow)
   downloadsIpc.register()
@@ -56,8 +52,6 @@ function createWindow() {
     })
   }
 
-  // Security: only allow VITE_DEV_URL in development builds to prevent
-  // env-var poisoning from redirecting packaged apps to a malicious server.
   if (!app.isPackaged && process.env.VITE_DEV_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_URL)
   } else {
@@ -68,15 +62,11 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   }
 
-  // Open external links in system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) shell.openExternal(url)
     return { action: 'deny' }
   })
 
-  // Block navigation away from the app's origin. A renderer compromise
-  // could otherwise navigate to an attacker-controlled page with the
-  // preload bridge active.
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const devUrl = !app.isPackaged && process.env.VITE_DEV_URL
     if (url.startsWith('file://')) return
@@ -93,8 +83,6 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow()
 
-  // Check for updates in packaged builds (fire-and-forget).
-  // Run with SIMULATE_UPDATE=1 in dev to test the update UI without a real release.
   if (app.isPackaged || process.env.SIMULATE_UPDATE) {
     const updater = require('./services/updater')
     const checkFn = process.env.SIMULATE_UPDATE
@@ -116,19 +104,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  mpvEmbed.stop().catch(() => {})
   app.quit()
-})
-
-// Ensure libmpv is shut down on abrupt exit too.
-process.on('exit', () => { try { mpvEmbed.stop() } catch {} })
-
-let isQuitting = false
-app.on('before-quit', (e) => {
-  if (isQuitting) return
-  isQuitting = true
-  e.preventDefault()
-  mpvEmbed.stop().catch(() => {}).finally(() => app.quit())
 })
 
 module.exports = {}

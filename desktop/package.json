@@ -25,31 +25,12 @@
         }
       ],
       "icon": "../ui/public/icon.icns",
-      "extraResources": [
-        {
-          "from": "vendor/vlc-${arch}/lib",
-          "to": "vlc/lib"
-        },
-        {
-          "from": "vendor/vlc-${arch}/plugins",
-          "to": "vlc/plugins"
-        },
-        {
-          "from": "vendor/vlc-${arch}/share",
-          "to": "vlc/share"
-        },
-        {
-          "from": "electron/native/vlc-embed/build/Release/vlc_embed.node",
-          "to": "vlc-embed/vlc_embed.node"
-        }
-      ],
       "extendInfo": {
         "NSDownloadsFolderUsageDescription": "Caramba writes downloaded episodes and movies to your Downloads folder."
       }
     },
     "files": [
       "electron/**/*",
-      "!electron/native/**",
       "dist-react/**/*",
       ".env"
     ],
@@ -57,6 +38,7 @@
   },
   "dependencies": {
     "@caramba/ui": "workspace:*",
+    "@jellyfin-rails/player": "workspace:*",
     "@opentelemetry/api-logs": "^0.207.0",
     "@sentry-internal/browser-utils": "^10.50.0",
     "@sentry-internal/feedback": "^10.50.0",

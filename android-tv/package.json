@@ -15,6 +15,7 @@
     "@capacitor/core": "^8.3.3",
     "@capacitor/preferences": "^8.0.1",
     "@caramba/ui": "workspace:*",
+    "@jellyfin-rails/player": "workspace:*",
     "@sentry/capacitor": "^4.0.0",
     "@sentry/react": "^10.52.0"
   },

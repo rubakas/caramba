@@ -1,32 +1,23 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { useToast } from './ToastContext'
-import { useApi, useCapabilities } from './ApiContext'
+import { useApi } from './ApiContext'
 
 const PlayerContext = createContext(null)
 
-// PlayerContext serves two playback engines:
-//
-//   1. HTML5 <video> + HLS.js (web/, android-tv/, hybrid-remote on desktop).
-//      State carriers: streamUrl/hlsUrl + seekBase + sessionId. Each seek
-//      or audio-switch restarts the server transcoder; the renderer reloads
-//      the <video> source.
-//
-//   2. Embedded libmpv (desktop/local + hybrid-local), driven by the native
-//      mpv-embed module that renders into the BrowserWindow's NSView.
-//      State comes from periodic 'playback:state' IPC pushes; seek/track
-//      switches are property sets — no URL change.
-//
-// Both modes write into the same PlayerContext shape so consumers
-// (NowPlayingBar, VideoPlayer, MpvOverlay) read state uniformly.
+// PlayerContext drives a single playback engine: the Jellyfin Player JS
+// runtime (HTML5 <video> + hls.js + Safari native HLS) instantiated inside
+// VideoPlayer.jsx. Track/seek/subtitle changes go through the engine: every
+// audio or subtitle switch re-issues `api.startPlayback` to get a fresh
+// HLS master URL with the requested track baked into the transcode token.
+// Seek is purely local — hls.js + engine's seek-on-restart handle it.
 export function PlayerProvider({ children }) {
   const { showToast } = useToast()
   const api = useApi()
-  const capabilities = useCapabilities()
-  const usingEmbedEngine = !!capabilities?.hasMpvEmbedPlayer
   const [launching, setLaunching] = useState(false)
   const [playerState, setPlayerState] = useState({
     open: false,
+    filePath: null,
     streamUrl: null,
     hlsUrl: null,
     subtitleUrl: null,
@@ -51,7 +42,6 @@ export function PlayerProvider({ children }) {
     bitrate: null,
     subtitleSize: 'medium',
     subtitleStyle: 'classic',
-    // Engine-pushed state (embed engine mode only).
     currentTime: 0,
     paused: false,
     eof: false,
@@ -63,20 +53,10 @@ export function PlayerProvider({ children }) {
   const openPlayer = useCallback(async ({ type, episodeId, showId, movieId, title, subtitle, filePath, startTime }) => {
     setLaunching(true)
 
-    // embed engine mode: apply the body-level transparency synchronously so the
-    // window goes see-through on the same frame the user clicked Play.
-    // Doing this in MpvOverlay's useEffect lagged a frame behind the React
-    // re-render, leaving a flash of the opaque browse UI.
-    if (usingEmbedEngine && typeof document !== 'undefined') {
-      document.body.classList.add('engine-playing')
-    }
-
-    // Optimistic open: set playerState.open = true immediately so the
-    // overlay mounts and renders the loading curtain in parallel with the
-    // long IPC startPlayback call.
     setPlayerState(prev => ({
       ...prev,
       open: true,
+      filePath: filePath || null,
       title: title || '',
       subtitle: subtitle || '',
       type,
@@ -88,7 +68,6 @@ export function PlayerProvider({ children }) {
       currentTime: startTime || 0,
       paused: false,
       eof: false,
-      engineReady: false,
       audioStreams: [],
       subtitleStreams: [],
     }))
@@ -115,32 +94,15 @@ export function PlayerProvider({ children }) {
       if (result.error) {
         console.error('Failed to start playback:', result.error)
         showToast(result.error, { type: 'error', duration: 6000 })
-        if (typeof document !== 'undefined') {
-          document.body.classList.remove('engine-playing')
-          document.body.classList.remove('engine-ready')
-        }
         setPlayerState(prev => ({ ...prev, open: false }))
         setLaunching(false)
         return
       }
 
-      // Hybrid mode advertises hasMpvEmbedPlayer (inherits from local), but
-      // when the file isn't reachable locally the server streams HLS instead.
-      // libvlc never runs, so engineReady never flips, so vlc-ready never
-      // gets added and body.engine-playing's curtain hides #root forever — the
-      // HLS player below stays invisible while hls.js storms the server.
-      //
-      // Mount WebVideoPlayer (its black overlay covers #root) BEFORE pulling
-      // the curtain off — otherwise there's a paint frame where the curtain
-      // is gone but WebVideoPlayer hasn't mounted, and the transparent
-      // BrowserWindow flashes through whatever route was underneath.
-      // flushSync forces React to commit the state update synchronously so
-      // the DOM has WebVideoPlayer in place when we strip the curtain class.
-      const isHls = !!(result.streamUrl || result.hlsUrl)
-
       flushSync(() => {
         setPlayerState({
           open: true,
+          filePath: filePath || null,
           streamUrl: result.streamUrl ?? null,
           hlsUrl: result.hlsUrl ?? null,
           subtitleUrl: result.subtitleUrl ?? null,
@@ -170,18 +132,9 @@ export function PlayerProvider({ children }) {
           eof: false,
         })
       })
-
-      if (isHls && typeof document !== 'undefined') {
-        document.body.classList.remove('engine-playing')
-        document.body.classList.remove('engine-ready')
-      }
     } catch (err) {
       console.error('openPlayer error:', err)
       showToast('Playback failed: ' + (err.message || 'Unknown error'), { type: 'error' })
-      if (typeof document !== 'undefined') {
-        document.body.classList.remove('engine-playing')
-        document.body.classList.remove('engine-ready')
-      }
       setPlayerState(prev => ({ ...prev, open: false }))
     } finally {
       setLaunching(false)
@@ -190,8 +143,10 @@ export function PlayerProvider({ children }) {
 
   const closePlayer = useCallback((finalTime, finalDuration) => {
     let context = {}
+    let sessionId = null
     setPlayerState(prev => {
       context = { type: prev.type, episodeId: prev.episodeId, movieId: prev.movieId }
+      sessionId = prev.sessionId
       return {
         ...prev,
         open: false,
@@ -200,15 +155,10 @@ export function PlayerProvider({ children }) {
         currentTime: 0,
         paused: false,
         eof: false,
-        engineReady: false,
       }
     })
-    if (typeof document !== 'undefined') {
-      document.body.classList.remove('engine-playing')
-      document.body.classList.remove('engine-ready')
-    }
     window.dispatchEvent(new Event('playback-stopped'))
-    api.stopPlayback(finalTime, finalDuration, context).catch(() => {})
+    api.stopPlayback(finalTime, finalDuration, { ...context, sessionId }).catch(() => {})
   }, [api])
 
   const playNextEpisode = useCallback(async () => {
@@ -258,66 +208,73 @@ export function PlayerProvider({ children }) {
     }).catch(() => {})
   }, [api])
 
-  const seekPlayback = useCallback(async (absoluteTime) => {
+  // Re-issue startPlayback with a new prefs payload so the engine signs a
+  // fresh transcode token with the new track baked in. Caller passes the
+  // current absolute playback time so we resume at the same spot.
+  const relaunchWithPrefs = useCallback(async (prefsOverride, absoluteResumeTime) => {
+    const cur = stateRef.current
+    if (!cur.filePath) return null
+
+    const prefs = {
+      audioLanguage: prefsOverride.audioLanguage ?? null,
+      audioCodec: prefsOverride.audioCodec ?? null,
+      audioChannels: prefsOverride.audioChannels ?? null,
+      subtitleLanguage: prefsOverride.subtitleLanguage ?? null,
+      subtitleOff: !!prefsOverride.subtitleOff,
+      subtitleSize: prefsOverride.subtitleSize ?? cur.subtitleSize ?? 'medium',
+      subtitleStyle: prefsOverride.subtitleStyle ?? cur.subtitleStyle ?? 'classic',
+    }
+
     try {
-      const result = await api.seekPlayback(absoluteTime)
-      if (!result) return null
-      setPlayerState(prev => {
-        const next = { ...prev }
-        if (result.streamUrl != null) next.streamUrl = result.streamUrl
-        if (result.hlsUrl != null) next.hlsUrl = result.hlsUrl
-        if (result.streamUrl || result.hlsUrl) {
-          next.seekBase = result.seekBase ?? absoluteTime
-          next.sessionId = Date.now()
-          if (prev.subtitleUrl) {
-            const base = prev.subtitleUrl.replace(/&t=\d+/, '')
-            next.subtitleUrl = `${base}&t=${Date.now()}`
-          }
-          if (result.strategy) next.strategy = result.strategy
-        } else {
-          next.currentTime = absoluteTime
-        }
-        return next
-      })
+      const result = await api.startPlayback(cur.filePath, absoluteResumeTime || 0, prefs)
+      if (!result || result.error) return null
+
+      setPlayerState(prev => ({
+        ...prev,
+        streamUrl: result.streamUrl ?? null,
+        hlsUrl: result.hlsUrl ?? null,
+        subtitleUrl: result.subtitleUrl ?? null,
+        seekBase: result.seekBase ?? absoluteResumeTime ?? 0,
+        startTime: absoluteResumeTime || 0,
+        sessionId: Date.now(),
+        audioStreams: result.audioStreams || prev.audioStreams,
+        subtitleStreams: result.subtitleStreams || prev.subtitleStreams,
+        activeAudioIndex: result.activeAudioIndex ?? prev.activeAudioIndex,
+        activeSubtitleIndex: result.activeSubtitleIndex ?? prev.activeSubtitleIndex,
+        isBitmapSubtitle: !!result.isBitmapSubtitle,
+        strategy: result.strategy || prev.strategy,
+      }))
       return result
     } catch (err) {
-      console.error('seekPlayback error:', err)
+      console.error('relaunchWithPrefs error:', err)
+      return null
     }
-    return null
   }, [api])
 
   const switchAudio = useCallback(async (audioStreamId, currentVideoTime) => {
-    try {
-      const result = await api.switchAudio(audioStreamId, currentVideoTime)
-      if (!result) return null
-      setPlayerState(prev => {
-        const next = { ...prev, activeAudioIndex: audioStreamId }
-        if (result.streamUrl != null) {
-          next.streamUrl = result.streamUrl
-          next.seekBase = result.seekBase ?? (prev.seekBase + (currentVideoTime || 0))
-          next.sessionId = Date.now()
-          if (prev.subtitleUrl) {
-            const base = prev.subtitleUrl.replace(/&t=\d+/, '')
-            next.subtitleUrl = `${base}&t=${Date.now()}`
-          }
-          if (result.hlsUrl != null) next.hlsUrl = result.hlsUrl
-          if (result.strategy) next.strategy = result.strategy
-        }
-        savePreferences(next)
-        return next
-      })
-      return result
-    } catch (err) {
-      console.error('switchAudio error:', err)
-    }
-    return null
-  }, [savePreferences, api])
+    const cur = stateRef.current
+    const audioStream = cur.audioStreams.find(s => (s.id ?? s.index) === audioStreamId)
+    if (!audioStream) return null
 
-  // Direct-play fast-path: mark the new audio index as active and persist
-  // the language preference. The renderer has already flipped the
-  // <video>.audioTracks[i].enabled flags client-side — no server call, no
-  // ffmpeg restart, no stream reload. Mirrors Jellyfin's htmlVideoPlayer
-  // setAudioStreamIndex when the source has multiple muxed audio tracks.
+    const absoluteResume = (cur.seekBase || 0) + (currentVideoTime || 0)
+    const result = await relaunchWithPrefs({
+      audioLanguage: audioStream.language,
+      audioCodec: audioStream.codec,
+      audioChannels: audioStream.channels,
+      subtitleLanguage: cur.subtitleStreams.find(s => s.index === cur.activeSubtitleIndex)?.language,
+      subtitleOff: cur.activeSubtitleIndex == null,
+    }, absoluteResume)
+
+    if (result) {
+      savePreferences(stateRef.current, { activeAudioIndex: audioStreamId })
+    }
+    return result
+  }, [relaunchWithPrefs, savePreferences])
+
+  // Player JS handles audio track switching natively only when the HLS master
+  // advertises multiple audio renditions. Until the engine produces those, we
+  // route every audio change through relaunchWithPrefs. This callback exists
+  // so VideoPlayer can mark the index optimistically.
   const applyDirectPlayAudio = useCallback((audioStreamId) => {
     setPlayerState(prev => {
       const next = { ...prev, activeAudioIndex: audioStreamId }
@@ -327,54 +284,55 @@ export function PlayerProvider({ children }) {
   }, [savePreferences])
 
   const switchSubtitle = useCallback(async (subtitleStreamId) => {
-    try {
-      const result = await api.switchSubtitle(subtitleStreamId)
-      if (!result) return null
-      if (result.error) console.warn('[Subtitle] switchSubtitle error:', result.error)
-      setPlayerState(prev => {
-        const next = { ...prev, activeSubtitleIndex: subtitleStreamId }
-        if ('subtitleUrl' in result) {
-          next.subtitleUrl = result.subtitleUrl
-          next.isBitmapSubtitle = false
-        }
-        savePreferences(next, { activeSubtitleIndex: subtitleStreamId })
-        return next
-      })
-      return result
-    } catch (err) {
-      console.error('switchSubtitle error:', err)
-    }
-    return null
-  }, [savePreferences, api])
+    const cur = stateRef.current
+    const subtitleStream = subtitleStreamId != null
+      ? cur.subtitleStreams.find(s => (s.id ?? s.index) === subtitleStreamId)
+      : null
+    const audioStream = cur.audioStreams.find(s => (s.id ?? s.index) === cur.activeAudioIndex)
 
-  // HLS-only legacy method for the web/android <video>+ffmpeg path.
-  const switchBitmapSubtitle = useCallback(async (subtitleStreamIndex, currentVideoTime) => {
-    try {
-      const result = await api.switchBitmapSubtitle?.(subtitleStreamIndex, currentVideoTime)
-      if (result && (result.streamUrl || result.hlsUrl)) {
-        setPlayerState(prev => {
-          const isBitmap = subtitleStreamIndex != null
-          const next = {
-            ...prev,
-            streamUrl: result.streamUrl ?? prev.streamUrl,
-            hlsUrl: result.hlsUrl ?? prev.hlsUrl,
-            seekBase: result.seekBase ?? (prev.seekBase + (currentVideoTime || 0)),
-            activeSubtitleIndex: subtitleStreamIndex,
-            isBitmapSubtitle: isBitmap,
-            subtitleUrl: null,
-            sessionId: Date.now(),
-            strategy: result.strategy ?? prev.strategy,
-          }
-          savePreferences(next, { activeSubtitleIndex: subtitleStreamIndex })
-          return next
-        })
-        return result
-      }
-    } catch (err) {
-      console.error('switchBitmapSubtitle error:', err)
+    const result = await relaunchWithPrefs({
+      audioLanguage: audioStream?.language,
+      audioCodec: audioStream?.codec,
+      audioChannels: audioStream?.channels,
+      subtitleLanguage: subtitleStream?.language,
+      subtitleOff: subtitleStream == null,
+    }, (cur.seekBase || 0) + 0)
+
+    if (result) {
+      savePreferences(stateRef.current, { activeSubtitleIndex: subtitleStreamId })
     }
+    return result
+  }, [relaunchWithPrefs, savePreferences])
+
+  const switchBitmapSubtitle = useCallback(async (subtitleStreamIndex, currentVideoTime) => {
+    const cur = stateRef.current
+    const subtitleStream = subtitleStreamIndex != null
+      ? cur.subtitleStreams.find(s => (s.id ?? s.index) === subtitleStreamIndex)
+      : null
+    const audioStream = cur.audioStreams.find(s => (s.id ?? s.index) === cur.activeAudioIndex)
+
+    const absoluteResume = (cur.seekBase || 0) + (currentVideoTime || 0)
+    const result = await relaunchWithPrefs({
+      audioLanguage: audioStream?.language,
+      audioCodec: audioStream?.codec,
+      audioChannels: audioStream?.channels,
+      subtitleLanguage: subtitleStream?.language,
+      subtitleOff: subtitleStream == null,
+    }, absoluteResume)
+
+    if (result) {
+      savePreferences(stateRef.current, { activeSubtitleIndex: subtitleStreamIndex })
+    }
+    return result
+  }, [relaunchWithPrefs, savePreferences])
+
+  // Pure local-state update: VideoPlayer drives player.seek() directly.
+  // Kept on the context for parity with the previous API; returns null so
+  // existing callers (which `await` the result) don't break.
+  const seekPlayback = useCallback(async (absoluteTime) => {
+    setPlayerState(prev => ({ ...prev, currentTime: absoluteTime }))
     return null
-  }, [savePreferences, api])
+  }, [])
 
   const setSubtitleAppearance = useCallback(({ subtitleSize, subtitleStyle }) => {
     setPlayerState(prev => {
@@ -384,71 +342,7 @@ export function PlayerProvider({ children }) {
       savePreferences(next, { subtitleSize: next.subtitleSize, subtitleStyle: next.subtitleStyle })
       return next
     })
-    if (usingEmbedEngine && api.setSubtitleAppearance) {
-      api.setSubtitleAppearance({ size: subtitleSize, style: subtitleStyle }).catch(() => {})
-    }
-  }, [savePreferences, api, usingEmbedEngine])
-
-  // Toggle the body.engine-ready class so the CSS-pseudo-element curtain
-  // disappears the instant libvlc reports its first frame.
-  useEffect(() => {
-    if (typeof document === 'undefined') return
-    if (playerState.open && playerState.engineReady) {
-      document.body.classList.add('engine-ready')
-    } else {
-      document.body.classList.remove('engine-ready')
-    }
-  }, [playerState.open, playerState.engineReady])
-
-  // embed engine mode: subscribe to live state pushes.
-  useEffect(() => {
-    if (!usingEmbedEngine || !api.onPlaybackState) return
-    const unsub = api.onPlaybackState(state => {
-      setPlayerState(prev => {
-        if (!prev.open) return prev
-        // engineReady flips on the first push past the requested startTime
-        // — that's the "first frame decoded" signal for the curtain.
-        const engineReady = prev.engineReady ||
-          (state.time != null && state.time > (prev.startTime || 0) - 0.5)
-        return {
-          ...prev,
-          currentTime: state.time ?? prev.currentTime,
-          paused: state.paused ?? prev.paused,
-          duration: state.duration || prev.duration,
-          eof: !!state.ended,
-          engineReady,
-        }
-      })
-    })
-    return unsub
-  }, [usingEmbedEngine, api])
-
-  useEffect(() => {
-    if (!usingEmbedEngine || !api.onPlaybackTracks) return
-    const unsub = api.onPlaybackTracks(tracks => {
-      setPlayerState(prev => {
-        if (!prev.open) return prev
-        const audio = tracks.audio || []
-        const subtitle = tracks.subtitle || []
-        return {
-          ...prev,
-          audioStreams: audio.length ? audio : prev.audioStreams,
-          subtitleStreams: subtitle.length ? subtitle : prev.subtitleStreams,
-        }
-      })
-    })
-    return unsub
-  }, [usingEmbedEngine, api])
-
-  useEffect(() => {
-    if (!usingEmbedEngine || !api.onPlaybackEnded) return
-    const unsub = api.onPlaybackEnded(() => {
-      const cur = stateRef.current
-      if (cur.type === 'episode') playNextEpisode()
-      else closePlayer(cur.currentTime, cur.duration)
-    })
-    return unsub
-  }, [usingEmbedEngine, api, playNextEpisode, closePlayer])
+  }, [savePreferences])
 
   const contextValue = useMemo(() => ({
     playerState, launching, openPlayer, closePlayer, playNextEpisode,
