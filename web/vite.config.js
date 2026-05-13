@@ -35,6 +35,11 @@ export default defineConfig({
         changeOrigin: false,
         headers: { 'X-Forwarded-Proto': 'http' },
       },
+      '/_jellyfin': {
+        target: 'http://localhost:3001',
+        changeOrigin: false,
+        headers: { 'X-Forwarded-Proto': 'http' },
+      },
       '/rails': { target: 'http://localhost:3001', changeOrigin: false },
       '/up': { target: 'http://localhost:3001', changeOrigin: true },
     },

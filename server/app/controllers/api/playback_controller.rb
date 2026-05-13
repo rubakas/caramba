@@ -93,13 +93,17 @@ class Api::PlaybackController < Api::BaseController
     direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)
     transcode_token = Jellyfin::Transcoding::Token.encode(transcode_token_params)
 
+    # PlaybackInfo.for composes URLs as `"#{base_url}/stream/..."` and
+    # `"#{base_url}/transcode/..."` — relative to the engine's mount point,
+    # not Rails root. Engine is mounted at /_jellyfin, so we pass that prefix
+    # in the base_url. Without it the client gets /transcode/... and 404s.
     decision = Jellyfin::Playback::PlaybackInfo.for(
       media_source: media_source,
       profile: client_profile,
       audio_track: audio_stream_index,
       subtitle_track: subtitle_stream_index,
       max_bitrate: client_profile.max_video_bitrate,
-      base_url: api_base_url,
+      base_url: "#{api_base_url}/_jellyfin",
       token_for_direct: direct_token,
       token_for_transcode: transcode_token
     )

@@ -415,4 +415,43 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       assert_not_respond_to r, :direct_play?
     end
   end
+
+  # Regression: PlaybackInfo.for composes URLs as `"#{base_url}/transcode/..."`
+  # and `"#{base_url}/stream/..."` — RELATIVE to the engine's mount point, not
+  # to Rails root. The engine is mounted at /_jellyfin, so the controller must
+  # pass `"#{api_base_url}/_jellyfin"` as base_url. Without that prefix the
+  # client receives /transcode/... and the URL 404s. Symptom: player starts,
+  # shows loading, then black screen with no playback.
+  class EngineMountUrlTest < ActiveSupport::TestCase
+    test "PlaybackInfo URL composition assumes engine mount prefix in base_url" do
+      # Force a transcode decision by handing the profile a source with a codec
+      # it cannot direct-play. Lock the assumption: PlaybackInfo composes URLs
+      # as `"#{base_url}/transcode/..."` (relative to the engine's mount),
+      # so callers must include the mount in base_url. If upstream switches to
+      # engine url_helpers and stops needing the prefix, this test will fail
+      # and prompt removing the workaround.
+      video = Jellyfin::Probing::MediaStream.new(
+        index: 0, type: :video, codec: "hevc", width: 1920, height: 1080
+      )
+      audio = Jellyfin::Probing::MediaStream.new(
+        index: 1, type: :audio, codec: "aac", channels: 2
+      )
+      source = Jellyfin::Probing::MediaSourceInfo.new(
+        id: "x", path: "/dev/null", container: "mkv",
+        run_time_ticks: 100_000_000, streams: [ video, audio ]
+      )
+      profile = Jellyfin::Playback::ClientProfile.modern_browser # h264 only
+
+      decision = Jellyfin::Playback::PlaybackInfo.for(
+        media_source: source,
+        profile: profile,
+        base_url: "http://example.test/_jellyfin",
+        token_for_direct: "tok_direct",
+        token_for_transcode: "tok_transcode"
+      )
+      assert_not_nil decision.transcoding_url, "expected a transcode URL for HEVC + h264-only profile"
+      assert decision.transcoding_url.start_with?("http://example.test/_jellyfin/transcode/"),
+        "expected URL under the engine mount path, got: #{decision.transcoding_url.inspect}"
+    end
+  end
 end
