@@ -8,6 +8,9 @@ dist
 # Storage (user data)
 desktop/storage
 
+# Bundled binaries (downloaded by server/bin/setup-ffmpeg)
+server/vendor/ffmpeg/
+
 desktop/build
 
 # OS

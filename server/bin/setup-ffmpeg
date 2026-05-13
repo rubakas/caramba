@@ -1,0 +1,117 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Downloads jellyfin-ffmpeg for the current platform/arch and unpacks it
+# into server/vendor/ffmpeg/<platform>-<arch>/. The Rails initializer at
+# config/initializers/jellyfin.rb points the engine at this directory, so
+# we never fall back to whatever ffmpeg the system happens to have.
+#
+# Run once per developer machine (and at deploy time, if not vendored
+# into the deploy artifact):
+#
+#   server/bin/setup-ffmpeg
+#
+# To bump the version, edit JELLYFIN_FFMPEG_VERSION below. The script
+# always downloads from the official jellyfin-ffmpeg GitHub releases,
+# never builds from source.
+
+require 'fileutils'
+require 'open-uri'
+require 'rbconfig'
+require 'tmpdir'
+
+JELLYFIN_FFMPEG_VERSION = '7.1.3-6'
+
+ROOT = File.expand_path('..', __dir__)
+VENDOR_ROOT = File.join(ROOT, 'vendor', 'ffmpeg')
+
+def platform_slug
+  os = RbConfig::CONFIG['host_os']
+  arch = RbConfig::CONFIG['host_cpu']
+
+  case os
+  when /darwin/
+    case arch
+    when /x86_64|amd64/ then ['mac64-gpl', 'darwin-x64', 'tar.xz']
+    when /arm64|aarch64/ then ['macarm64-gpl', 'darwin-arm64', 'tar.xz']
+    end
+  when /linux/
+    case arch
+    when /x86_64|amd64/ then ['linux64-gpl', 'linux-x64', 'tar.xz']
+    when /aarch64|arm64/ then ['linuxarm64-gpl', 'linux-arm64', 'tar.xz']
+    end
+  when /mingw|mswin|cygwin/
+    case arch
+    when /x86_64|amd64/ then ['win64-clang-gpl', 'win-x64', 'zip']
+    when /aarch64|arm64/ then ['winarm64-clang-gpl', 'win-arm64', 'zip']
+    end
+  end
+end
+
+triple = platform_slug
+abort "Unsupported platform: #{RbConfig::CONFIG['host_os']} / #{RbConfig::CONFIG['host_cpu']}" if triple.nil?
+asset_slug, dir_name, ext = triple
+
+target_dir = File.join(VENDOR_ROOT, dir_name)
+ffmpeg_bin = File.join(target_dir, 'ffmpeg')
+
+if File.executable?(ffmpeg_bin)
+  installed = `"#{ffmpeg_bin}" -version 2>&1`.lines.first&.strip
+  if installed&.include?(JELLYFIN_FFMPEG_VERSION.split('-').first)
+    puts "[setup-ffmpeg] Already installed: #{installed}"
+    exit 0
+  end
+  puts "[setup-ffmpeg] Replacing existing install: #{installed}"
+  FileUtils.rm_rf(target_dir)
+end
+
+FileUtils.mkdir_p(target_dir)
+
+asset = "jellyfin-ffmpeg_#{JELLYFIN_FFMPEG_VERSION}_portable_#{asset_slug}.#{ext}"
+url = "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v#{JELLYFIN_FFMPEG_VERSION}/#{asset}"
+
+puts "[setup-ffmpeg] Downloading #{asset}..."
+tmp = File.join(Dir.tmpdir, asset)
+FileUtils.mkdir_p(File.dirname(tmp))
+URI.open(url, redirect: true) do |io|
+  File.open(tmp, 'wb') { |f| IO.copy_stream(io, f) }
+end
+
+puts "[setup-ffmpeg] Extracting to #{target_dir}..."
+case ext
+when 'tar.xz'
+  # jellyfin-ffmpeg portable tarballs are flat — ffmpeg + ffprobe sit at
+  # the archive root, no wrapper dir. Untar straight in.
+  system('tar', '-xJf', tmp, '-C', target_dir) or abort 'tar failed'
+when 'zip'
+  system('unzip', '-q', tmp, '-d', target_dir) or abort 'unzip failed'
+end
+FileUtils.rm_f(tmp)
+# If extraction landed everything inside a wrapper dir (some Windows
+# zips do this), flatten it.
+entries = Dir.children(target_dir)
+if entries.length == 1
+  inner = File.join(target_dir, entries.first)
+  if File.directory?(inner)
+    Dir.glob(File.join(inner, '*')).each { |entry| FileUtils.mv(entry, target_dir) }
+    Dir.rmdir(inner)
+  end
+end
+
+# Find the actual ffmpeg/ffprobe binaries — different tarballs nest them.
+ffmpeg = Dir.glob(File.join(target_dir, '**', 'ffmpeg')).find { |p| File.file?(p) && File.executable?(p) }
+ffprobe = Dir.glob(File.join(target_dir, '**', 'ffprobe')).find { |p| File.file?(p) && File.executable?(p) }
+abort "Could not locate ffmpeg binary in #{target_dir}" unless ffmpeg
+abort "Could not locate ffprobe binary in #{target_dir}" unless ffprobe
+
+# If they're nested in a subdir (rare for portable tarballs), symlink up
+# so consumers can rely on a fixed path.
+unless File.dirname(ffmpeg) == target_dir
+  FileUtils.ln_sf(ffmpeg,  File.join(target_dir, 'ffmpeg'))
+  FileUtils.ln_sf(ffprobe, File.join(target_dir, 'ffprobe'))
+end
+
+puts "[setup-ffmpeg] Installed:"
+puts "  ffmpeg:  #{File.join(target_dir, 'ffmpeg')}"
+puts "  ffprobe: #{File.join(target_dir, 'ffprobe')}"
+system(File.join(target_dir, 'ffmpeg'), '-version') or abort 'ffmpeg failed to execute'
