@@ -42,14 +42,36 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(described_class.encoder_for('h264', caps)).to eq('h264_videotoolbox')
     end
 
-    it 'emits -hwaccel videotoolbox + -hwaccel_output_format videotoolbox_vld in decode args' do
-      # Regression: without -hwaccel_output_format, the decoder downloads
-      # frames to system memory and tonemap_videotoolbox (which wants HW
-      # frames on CVPixelBuffer) fails:
-      #   Impossible to convert between the formats supported by the
-      #   filter 'graph -1 input' and 'auto_scale_0'
+    it 'emits bare -hwaccel videotoolbox when the full HW filter chain is unavailable' do
+      # Matches upstream Jellyfin (EncodingHelper.cs:6661/6982): the
+      # `-hwaccel_output_format videotoolbox_vld` token is gated on
+      # `useHwSurface`, which requires both `tonemap_videotoolbox` and
+      # `scale_vt`. When `scale_vt` is missing (as in this fixture),
+      # decoded frames must land in system memory so the SW filter
+      # chain + h264_videotoolbox CPU input path works.
+      #
+      # Regression: a previous version emitted the format token
+      # unconditionally. On 10-bit HEVC sources, GPU-resident p010
+      # frames couldn't bridge into the SW filter chain → ffmpeg fell
+      # back to libx264 via `-allow_sw 1` at ~1x realtime, and each
+      # HLS segment took an entire segment_length of wall time to
+      # produce (the user saw ~6s per .ts on Safari's Network panel).
       job = make_job
+      # caps in this fixture lists tonemap_videotoolbox but NOT scale_vt.
       expect(described_class.decode_args(job, caps)).to eq(
+        ['-hwaccel', 'videotoolbox']
+      )
+    end
+
+    it 'emits the videotoolbox_vld format only when both tonemap_videotoolbox AND scale_vt are present' do
+      full_caps = Class.new {
+        def supports_hwaccel?(_) = true
+        def supports_filter?(name) = %w[tonemap_videotoolbox scale_vt].include?(name)
+        def supports_encoder?(name) = %w[h264_videotoolbox].include?(name)
+        def supports_decoder?(_) = true
+      }.new
+      job = make_job
+      expect(described_class.decode_args(job, full_caps)).to eq(
         ['-hwaccel', 'videotoolbox', '-hwaccel_output_format', 'videotoolbox_vld']
       )
     end

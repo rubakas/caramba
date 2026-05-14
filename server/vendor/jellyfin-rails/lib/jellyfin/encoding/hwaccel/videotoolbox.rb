@@ -44,14 +44,25 @@ module Jellyfin
 
         def decode_args(_job, caps)
           return [] unless caps.supports_hwaccel?('videotoolbox')
-          # `-hwaccel_output_format videotoolbox_vld` keeps decoded frames on
-          # CVPixelBuffer surfaces so `tonemap_videotoolbox` / `scale_vt` can
-          # consume them directly. Without it, the decoder downloads frames
-          # to system memory by default and the filter graph fails with
-          # "Impossible to convert between the formats supported by the
-          # filter 'graph -1 input' and 'auto_scale_0'" — the HW tonemap
-          # filter doesn't accept system-memory yuv420p10le input.
-          ['-hwaccel', 'videotoolbox', '-hwaccel_output_format', 'videotoolbox_vld']
+          # Only keep decoded frames on CVPixelBuffer surfaces when the
+          # full HW filter chain (`tonemap_videotoolbox` + `scale_vt`)
+          # can actually consume them. Mirrors upstream
+          # EncodingHelper.cs:6982 / 6661 — `useHwSurface = ffmpeg >=
+          # 7.0.1 && IsVideoToolboxFullSupported()`, and the
+          # `-hwaccel_output_format videotoolbox_vld` token is only
+          # emitted when `useHwSurface` is true.
+          #
+          # Without that gate, every non-HDR transcode kept decoded
+          # frames in GPU memory while the rest of the pipeline (SW
+          # filter chain → CPU 8-bit input to h264_videotoolbox) needed
+          # them in system memory. For 10-bit HEVC sources the resulting
+          # auto-conversion path tripped `-allow_sw 1` and silently fell
+          # back to libx264 at ~1x realtime. Per-segment serving stalled
+          # at exactly one segment_length per request, which is what
+          # the user observed (~6 s per .ts on the Network panel).
+          args = ['-hwaccel', 'videotoolbox']
+          args.concat(['-hwaccel_output_format', 'videotoolbox_vld']) if full_chain_supported?(caps)
+          args
         end
 
         def filter_chain(job, caps)
