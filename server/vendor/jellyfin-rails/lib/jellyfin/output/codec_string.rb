@@ -21,14 +21,41 @@ module Jellyfin
           level_idc   = (level.to_f * 10).to_i.to_s(16).rjust(2, '0')
           "avc1.#{profile_idc}00#{level_idc}"
         when 'h265', 'hevc', 'libx265'
-          # hev1.1.6.L120.B0  — simplified; main / main10 / main12 differ in profile_space
-          main = profile.to_s.downcase
-          tier = 'L'
-          level_part = level ? "#{tier}#{(level.to_f * 30).to_i}" : 'L120'
+          # `hvc1.*` not `hev1.*` — Apple's HLS Authoring Spec
+          # ("Validating HLS Streams", section "Codecs Attributes for
+          # HEVC") REQUIRES `hvc1.*` in the master playlist's CODECS
+          # attribute when the fMP4 sample entry uses the `hvc1` tag.
+          # ffmpeg's HLS muxer is configured with `-tag:v hvc1` for
+          # HEVC stream-copy (encoding_helper#hls_output_args), so the
+          # sample entry IS `hvc1` and the CODECS attribute must match.
+          # Mismatch (`hev1` advertised, `hvc1` on the wire) makes
+          # Safari reject the master playlist with MEDIA_ERR_DECODE
+          # before fetching any segment.
+          #
+          # Profile matching is whitespace-insensitive: ffprobe reports
+          # HEVC Main 10 with a SPACE (`Main 10`) while RFC 6381's
+          # codec-string token has no space (`main10`). Upstream
+          # Jellyfin matches both forms — HlsCodecStringHelpers.cs:213
+          # — and we have to too: otherwise a `Main 10` source falls
+          # through to the `else` branch and we advertise as Main
+          # (`hvc1.1.6.*`) while the bitstream is Main 10
+          # (`hvc1.2.4.*`). Safari spots the CODECS-vs-bitstream
+          # mismatch and surfaces MEDIA_ERR_DECODE before any segment
+          # is fetched (the user's `Office S01E03` reproduces this).
+          main = profile.to_s.downcase.delete(' ')
+          # HEVC codec-string level is the level_idc value itself
+          # (`L120` = level_idc 120 = HEVC Level 4.0). Callers must pass
+          # the level_idc directly — we DO NOT scale it. Mirrors upstream
+          # HlsCodecStringHelpers.cs:223-225 which appends `level` raw.
+          # The previous `level * 30` formula was inherited from a wrong
+          # generalisation of the H.264 `* 10` convention; for HEVC it
+          # produced impossible levels (e.g. L360 for source level 120)
+          # which Safari rejected with MEDIA_ERR_DECODE.
+          level_part = level ? "L#{level.to_i}" : 'L120'
           case main
-          when 'main10' then "hev1.2.4.#{level_part}.B0"
-          when 'main12' then "hev1.3.4.#{level_part}.B0"
-          else "hev1.1.6.#{level_part}.B0"
+          when 'main10' then "hvc1.2.4.#{level_part}.B0"
+          when 'main12' then "hvc1.3.4.#{level_part}.B0"
+          else "hvc1.1.6.#{level_part}.B0"
           end
         when 'av1', 'av01', 'libsvtav1', 'libaom-av1'
           # av01.P.LLT.BB  — main profile, level 8 (4K), bitdepth 8

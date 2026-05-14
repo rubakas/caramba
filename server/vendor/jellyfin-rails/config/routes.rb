@@ -13,7 +13,12 @@ Jellyfin::Rails::Engine.routes.draw do
     # `[HttpHead]` annotations so clients can probe headers before fetching.
     match ':token/master.m3u8',     to: 'transcoding#master',  via: %i[get head], as: :master
     match ':token/main.m3u8',       to: 'transcoding#variant', via: %i[get head], as: :variant
-    match ':token/:segment.ts',     to: 'transcoding#segment', via: %i[get head], as: :segment, constraints: { segment: /\d+/ }
+    # fMP4 init segment ships as `-1.mp4`, mirroring upstream Jellyfin's
+    # EndpointPrefix-1{ext} pattern. Segment endpoints accept both `.ts`
+    # and `.mp4` so the same controller serves either pipeline.
+    match ':token/-1.mp4',          to: 'transcoding#init_segment', via: %i[get head], as: :init_segment
+    match ':token/:segment.:ext',   to: 'transcoding#segment', via: %i[get head], as: :segment,
+        constraints: { segment: /\d+/, ext: /ts|mp4|m4s/ }
     match ':token/abr_master.m3u8', to: 'abr#master',          via: %i[get head], as: :abr_master
     get   ':token/progress',        to: 'progress#show',       as: :progress
   end

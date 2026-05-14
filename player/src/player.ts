@@ -278,6 +278,20 @@ export class Player {
     deactivateSubtitleTrack(this.subtitleHandle);
     this.subtitleHandle = null;
     this.emitReporter('onStop');
+    // Mirror jellyfin-web's `resetSrc` from
+    // src/components/htmlMediaHelper.js:188-192 — clearing `src` +
+    // `innerHTML` + the src attribute is what tells Safari's native
+    // HLS engine to stop fetching the playlist and segments. Without
+    // it, Safari kept retrying the fMP4 init segment (`-1.mp4`) and
+    // the variant playlist after the player UI closed — visible in
+    // the Caramba user's Network panel as orphan `-1.mp4` requests
+    // continuing after the player was dismissed. Simply pausing the
+    // <video> element and removing it from the DOM is not enough on
+    // Safari/macOS; the HLS engine outlives the element until `src`
+    // is explicitly reset.
+    this.video.src = '';
+    this.video.innerHTML = '';
+    this.video.removeAttribute('src');
     this.root.replaceChildren();
   }
 

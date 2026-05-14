@@ -104,11 +104,27 @@ module Jellyfin
           # SPS values. CodecString.for derives the AVC fourcc from these.
           transcoding_video = video_stream.codec && !codec_alias?(announced_video, video_stream.codec)
           profile_hint = transcoding_video ? 'high' : video_stream.profile
-          level_hint   = if transcoding_video
-                           4.0   # H.264 High@4.0 — 1080p30 ceiling, decoder-universal
-                         elsif video_stream.level
-                           video_stream.level.to_f / 10.0
-                         end
+          # Level value semantics differ by codec — CodecString does the
+          # codec-specific formatting:
+          #   H.264 transcode:   4.0 (decimal "level number" — encoder-universal 1080p30)
+          #   H.264 stream-copy: source level_idc / 10.0 (ffprobe 41 → 4.1)
+          #   HEVC  stream-copy: source level_idc directly (ffprobe 120 → 120)
+          # Mirrors upstream `GetOutputVideoCodecLevel`
+          # (DynamicHlsHelper.cs:752-774) — for HEVC copy it passes
+          # `state.VideoStream.Level.Value` (the level_idc int) straight
+          # through to GetH265String, which appends it as `L{level}`.
+          # We were dividing source level_idc by 10 for HEVC too, which
+          # collapsed 120 → 12 → CodecString multiplied by 30 → `L360`
+          # (invalid HEVC level). Safari rejected the master with
+          # MEDIA_ERR_DECODE before fetching any segment.
+          hevc_announced = %w[hevc h265 hev1 hvc1].include?(announced_video.to_s.downcase)
+          level_hint     = if transcoding_video
+                             4.0
+                           elsif video_stream.level && hevc_announced
+                             video_stream.level.to_i
+                           elsif video_stream.level
+                             video_stream.level.to_f / 10.0
+                           end
 
           codec_str = Jellyfin::Output::CodecString.for(
             video_codec: announced_video,

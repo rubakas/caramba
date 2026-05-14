@@ -42,27 +42,41 @@ module Jellyfin
           end
         end
 
-        def decode_args(_job, caps)
+        def decode_args(job, caps)
           return [] unless caps.supports_hwaccel?('videotoolbox')
-          # Only keep decoded frames on CVPixelBuffer surfaces when the
-          # full HW filter chain (`tonemap_videotoolbox` + `scale_vt`)
-          # can actually consume them. Mirrors upstream
-          # EncodingHelper.cs:6982 / 6661 — `useHwSurface = ffmpeg >=
-          # 7.0.1 && IsVideoToolboxFullSupported()`, and the
-          # `-hwaccel_output_format videotoolbox_vld` token is only
-          # emitted when `useHwSurface` is true.
+          # `-hwaccel_output_format videotoolbox_vld` keeps decoded
+          # frames on CVPixelBuffer surfaces so that the HW filter chain
+          # (`tonemap_videotoolbox`, `scale_vt`) can consume them
+          # directly. We only emit it when THIS job will actually run
+          # such a chain — that is, when `filter_chain(job, caps)`
+          # returns a non-nil HW filter (today, only the HDR tonemap
+          # path).
           #
-          # Without that gate, every non-HDR transcode kept decoded
-          # frames in GPU memory while the rest of the pipeline (SW
-          # filter chain → CPU 8-bit input to h264_videotoolbox) needed
-          # them in system memory. For 10-bit HEVC sources the resulting
-          # auto-conversion path tripped `-allow_sw 1` and silently fell
-          # back to libx264 at ~1x realtime. Per-segment serving stalled
-          # at exactly one segment_length per request, which is what
-          # the user observed (~6 s per .ts on the Network panel).
-          args = ['-hwaccel', 'videotoolbox']
-          args.concat(['-hwaccel_output_format', 'videotoolbox_vld']) if full_chain_supported?(caps)
+          # Mirrors upstream EncodingHelper.cs:6661/6982 — there the
+          # flag is gated on `useHwSurface`, which is itself only used
+          # when the job's filter chain will run on HW surfaces.
+          #
+          # Why the gate matters: when there are no HW filters, frames
+          # need to be in system memory so the SW filter chain (and the
+          # `h264_videotoolbox` encoder's CPU input path) can consume
+          # them. With `-hwaccel_output_format videotoolbox_vld` set,
+          # GPU-resident 10-bit `p010` frames couldn't bridge into the
+          # SW chain; `-allow_sw 1` then silently fell back to libx264
+          # at ~1x realtime. Each HLS segment took an entire
+          # segment_length (~6 s) of wall time to produce — exactly
+          # the symptom the user observed.
+          args = [ '-hwaccel', 'videotoolbox' ]
+          args.concat([ '-hwaccel_output_format', 'videotoolbox_vld' ]) if hw_filter_chain_active?(job, caps)
           args
+        end
+
+        # True when this job's filter chain will actually run on HW
+        # surfaces — i.e. `filter_chain(job, caps)` returns a non-nil
+        # HW filter expression. Today this is only the HDR tonemap
+        # path; when scale/burn/etc. are ported to HW filters they'd
+        # also flip this on.
+        def hw_filter_chain_active?(job, caps)
+          full_chain_supported?(caps) && !filter_chain(job, caps).nil?
         end
 
         def filter_chain(job, caps)
@@ -73,9 +87,24 @@ module Jellyfin
         end
 
         def encoder_args(_job)
-          # VideoToolbox uses -b:v from the common path; encoder-specific tuning
-          # is minimal compared to libx264 (no preset/tune flags).
-          ['-allow_sw', '1']
+          # VideoToolbox uses -b:v from the common path; encoder-specific
+          # tuning is minimal compared to libx264 (no preset/tune flags).
+          #
+          # We intentionally do NOT pass `-allow_sw 1`. Despite the name
+          # implying "fall back to SW only if HW fails", on Apple Silicon
+          # + jellyfin-ffmpeg's h264_videotoolbox it preemptively steers
+          # into the SW path whenever the input pixel format isn't a
+          # bit-exact match for the encoder's preferred format. For a
+          # 10-bit HEVC source transcoding to 8-bit H.264, this fires
+          # every time — `-pix_fmt yuv420p` should make ffmpeg auto-
+          # insert a 10→8 conversion in front of the HW encoder, but
+          # `-allow_sw 1` skips the HW init entirely and routes through
+          # SW. Measured cost on the user's `Office S01E03` HEVC 10-bit
+          # MKV: 60s of source took 19.9s with `-allow_sw 1` (~3× wall,
+          # 174% CPU) vs 9.8s without (~6× wall, 107% CPU). The 174%
+          # CPU pattern matches multi-threaded libx264; the 107%
+          # matches HW encode on one orchestration thread.
+          []
         end
       end
     end

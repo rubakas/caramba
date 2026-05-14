@@ -299,9 +299,7 @@ module Jellyfin
         # that references every segment; if the cleaner deletes segment
         # N while Safari seeks back to it, SegmentWaiter waits 30s for a
         # file ffmpeg won't recreate, then the segment endpoint 504s and
-        # Safari surfaces MEDIA_ERR_SRC_NOT_SUPPORTED. Upstream Jellyfin
-        # doesn't slide-window VOD segments (TranscodeManager.cs only
-        # deletes segments at job teardown via DeleteHlsPartialStreamFiles).
+        # Safari surfaces MEDIA_ERR_SRC_NOT_SUPPORTED.
         if live_segmented?(job)
           job.cleaner = SegmentCleaner.new(job).tap(&:start)
         end

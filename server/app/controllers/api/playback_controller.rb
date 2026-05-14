@@ -120,6 +120,16 @@ class Api::PlaybackController < Api::BaseController
     if pre_decision.direct_stream?
       transcode_token_params[:video_codec] = 'copy'
       transcode_token_params[:audio_codec] = 'copy'
+      # HEVC/AV1 stream-copy must use fMP4 segments. Safari's native HLS
+      # engine rejects HEVC inside MPEG-TS (Apple's HLS spec mandates
+      # fMP4 for HEVC). Matches what upstream Jellyfin serves Safari for
+      # the same content — see the network panel comparison the user
+      # captured: jellyfin emits `-1.mp4` (init) + `N.mp4` (media
+      # fragments) and stream-copies at ~50× realtime.
+      source_video_codec = info.dig(:video, :codec).to_s.downcase
+      if %w[hevc h265 av1 av01].include?(source_video_codec)
+        transcode_token_params[:segment_container] = "mp4"
+      end
     end
 
     direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)

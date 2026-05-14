@@ -19,7 +19,7 @@ module Jellyfin
       payload = params.permit(
         :path, :video_codec, :video_bitrate, :audio_codec, :audio_bitrate,
         :max_height, :video_track, :audio_track, :subtitle_track, :subtitle_mode,
-        :segment_length, :start_time_ticks, :max_bitrate,
+        :segment_length, :segment_container, :start_time_ticks, :max_bitrate,
         # Master-playlist rendition gating — see Token payload schema.
         :subtitle_delivery, :trickplay,
         # Batch-J ffmpeg knobs surfaced as request params:
@@ -147,7 +147,7 @@ module Jellyfin
       send_file job.playlist_path, type: 'application/vnd.apple.mpegurl', disposition: 'inline'
     end
 
-    # GET /transcode/:token/:segment.ts
+    # GET /transcode/:token/:segment.(ts|mp4)
     def segment
       params_hash = decode_or_400!(params[:token]) or return
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
@@ -158,7 +158,43 @@ module Jellyfin
       if file.nil?
         return render json: { error: 'segment timeout' }, status: :gateway_timeout
       end
-      send_file file, type: 'video/mp2t', disposition: 'inline'
+      send_file file, type: segment_content_type(job), disposition: 'inline'
+    end
+
+    # GET /transcode/:token/-1.mp4 — fMP4 init segment.
+    #
+    # ffmpeg writes this once at the start of an fmp4 HLS encode (via
+    # `-hls_fmp4_init_filename -1.mp4`). The master playlist references
+    # it through `#EXT-X-MAP:URI="-1.mp4"`. Clients fetch it before any
+    # media segment so they have the codec setup boxes (moov/trak/stsd).
+    #
+    # The init file is NOT covered by `-hls_flags +temp_file`; ffmpeg
+    # writes it incrementally and only finalises it once the first
+    # media segment is being flushed. So polling on
+    # `File.exist?(init) && size > 0` raced with ffmpeg's write —
+    # `send_file` could ship a partially-written init.mp4 (missing
+    # parts of moov/trak/stsd), Safari rejected it with
+    # MEDIA_ERR_DECODE, retried, and the pattern repeated every ~6 s
+    # (each retry triggered a fresh ffmpeg startup + first-segment
+    # buffering when the previous one had already exited).
+    #
+    # Synchronise on the existence of the FIRST media segment instead.
+    # ffmpeg writes media[0] only after init has been fully flushed,
+    # so by the time `0.mp4` shows up on disk, `-1.mp4` is guaranteed
+    # complete.
+    def init_segment
+      params_hash = decode_or_400!(params[:token]) or return
+      job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
+      job.ping!
+      init_path = job.init_segment_path
+      first_seg = job.segment_path(0)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+      until init_path && File.exist?(init_path) && File.exist?(first_seg)
+        return render(json: { error: 'init segment timeout' }, status: :gateway_timeout) if
+          Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        sleep 0.05
+      end
+      send_file init_path, type: 'video/mp4', disposition: 'inline'
     end
 
     private
@@ -181,6 +217,10 @@ module Jellyfin
     def truthy?(value)
       return value if value == true || value == false
       %w[1 true yes on t].include?(value.to_s.downcase)
+    end
+
+    def segment_content_type(job)
+      job.segment_container == 'mp4' ? 'video/mp4' : 'video/mp2t'
     end
 
     def wait_for_playlist!(job, timeout: 10)
@@ -225,12 +265,17 @@ module Jellyfin
                       Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND)
       seg_len = job.segment_length_seconds
 
+      # Container is locked at job creation (see TranscodingJob#initialize)
+      # so a single token's playlist + media segments stay consistent.
+      # fMP4 jobs use `-1.mp4` as the init segment (EXT-X-MAP URI) and
+      # `N.mp4` for media fragments; mpegts uses `N.ts`.
       Jellyfin::Output::VodPlaylistGenerator.build(
         total_duration_seconds: total_seconds,
         segment_length_seconds: seg_len,
         seek_seconds: seek_seconds,
-        segment_extension: 'ts',
-        container: 'ts'
+        segment_extension: job.segment_extension,
+        container: job.segment_container,
+        init_segment_uri: job.segment_container == 'mp4' ? '-1.mp4' : nil
       )
     end
 

@@ -12,10 +12,27 @@ RSpec.describe Jellyfin::Output::CodecString do
       expect(s).to eq('avc1.640029,mp4a.40.2')
     end
 
-    it 'switches video portion for HEVC main10' do
-      s = described_class.for(video_codec: 'hevc', audio_codec: 'aac', profile: 'main10', level: 5.1)
-      expect(s).to start_with('hev1.2.4.')
-      expect(s).to end_with(',mp4a.40.2')
+    it 'emits hvc1 for HEVC main10 per Apple HLS spec, with level_idc as-is' do
+      # Apple's HLS Authoring Spec requires `hvc1.*` in CODECS when the
+      # fMP4 sample entry uses the `hvc1` tag — which our HLS muxer
+      # configures via `-tag:v hvc1`. Mismatch makes Safari reject the
+      # master with MEDIA_ERR_DECODE.
+      #
+      # HEVC codec-string level is the raw level_idc value (e.g. 120 =
+      # HEVC Level 4.0, encoded as `L120`). Callers (master_playlist_builder)
+      # pass `video_stream.level.to_i` directly. Mirrors upstream
+      # HlsCodecStringHelpers.cs:223-225.
+      s = described_class.for(video_codec: 'hevc', audio_codec: 'aac', profile: 'main10', level: 120)
+      expect(s).to eq('hvc1.2.4.L120.B0,mp4a.40.2')
+    end
+
+    it 'matches HEVC `Main 10` profile name with a space (ffprobe form)' do
+      # ffprobe reports HEVC 10-bit content as `Main 10` (with a space);
+      # RFC 6381 / Caramba code paths often use `main10` (no space).
+      # The codec-string emitter must accept both. Upstream Jellyfin's
+      # HlsCodecStringHelpers.cs:213 explicitly matches both forms.
+      s = described_class.for(video_codec: 'hevc', audio_codec: 'aac', profile: 'Main 10', level: 120)
+      expect(s).to start_with('hvc1.2.4.L120.')
     end
 
     it 'maps AC-3 / E-AC-3 to their RFC 6381 names' do

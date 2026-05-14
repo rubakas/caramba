@@ -75,6 +75,28 @@ RSpec.describe Jellyfin::Output::VodPlaylistGenerator do
       expect(out).to include('1.m4s')
     end
 
+    it 'emits #EXT-X-MAP when given an init_segment_uri' do
+      # Caramba's HEVC stream-copy path emits `-hls_fmp4_init_filename
+      # -1.mp4` and serves it through the engine's `init_segment`
+      # route. Safari needs the #EXT-X-MAP line before any media
+      # segment so it can pick up codec setup boxes.
+      out = described_class.build(
+        total_duration_seconds: 12.0,
+        segment_length_seconds: 6.0,
+        segment_extension: 'mp4',
+        container: 'mp4',
+        init_segment_uri: '-1.mp4'
+      )
+
+      expect(out).to include('#EXT-X-VERSION:7')
+      expect(out).to include('#EXT-X-MAP:URI="-1.mp4"')
+      expect(out).to include("0.mp4")
+      # EXT-X-MAP must appear BEFORE any segment EXTINF/uri.
+      map_pos = out.index('#EXT-X-MAP')
+      seg_pos = out.index('0.mp4')
+      expect(map_pos).to be < seg_pos
+    end
+
     it 'returns nil when seek meets or exceeds total duration' do
       expect(described_class.build(
         total_duration_seconds: 10.0,

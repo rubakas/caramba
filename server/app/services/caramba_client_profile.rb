@@ -25,6 +25,35 @@ class CarambaClientProfile
       apply_codec_constraints!(profile, codec_profiles)
       apply_bitrate_cap!(profile, device_profile)
 
+      # NOTE on `supports_10bit`: defaulting to true and routing HEVC
+      # 10-bit through `:direct_stream` (fMP4 stream-copy) sounded
+      # right — that's what upstream Jellyfin does (jellyfin-web's
+      # `hevcProfiles = 'main|main 10'`). The engine has the full fMP4
+      # plumbing wired in: token carries `segment_container=mp4`, the
+      # HLS muxer gets `-tag:v hvc1 -hls_segment_type fmp4
+      # -hls_fmp4_init_filename -1.mp4`, the variant playlist emits
+      # `#EXT-X-MAP:URI="-1.mp4"`, the controller serves `.mp4` segments
+      # and the init through dedicated routes.
+      #
+      # The blocker is the playlist's `#EXTINF` values. ffmpeg's HLS
+      # muxer cuts stream-copy segments at SOURCE keyframes — for x265
+      # rips with adaptive GOP, segment durations come out 9.1s, 4.0s,
+      # 8.7s, 8.3s, ... wildly variable. Our hand-built
+      # `VodPlaylistGenerator` writes equal `#EXTINF:6.0` per segment.
+      # Safari sees the playlist mismatch and rejects with
+      # MEDIA_ERR_DECODE before fetching any media segment.
+      #
+      # The proper fix matches upstream `DynamicHlsPlaylistGenerator.
+      # ComputeSegments` (jellyfin/MediaEncoding.Hls/Playlist/...):
+      # pre-extract source keyframes via ffprobe, cache them, build
+      # the playlist from real keyframe times. On a 22-min HEVC MKV
+      # mounted from network storage ffprobe takes ~34s; we'd cache
+      # per (path,mtime) so it's a once-per-source cost. Until that
+      # ships, keep `supports_10bit = false` so HEVC 10-bit goes
+      # through `:transcode` (h264_videotoolbox to mpegts) which the
+      # earlier hwaccel + `-allow_sw 1` fixes already got to ~6x
+      # realtime — first segment delivered in ~1 second.
+
       profile
     end
 

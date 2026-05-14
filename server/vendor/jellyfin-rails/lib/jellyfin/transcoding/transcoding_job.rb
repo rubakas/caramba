@@ -6,7 +6,8 @@ module Jellyfin
     # Transcoding/TranscodeManager.cs#TranscodingJob — the subset needed for HLS.
     class TranscodingJob
       attr_reader :id, :params, :dir, :playlist_path, :segment_template,
-                  :cancellation_token
+                  :cancellation_token, :segment_container, :segment_extension,
+                  :init_segment_path
       attr_accessor :pid, :started_at, :last_ping_at, :stderr_path,
                     :restart_count, :cleaner, :throttler,
                     :start_segment, :last_served_segment, :ref_count,
@@ -20,7 +21,17 @@ module Jellyfin
         @dir = File.join(root_dir, id)
         FileUtils.mkdir_p(@dir)
         @playlist_path = File.join(@dir, 'master.m3u8')
-        @segment_template = File.join(@dir, '%d.ts')
+        # Segment container: 'ts' = MPEG-TS (h264/aac path), 'mp4' = fMP4
+        # (HEVC/AV1 stream-copy path, mirrors what upstream Jellyfin
+        # serves Safari for HEVC content — see network panel comparison).
+        @segment_container = (params[:segment_container] || 'ts').to_s
+        @segment_extension = (@segment_container == 'mp4') ? 'mp4' : 'ts'
+        @segment_template = File.join(@dir, "%d.#{@segment_extension}")
+        # `-1.mp4` is the canonical fMP4 init segment name (matches the
+        # `EndpointPrefix-1{ext}` URI upstream Jellyfin emits in its
+        # master playlist's `#EXT-X-MAP`). ffmpeg writes this only for
+        # fmp4 jobs.
+        @init_segment_path = (@segment_container == 'mp4') ? File.join(@dir, '-1.mp4') : nil
         @stderr_path = File.join(@dir, 'ffmpeg.log')
         @started_at = nil
         @last_ping_at = monotonic_now
@@ -127,7 +138,7 @@ module Jellyfin
       end
 
       def segment_path(n)
-        File.join(dir, "#{n}.ts")
+        File.join(dir, "#{n}.#{segment_extension}")
       end
 
       private

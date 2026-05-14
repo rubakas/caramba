@@ -31,7 +31,7 @@ module Jellyfin
       # `total - seek` worth of content). `segment_length_seconds` matches
       # the value passed to ffmpeg's `-hls_time`.
       def build(total_duration_seconds:, segment_length_seconds:, seek_seconds: 0,
-                segment_extension: 'ts', container: 'ts')
+                segment_extension: 'ts', container: 'ts', init_segment_uri: nil)
         remaining = [ total_duration_seconds.to_f - seek_seconds.to_f, 0.0 ].max
         return nil if remaining <= 0 || segment_length_seconds.to_f <= 0
 
@@ -49,6 +49,13 @@ module Jellyfin
         lines << "#EXT-X-TARGETDURATION:#{segment_length_seconds.to_f.ceil}"
         lines << '#EXT-X-MEDIA-SEQUENCE:0'
         lines << '#EXT-X-INDEPENDENT-SEGMENTS'
+
+        # fMP4 init segment reference — points at ffmpeg's
+        # `-hls_fmp4_init_filename` output. Mirrors upstream
+        # DynamicHlsPlaylistGenerator.cs:72-81.
+        if init_segment_uri
+          lines << %(#EXT-X-MAP:URI="#{init_segment_uri}")
+        end
 
         durations.each_with_index do |d, i|
           lines << format('#EXTINF:%.6f,', d)

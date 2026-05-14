@@ -14,17 +14,17 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
 
   describe '.autodetect' do
     it 'picks VideoToolbox when available' do
-      c = caps_for(encoders: ['h264_videotoolbox'], hwaccels: ['videotoolbox'])
+      c = caps_for(encoders: [ 'h264_videotoolbox' ], hwaccels: [ 'videotoolbox' ])
       expect(described_class.autodetect(c)).to eq(Jellyfin::Encoding::Hwaccel::Videotoolbox)
     end
 
     it 'picks VAAPI when available and VideoToolbox is not' do
-      c = caps_for(encoders: ['h264_vaapi'], hwaccels: ['vaapi'])
+      c = caps_for(encoders: [ 'h264_vaapi' ], hwaccels: [ 'vaapi' ])
       expect(described_class.autodetect(c)).to eq(Jellyfin::Encoding::Hwaccel::Vaapi)
     end
 
     it 'returns nil when nothing is available' do
-      c = caps_for(encoders: ['libx264'])
+      c = caps_for(encoders: [ 'libx264' ])
       expect(described_class.autodetect(c)).to be_nil
     end
   end
@@ -59,20 +59,36 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       job = make_job
       # caps in this fixture lists tonemap_videotoolbox but NOT scale_vt.
       expect(described_class.decode_args(job, caps)).to eq(
-        ['-hwaccel', 'videotoolbox']
+        [ '-hwaccel', 'videotoolbox' ]
       )
     end
 
-    it 'emits the videotoolbox_vld format only when both tonemap_videotoolbox AND scale_vt are present' do
+    it 'emits the videotoolbox_vld format only when THIS JOB will actually run on the HW filter chain' do
+      # Per-job gate: even with `tonemap_videotoolbox` + `scale_vt` in
+      # the build (full_chain_supported? = true), we ONLY pass
+      # `-hwaccel_output_format videotoolbox_vld` when the job's filter
+      # chain will actually consume HW surfaces. For an SDR source
+      # there's no HW filter — leave frames in system memory so the SW
+      # filter chain + `h264_videotoolbox`'s CPU input path can consume
+      # them. Mirrors upstream's `useHwSurface` gate.
       full_caps = Class.new {
         def supports_hwaccel?(_) = true
         def supports_filter?(name) = %w[tonemap_videotoolbox scale_vt].include?(name)
         def supports_encoder?(name) = %w[h264_videotoolbox].include?(name)
         def supports_decoder?(_) = true
       }.new
-      job = make_job
-      expect(described_class.decode_args(job, full_caps)).to eq(
-        ['-hwaccel', 'videotoolbox', '-hwaccel_output_format', 'videotoolbox_vld']
+
+      # SDR job: filter_chain returns nil → no format flag.
+      sdr = make_job(hdr: false)
+      expect(described_class.decode_args(sdr, full_caps)).to eq(
+        [ '-hwaccel', 'videotoolbox' ]
+      )
+
+      # HDR job: filter_chain returns tonemap_videotoolbox → format flag.
+      hdr = make_job(hdr: true)
+      hdr.options.enable_tonemapping = true
+      expect(described_class.decode_args(hdr, full_caps)).to eq(
+        [ '-hwaccel', 'videotoolbox', '-hwaccel_output_format', 'videotoolbox_vld' ]
       )
     end
 
@@ -89,7 +105,7 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
         video_range: hdr ? 'HDR' : 'SDR',
         video_range_type: hdr ? 'HDR10' : 'SDR'
       )
-      source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [v])
+      source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v ])
       Jellyfin::Encoding::EncodingJobInfo.new(media_source: source)
     end
   end

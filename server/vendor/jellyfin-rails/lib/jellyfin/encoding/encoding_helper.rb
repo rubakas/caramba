@@ -129,7 +129,21 @@ module Jellyfin
         out = [ '-c:v', encoder ]
         out += backend ? backend.encoder_args(job) : quality_args(job, encoder)
         out += rate_control_args(job)
-        out += pixel_format_args(job) unless hw_encoder # HW encoders pick their own pixel format
+        # h264 mainstream is 8-bit; h264_videotoolbox + libx264 both need
+        # 8-bit input. The "HW encoder picks its own format" intent was
+        # right for 8-bit→8-bit pivots, but with a 10-bit source (HEVC
+        # Main 10, the dominant rip format today) ffmpeg hands the HW
+        # encoder a 10-bit `yuv420p10le` frame, h264_videotoolbox
+        # refuses to consume it, and `-allow_sw 1` silently falls back
+        # to libx264 — at ~1× realtime, multi-threaded, with the user
+        # seeing `190% CPU` in `ps`. Forcing `-pix_fmt yuv420p` makes
+        # ffmpeg auto-insert the 10→8 conversion ahead of the encoder,
+        # so the HW pipeline stays on h264_videotoolbox at ~6× realtime
+        # (verified on the user's `Office S01E03` HEVC 10-bit MKV).
+        # Skip only when target codec is one where 10-bit is the
+        # ordinary output (h265/hevc, av1) — they pick a matching
+        # pixel format themselves.
+        out += pixel_format_args(job) unless allows_10bit_output?(job.output_video_codec)
         out += keyframe_args(job)
         out += hdr_passthrough_args(job)
 
@@ -233,6 +247,18 @@ module Jellyfin
 
       def pixel_format_args(_job)
         [ '-pix_fmt', 'yuv420p' ]
+      end
+
+      # True for output codecs whose ordinary deployment is 10-bit and
+      # which pick a matching pixel format on their own. Used to gate
+      # `-pix_fmt yuv420p` so we don't force-downconvert 10-bit-native
+      # output. h264/AVC mainstream is 8-bit only (Hi10P is a niche
+      # profile most decoders refuse), so the cap applies to it; h265
+      # and av1 carry 10-bit natively.
+      def allows_10bit_output?(output_codec)
+        %w[hevc h265 hevc_videotoolbox hevc_nvenc hevc_qsv hevc_amf
+           av1 av01 libsvtav1 libaom-av1 av1_nvenc av1_qsv av1_amf]
+          .include?(output_codec.to_s.downcase)
       end
 
       def keyframe_args(job)
@@ -398,20 +424,51 @@ module Jellyfin
         # finishes. Matches upstream's
         # `-hls_playlist_type {(isEventPlaylist ? "event" : "vod")}`.
         playlist_type = live_segmented?(job) ? 'live' : 'vod'
+        # Segment container: mpegts (default, for h264) or fmp4 (HEVC /
+        # AV1 stream-copy path, matching what upstream Jellyfin serves
+        # Safari for HEVC content). fMP4 needs an init segment + the
+        # `-tag:v hvc1` muxer hint so Apple players accept the HEVC
+        # sample entry — without `-tag:v hvc1`, ffmpeg writes `hev1`
+        # which Safari rejects (output ends up as 24-byte stub fmp4
+        # fragments).
+        container = job_segment_container(job)
+        if container == 'mp4'
+          # `-tag:v hvc1` must precede the muxer args. It's harmless
+          # for non-HEVC codecs (the muxer just ignores it), so we
+          # always emit it on the fmp4 path.
+          args.concat([ '-tag:v', 'hvc1' ])
+        end
         args.concat([
           '-f', 'hls',
           '-hls_time', job.segment_length.to_s,
           '-hls_playlist_type', playlist_type,
           '-hls_list_size', '0',
           '-hls_flags', 'independent_segments+temp_file',
-          '-hls_segment_type', 'mpegts',
-          '-hls_segment_filename', segment_template
+          '-hls_segment_type', container == 'mp4' ? 'fmp4' : 'mpegts'
         ])
+        if container == 'mp4'
+          # Init segment filename is relative to the output directory;
+          # ffmpeg writes it alongside the media segments. Matches the
+          # `EXT-X-MAP:URI="-1.mp4"` the engine's master playlist will
+          # emit and the route the controller serves it through.
+          args.concat([ '-hls_fmp4_init_filename', '-1.mp4' ])
+        end
+        args.concat([ '-hls_segment_filename', segment_template ])
         # AES-128 encryption opt-in. EncodingOptions#hls_encryption_material is
         # set by the controller / Manager when the request asked for it.
         args.concat(Jellyfin::Output::HlsEncryption.output_args(job.options.hls_encryption_material))
         args << playlist_path
         args
+      end
+
+      # Looks up the per-job segment container preference. Backed by
+      # `TranscodingJob#segment_container` when the caller is the real
+      # manager; falls back to `params[:segment_container]` for direct
+      # `EncodingJobInfo` callers (tests, ad-hoc CLI use).
+      def job_segment_container(job)
+        return job.segment_container if job.respond_to?(:segment_container) && job.segment_container
+        params = job.respond_to?(:params) ? job.params : nil
+        (params && params[:segment_container]).to_s.empty? ? 'ts' : params[:segment_container].to_s
       end
 
       # Mirrors EncodingJobInfo.IsSegmentedLiveStream:
