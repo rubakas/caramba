@@ -117,4 +117,93 @@ RSpec.describe Jellyfin::Output::VodPlaylistGenerator do
       expect(segs).to eq([ 6.0, 6.0 ])
     end
   end
+
+  describe '.compute_segments_from_keyframes' do
+    # Mirrors upstream DynamicHlsPlaylistGenerator.ComputeSegments.
+    # The walk emits a new segment cut every time the next keyframe is
+    # the first one to cross the running `desired_cut_time` threshold.
+    it 'cuts at the first keyframe past each segment boundary' do
+      # Keyframes at 0, 2.5, 5, 7.5, 10, 12.5 — typical streaming GOP.
+      segs = described_class.compute_segments_from_keyframes(
+        keyframe_seconds: [ 0, 2.5, 5, 7.5, 10, 12.5 ],
+        total_duration_seconds: 14.0,
+        seek_seconds: 0,
+        segment_length_seconds: 6.0
+      )
+      # First cut at 7.5 (first kf >= 6) → segment 0 length 7.5s.
+      # Next at 12.5 (first kf >= 13.5? no, 12.5 < 13.5) — wait,
+      # desired_cut after first cut = 6 + 6 = 12, so 12.5 >= 12 cuts.
+      # Length: 12.5 - 7.5 = 5s. Tail: 14.0 - 12.5 = 1.5s.
+      expect(segs).to eq([ 7.5, 5.0, 1.5 ])
+    end
+
+    it 'reproduces the variable-segment pattern an x265 rip produces' do
+      # Reproduces the durations the user's comment lists as the typical
+      # x265-rip adaptive-GOP shape: 9.1s, 4.0s, 8.7s, 8.3s, ...
+      # Keyframes at those running totals.
+      kfs = [ 0, 9.1, 13.1, 21.8, 30.1 ]
+      segs = described_class.compute_segments_from_keyframes(
+        keyframe_seconds: kfs,
+        total_duration_seconds: 30.1,
+        seek_seconds: 0,
+        segment_length_seconds: 6.0
+      )
+      expect(segs.map { |s| s.round(1) }).to eq([ 9.1, 4.0, 8.7, 8.3 ])
+    end
+
+    it 'shifts keyframe coordinates into the post-seek timeline' do
+      # ffmpeg `-ss 280` snaps to the first keyframe at/after 280s.
+      # The playlist's segment 0 then sits at t=0 in the post-seek view.
+      kfs = [ 0, 100, 200, 280, 286.5, 293, 299.5 ]
+      segs = described_class.compute_segments_from_keyframes(
+        keyframe_seconds: kfs,
+        total_duration_seconds: 300.0,
+        seek_seconds: 280.0,
+        segment_length_seconds: 6.0
+      )
+      # Post-seek kfs: [0, 6.5, 13.0, 19.5]
+      # Cuts at 6.5, 13.0, 19.5 (each ≥ 6, 12, 18 respectively).
+      # Lengths: 6.5, 6.5, 6.5. Tail: 20.0 - 19.5 = 0.5.
+      expect(segs.map { |s| s.round(1) }).to eq([ 6.5, 6.5, 6.5, 0.5 ])
+    end
+
+    it 'returns [] when seek skips past every keyframe' do
+      segs = described_class.compute_segments_from_keyframes(
+        keyframe_seconds: [ 0, 5, 10 ],
+        total_duration_seconds: 15.0,
+        seek_seconds: 20.0,
+        segment_length_seconds: 6.0
+      )
+      expect(segs).to eq([])
+    end
+  end
+
+  describe '.build with keyframe_seconds' do
+    it 'derives EXTINF from real keyframe boundaries' do
+      out = described_class.build(
+        total_duration_seconds: 14.0,
+        segment_length_seconds: 6.0,
+        keyframe_seconds: [ 0, 2.5, 5, 7.5, 10, 12.5 ]
+      )
+
+      # First segment is 7.5s (longer than nominal 6.0); TARGETDURATION
+      # must round up the MAX segment length — Safari rejects a playlist
+      # whose target is shorter than any EXTINF.
+      expect(out).to include("#EXTINF:7.500000,\n0.ts")
+      expect(out).to include("#EXTINF:5.000000,\n1.ts")
+      expect(out).to include("#EXTINF:1.500000,\n2.ts")
+      expect(out).to include('#EXT-X-TARGETDURATION:8')
+    end
+
+    it 'falls back to equal-length when keyframe_seconds is empty' do
+      out = described_class.build(
+        total_duration_seconds: 12.0,
+        segment_length_seconds: 6.0,
+        keyframe_seconds: []
+      )
+      expect(out).to include("#EXTINF:6.000000,\n0.ts")
+      expect(out).to include("#EXTINF:6.000000,\n1.ts")
+      expect(out).to include('#EXT-X-TARGETDURATION:6')
+    end
+  end
 end

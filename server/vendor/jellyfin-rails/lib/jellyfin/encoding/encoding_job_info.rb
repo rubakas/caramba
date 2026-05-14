@@ -23,6 +23,9 @@ module Jellyfin
         output_video_bitrate: 2_000_000,
         output_audio_sample_rate: 48_000,
         segment_length: 6,
+        # mpegts is the historical default; HEVC/AV1 stream-copy paths
+        # override to 'mp4' so ffmpeg emits fMP4 segments + the init.
+        segment_container: 'ts',
         subtitle_method: :soft, # :soft | :encode (burn) | :embedded
         copy_timestamps: false,
         output_height: nil,
@@ -43,6 +46,12 @@ module Jellyfin
                     :output_height,
                     :output_width,
                     :segment_length,
+                    # 'ts' (default, MPEG-TS) or 'mp4' (fMP4 — required
+                    # for HEVC/AV1 stream-copy to Safari per upstream
+                    # DynamicHlsController.cs:1596). Determines the
+                    # `-hls_segment_type`, `-tag:v hvc1`, and
+                    # `-hls_fmp4_init_filename` args downstream.
+                    :segment_container,
                     :subtitle_method,
                     :copy_timestamps,
                     :start_time_ticks,

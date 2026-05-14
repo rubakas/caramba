@@ -73,9 +73,13 @@ module Jellyfin
       end
 
       def current_head
-        files = Dir.glob(File.join(@job.dir, '*.ts'))
+        ext = @job.respond_to?(:segment_extension) ? @job.segment_extension : 'ts'
+        files = Dir.glob(File.join(@job.dir, "*.#{ext}"))
         return nil if files.empty?
-        files.map { |f| File.basename(f, '.ts').to_i }.max
+        # The fMP4 init segment is the literal file `-1.mp4`; its
+        # `File.basename(_, '.mp4').to_i` parses as `-1` and would
+        # otherwise drag the head index below 0.
+        files.map { |f| File.basename(f, ".#{ext}").to_i }.reject { |n| n.negative? }.max
       end
 
       def pause!

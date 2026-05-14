@@ -377,9 +377,11 @@ module Jellyfin
       def restart_at_segment(job, segment_n)
         job.kill!
         stop_job_internals(job)
-        # Wipe stale segments — they were produced at the old start offset and
-        # their numbering wraps once we restart at a new -ss.
-        Dir.glob(File.join(job.dir, '*.ts')).each { |f| FileUtils.rm_f(f) }
+        # Wipe stale segments + the init segment — they were produced at
+        # the old start offset and their numbering wraps once we restart
+        # at a new -ss. Glob uses the job's current segment extension so
+        # fMP4 jobs clean up `.mp4` (incl. the `-1.mp4` init segment).
+        Dir.glob(File.join(job.dir, "*.#{job.segment_extension}")).each { |f| FileUtils.rm_f(f) }
         FileUtils.rm_f(job.playlist_path)
         job.restart_count += 1
         job.rotate_log!
@@ -389,11 +391,15 @@ module Jellyfin
       end
 
       def current_segment_for(job)
-        # Inspect the segment dir for the highest-numbered .ts file. This is
-        # cheaper than parsing the playlist and accurate to within a segment.
-        files = Dir.glob(File.join(job.dir, '*.ts'))
-        return job.start_segment if files.empty?
-        files.map { |f| File.basename(f, '.ts').to_i }.max + job.start_segment
+        # Inspect the segment dir for the highest-numbered media segment.
+        # Cheaper than parsing the playlist and accurate to within a
+        # segment. fMP4 jobs use `.mp4` segments — and skip `-1.mp4`
+        # (the init segment, which `.to_i` would parse as -1).
+        ext = job.segment_extension
+        files = Dir.glob(File.join(job.dir, "*.#{ext}"))
+        nums = files.map { |f| File.basename(f, ".#{ext}").to_i }.reject(&:negative?)
+        return job.start_segment if nums.empty?
+        nums.max + job.start_segment
       end
 
       # Build ffmpeg args via the EncodingHelper port. Falls back to the hand-
@@ -417,6 +423,14 @@ module Jellyfin
           output_audio_channels: job.params[:audio_channels]&.to_i,
           output_height: job.params[:max_height]&.to_i,
           segment_length: (job.params[:segment_length] || Jellyfin::Rails.configuration.segment_length).to_i,
+          # Without this, hls_output_args couldn't see the
+          # container preference and silently fell back to mpegts
+          # — even when the TranscodingJob had segment_container=mp4,
+          # the EncodingJobInfo handed to EncodingHelper didn't.
+          # Effect: ffmpeg wrote .ts data into `*.mp4` filenames, no
+          # `-1.mp4` init segment was produced, and the init_segment
+          # endpoint timed out at 10s.
+          segment_container: job.segment_container,
           start_time_ticks: seek_ticks_for(job),
           video_stream: select_video_stream(source, job.params[:video_track]),
           audio_stream: select_audio_stream(source, job.params[:audio_track]),

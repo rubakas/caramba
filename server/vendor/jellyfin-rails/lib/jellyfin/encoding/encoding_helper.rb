@@ -377,20 +377,30 @@ module Jellyfin
          '-muxdelay', '0', '-muxpreload', '0' ]
       end
 
+      # Segment container is locked at job creation; pre-compute so the
+      # bitstream-filter + muxer-tag branches see the same value.
       def hls_output_args(job, playlist_path:, segment_template:)
-        # The `h264_mp4toannexb` bitstream filter converts MP4-style avcC
-        # (length-prefixed NALs) to Annex B (start-code-prefixed) for the
-        # MPEG-TS muxer. It MUST NOT be applied when we're re-encoding —
-        # software (libx264) and HW encoders (h264_videotoolbox, etc.)
-        # output Annex B for `-f hls`/`-f mpegts` natively, so applying
-        # the filter again double-converts the bitstream and MSE rejects
-        # the segments with MEDIA_ERR_SRC_NOT_SUPPORTED (browser shows
-        # "source not supported"). Upstream Jellyfin only emits the
-        # filter inside the stream-copy branch of
-        # EncodingHelper.GetProgressiveVideoArguments
-        # (MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs); we
-        # mirror that here by gating on `stream_copy_video?`.
-        args = if job.stream_copy_video?
+        container = job_segment_container(job)
+
+        # The `{h264,hevc}_mp4toannexb` bitstream filter converts MP4-
+        # style length-prefixed NALs into Annex B (start-code-prefixed)
+        # so the MPEG-TS muxer can frame them. Two gates, both from
+        # upstream EncodingHelper.GetProgressiveVideoArguments
+        # (MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs:7633-
+        # 7644):
+        #
+        #   1. Stream-copy only. Software (libx264) and HW encoders
+        #      (h264_videotoolbox, ...) already emit Annex B for
+        #      `-f hls`/`-f mpegts`; running the filter again double-
+        #      converts and Safari/MSE reject the segments with
+        #      MEDIA_ERR_SRC_NOT_SUPPORTED.
+        #
+        #   2. MPEG-TS output only. fMP4 segments KEEP the length-
+        #      prefixed NAL form, so applying the Annex-B filter on the
+        #      fMP4 path produces malformed fragments — Safari rejects
+        #      with MEDIA_ERR_DECODE before the first frame. Upstream
+        #      gates on `state.OutputContainer == "ts"`.
+        args = if job.stream_copy_video? && container != 'mp4'
                  BitstreamFilters.for(
                    target_container: 'hls',
                    video_codec: job.video_stream&.codec || job.output_video_codec,
@@ -431,7 +441,6 @@ module Jellyfin
         # sample entry — without `-tag:v hvc1`, ffmpeg writes `hev1`
         # which Safari rejects (output ends up as 24-byte stub fmp4
         # fragments).
-        container = job_segment_container(job)
         if container == 'mp4'
           # `-tag:v hvc1` must precede the muxer args. It's harmless
           # for non-HEVC codecs (the muxer just ignores it), so we
@@ -452,6 +461,14 @@ module Jellyfin
           # `EXT-X-MAP:URI="-1.mp4"` the engine's master playlist will
           # emit and the route the controller serves it through.
           args.concat([ '-hls_fmp4_init_filename', '-1.mp4' ])
+          # `movflags=+frag_discont` mirrors upstream
+          # DynamicHlsController.cs:1611 — without it the fMP4 muxer
+          # rewrites first-frag DTS/PTS to start from 0 (losing the
+          # `-copyts` chain we set up above) and Safari refuses to
+          # decode because the playlist's #EXTINF cannot match a
+          # zero-based segment 0 against the source's
+          # encoder-pre-roll-shifted first keyframe.
+          args.concat([ '-hls_segment_options', 'movflags=+frag_discont' ])
         end
         args.concat([ '-hls_segment_filename', segment_template ])
         # AES-128 encryption opt-in. EncodingOptions#hls_encryption_material is

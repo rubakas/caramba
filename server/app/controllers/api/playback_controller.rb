@@ -82,6 +82,18 @@ class Api::PlaybackController < Api::BaseController
     client_profile = CarambaClientProfile.build(device_profile_raw)
     media_source = Jellyfin::MediaEncoder::Probe.from_path(file_path)
 
+    # Safety gate: HEVC/AV1 `:direct_stream` produces fMP4 segments cut on
+    # SOURCE keyframes, so the variant playlist's `#EXTINF` values must
+    # come from a real keyframe index. When the source is in a container
+    # we don't index (anything but .mkv right now), drop the codec from
+    # the client profile so Decision falls through to `:transcode`
+    # instead of shipping a playlist that disagrees with ffmpeg's
+    # `-c copy` output (which would surface as Safari MEDIA_ERR_DECODE).
+    # Mirrors upstream Jellyfin's `IsRemuxingVideo` gating in
+    # DynamicHlsPlaylistGenerator.cs:38 — they only build a keyframe-
+    # based playlist when a working extractor is available.
+    downgrade_remux_when_no_keyframes!(client_profile, media_source, file_path)
+
     # Decide the delivery method BEFORE encoding tokens — the token bakes
     # in `video_codec` / `audio_codec`, which determines whether the
     # engine re-encodes (libx264/aac defaults) or stream-copies. For a
@@ -118,8 +130,8 @@ class Api::PlaybackController < Api::BaseController
       trickplay: hls_trickplay?(device_profile_raw) || nil
     }.compact
     if pre_decision.direct_stream?
-      transcode_token_params[:video_codec] = 'copy'
-      transcode_token_params[:audio_codec] = 'copy'
+      transcode_token_params[:video_codec] = "copy"
+      transcode_token_params[:audio_codec] = "copy"
       # HEVC/AV1 stream-copy must use fMP4 segments. Safari's native HLS
       # engine rejects HEVC inside MPEG-TS (Apple's HLS spec mandates
       # fMP4 for HEVC). Matches what upstream Jellyfin serves Safari for
@@ -375,6 +387,22 @@ class Api::PlaybackController < Api::BaseController
     when "ass" then "ssa"
     when "hdmv_pgs_subtitle" then "pgssub"
     else codec.to_s.downcase
+    end
+  end
+
+  # Source codecs we'd stream-copy through the keyframe-indexed path.
+  # MKV Cues give us a real keyframe list per source; without that the
+  # variant playlist would lie about segment durations. Aliases mirror
+  # the equivalence groups in `Jellyfin::Playback::Decision#codec_alias?`
+  # so we don't leave a synonym in the profile after the downgrade.
+  REMUX_CODECS_REQUIRING_KEYFRAMES = %w[hevc h265 h.265 av1 av01].freeze
+
+  def downgrade_remux_when_no_keyframes!(profile, media_source, file_path)
+    codec = media_source.default_video_stream&.codec.to_s.downcase
+    return unless REMUX_CODECS_REQUIRING_KEYFRAMES.include?(codec)
+    return if Jellyfin::Keyframes::Extractor.for(file_path)
+    profile.video_codecs = profile.video_codecs.reject do |c|
+      REMUX_CODECS_REQUIRING_KEYFRAMES.include?(c.to_s.downcase)
     end
   end
 

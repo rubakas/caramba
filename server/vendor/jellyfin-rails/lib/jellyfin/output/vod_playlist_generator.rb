@@ -30,23 +30,51 @@ module Jellyfin
       # is the offset ffmpeg is starting from (so the playlist only covers
       # `total - seek` worth of content). `segment_length_seconds` matches
       # the value passed to ffmpeg's `-hls_time`.
+      #
+      # When `keyframe_seconds` is supplied (sorted ascending, in source
+      # timeline seconds), the playlist's `#EXTINF` values are derived
+      # from real source keyframe boundaries instead of nominal equal
+      # lengths. That branch is REQUIRED for stream-copy: ffmpeg's HLS
+      # muxer cuts `-c copy` output at source keyframes, producing
+      # variable durations (9.1s, 4.0s, 8.7s, ...); a playlist that
+      # claims every segment is exactly 6.0s long causes Safari's native
+      # HLS engine to throw MEDIA_ERR_DECODE the moment a segment's PTS
+      # disagrees with the advertised duration. Mirrors upstream
+      # DynamicHlsPlaylistGenerator.cs:34-47 (`IsRemuxingVideo` branch).
       def build(total_duration_seconds:, segment_length_seconds:, seek_seconds: 0,
-                segment_extension: 'ts', container: 'ts', init_segment_uri: nil)
+                segment_extension: 'ts', container: 'ts', init_segment_uri: nil,
+                keyframe_seconds: nil)
         remaining = [ total_duration_seconds.to_f - seek_seconds.to_f, 0.0 ].max
         return nil if remaining <= 0 || segment_length_seconds.to_f <= 0
 
-        durations = compute_equal_length_segments(remaining, segment_length_seconds.to_f)
+        durations = if keyframe_seconds && !keyframe_seconds.empty?
+                      compute_segments_from_keyframes(
+                        keyframe_seconds: keyframe_seconds,
+                        total_duration_seconds: total_duration_seconds.to_f,
+                        seek_seconds: seek_seconds.to_f,
+                        segment_length_seconds: segment_length_seconds.to_f
+                      )
+        else
+                      compute_equal_length_segments(remaining, segment_length_seconds.to_f)
+        end
+
+        return nil if durations.empty?
 
         # HLS protocol version: 3 for mpegts, 7 for fmp4 (#EXT-X-MAP requires
         # version 6+; fmp4 segments require version 7). Mirrors
         # DynamicHlsPlaylistGenerator.cs:52.
         hls_version = container.to_s == 'mp4' ? 7 : 3
+        # TARGETDURATION must be >= every #EXTINF. With variable
+        # keyframe-derived durations the max can exceed the nominal
+        # `segment_length_seconds`, so we ceil(max) rather than the
+        # nominal value. Mirrors DynamicHlsPlaylistGenerator.cs:63.
+        target_duration = durations.max.to_f.ceil
 
         lines = []
         lines << '#EXTM3U'
         lines << '#EXT-X-PLAYLIST-TYPE:VOD'
         lines << "#EXT-X-VERSION:#{hls_version}"
-        lines << "#EXT-X-TARGETDURATION:#{segment_length_seconds.to_f.ceil}"
+        lines << "#EXT-X-TARGETDURATION:#{target_duration}"
         lines << '#EXT-X-MEDIA-SEQUENCE:0'
         lines << '#EXT-X-INDEPENDENT-SEGMENTS'
 
@@ -75,6 +103,47 @@ module Jellyfin
         out = Array.new(whole, segment_length_seconds)
         # 1ms guard against a near-zero tail segment that some demuxers reject.
         out << remainder if remainder > 0.001
+        out
+      end
+
+      # Mirrors ComputeSegments in DynamicHlsPlaylistGenerator.cs:155-186.
+      # Walks the sorted keyframe list emitting a segment cut whenever
+      # the next keyframe crosses `desired_cut_time`. `last` tracks the
+      # previous cut so each #EXTINF is `keyframe - last`. The trailing
+      # remainder (last keyframe → end of source) is emitted as a final
+      # short segment.
+      #
+      # When ffmpeg is started with `-ss <seek_seconds>`, segment 0 of
+      # its HLS output corresponds to the first source keyframe at or
+      # after `seek_seconds`. We translate the keyframe timeline into a
+      # post-seek coordinate system before computing cuts so durations
+      # match what the muxer will produce.
+      def compute_segments_from_keyframes(keyframe_seconds:, total_duration_seconds:,
+                                          seek_seconds:, segment_length_seconds:)
+        # Drop keyframes the seek skips over, then re-base to t=0.
+        adjusted = keyframe_seconds.drop_while { |k| k.to_f < seek_seconds.to_f }
+        adjusted = adjusted.map { |k| k.to_f - seek_seconds.to_f }
+        return [] if adjusted.empty?
+
+        # If the source ends before the last keyframe we know about
+        # (mis-muxed file or rounding), treat the last keyframe as the
+        # implied end. Mirrors upstream's bounds correction at
+        # DynamicHlsPlaylistGenerator.cs:157-160.
+        effective_total = [ total_duration_seconds.to_f - seek_seconds.to_f, adjusted.last ].max
+
+        out = []
+        last_cut = 0.0
+        desired_cut = segment_length_seconds.to_f
+        adjusted.each do |k|
+          next if k <= last_cut
+          if k >= desired_cut
+            out << (k - last_cut)
+            last_cut = k
+            desired_cut += segment_length_seconds.to_f
+          end
+        end
+        tail = effective_total - last_cut
+        out << tail if tail > 0.001
         out
       end
     end

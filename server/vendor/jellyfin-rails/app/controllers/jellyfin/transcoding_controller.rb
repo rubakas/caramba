@@ -6,6 +6,7 @@ require 'jellyfin/media_encoder/probe'
 require 'jellyfin/output/master_playlist_builder'
 require 'jellyfin/output/vod_playlist_generator'
 require 'jellyfin/encoding/encoding_job_info'
+require 'jellyfin/keyframes/extractor'
 
 module Jellyfin
   class TranscodingController < ApplicationController
@@ -265,6 +266,18 @@ module Jellyfin
                       Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND)
       seg_len = job.segment_length_seconds
 
+      # For stream-copy video, segment boundaries fall on source
+      # keyframes, so the playlist's `#EXTINF` values have to match the
+      # source's real keyframe intervals — equal-length segments break
+      # Safari with MEDIA_ERR_DECODE on the first PTS mismatch. The
+      # extractor reads the MKV Cues block directly (no packet scan),
+      # so this stays sub-millisecond on first request. Mirrors upstream
+      # DynamicHlsPlaylistGenerator.cs:34-47 (`IsRemuxingVideo` branch).
+      keyframe_seconds = nil
+      if params_hash[:video_codec].to_s == 'copy'
+        keyframe_seconds = Jellyfin::Keyframes::Extractor.for(params_hash[:path])&.keyframe_seconds
+      end
+
       # Container is locked at job creation (see TranscodingJob#initialize)
       # so a single token's playlist + media segments stay consistent.
       # fMP4 jobs use `-1.mp4` as the init segment (EXT-X-MAP URI) and
@@ -275,7 +288,8 @@ module Jellyfin
         seek_seconds: seek_seconds,
         segment_extension: job.segment_extension,
         container: job.segment_container,
-        init_segment_uri: job.segment_container == 'mp4' ? '-1.mp4' : nil
+        init_segment_uri: job.segment_container == 'mp4' ? '-1.mp4' : nil,
+        keyframe_seconds: keyframe_seconds
       )
     end
 

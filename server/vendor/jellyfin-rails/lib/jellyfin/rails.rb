@@ -116,6 +116,9 @@ require 'jellyfin/playback/decision'
 require 'jellyfin/playback/remux_args'
 require 'jellyfin/playback/media_info_helper'
 require 'jellyfin/playback/stream_state'
+require 'jellyfin/keyframes/matroska_extractor'
+require 'jellyfin/keyframes/cache'
+require 'jellyfin/keyframes/extractor'
 require 'jellyfin/rails/engine' if defined?(::Rails)
 
 module Jellyfin
