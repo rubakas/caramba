@@ -101,7 +101,21 @@ class Api::PlaybackController < Api::BaseController
       audio_track: audio_stream_index,
       subtitle_track: is_bitmap ? subtitle_stream_index : nil,
       start_time_ticks: (start_time * 10_000_000).to_i.presence,
-      max_bitrate: client_profile.max_video_bitrate
+      max_bitrate: client_profile.max_video_bitrate,
+      # Master-playlist rendition gating. Mirrors upstream's
+      # SubtitleDeliveryMethod enum: only when the client's DeviceProfile
+      # explicitly declares `Method=Hls` for a subtitle format does the
+      # engine emit `EXT-X-MEDIA:TYPE=SUBTITLES`. For everything else
+      # (External / Embed / Encode) the master stays bare and the
+      # client fetches subs out-of-band — Caramba's adapters always
+      # declare `Method=External` for vtt, so this resolves to nil
+      # ⇒ engine treats as External ⇒ no subtitle MEDIA in master.
+      subtitle_delivery: hls_subtitle_delivery?(device_profile_raw) ? "hls" : nil,
+      # HLS trickplay is opt-in. Caramba doesn't render HLS trickplay
+      # today, so this stays false. When it does, set `trickplay: true`
+      # in the DeviceProfile and the engine will emit the
+      # EXT-X-IMAGE-STREAM-INF entries.
+      trickplay: hls_trickplay?(device_profile_raw) || nil
     }.compact
     if pre_decision.direct_stream?
       transcode_token_params[:video_codec] = 'copy'
@@ -307,6 +321,29 @@ class Api::PlaybackController < Api::BaseController
     Set.new(Array(device_profile&.dig("DirectPlayProfiles")).flat_map { |entry|
       entry["AudioCodec"].to_s.split(/\s*,\s*/).map(&:downcase)
     })
+  end
+
+  # True when the client's DeviceProfile lists at least one SubtitleProfile
+  # whose Method is "Hls". Mirrors upstream Jellyfin's choice of
+  # SubtitleDeliveryMethod.Hls when DLNA matching picks an Hls profile.
+  # Caramba's adapters declare `{Format:'vtt', Method:'External'}` so this
+  # returns false — keeping the master playlist free of subtitle MEDIA
+  # references and letting the UI fetch subs through its own endpoint.
+  def hls_subtitle_delivery?(device_profile)
+    return false if device_profile.nil?
+    Array(device_profile["SubtitleProfiles"]).any? do |entry|
+      entry["Method"].to_s.casecmp?("hls")
+    end
+  end
+
+  # True when the client opted into HLS trickplay (EXT-X-IMAGE-STREAM-INF
+  # entries on the master). Not part of the standard DLNA schema; checked
+  # as a top-level `Trickplay` flag on the DeviceProfile.
+  def hls_trickplay?(device_profile)
+    return false if device_profile.nil?
+    value = device_profile["Trickplay"] || device_profile["EnableTrickplay"]
+    return false if value.nil?
+    %w[1 true yes on].include?(value.to_s.downcase) || value == true
   end
 
   # Walk SubtitleProfiles for an entry whose Format matches the source codec.

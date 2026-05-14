@@ -72,7 +72,7 @@ module Jellyfin
       # --- segments ---
 
       def global_args
-        ['-hide_banner', '-loglevel', 'warning', '-y', '-fflags', '+genpts']
+        [ '-hide_banner', '-loglevel', 'warning', '-y', '-fflags', '+genpts' ]
       end
 
       # Per-source probe budget tuning. Goes BEFORE the `-i` flag so ffmpeg
@@ -88,13 +88,13 @@ module Jellyfin
       end
 
       def input_args(job)
-        ['-i', job.media_source.path]
+        [ '-i', job.media_source.path ]
       end
 
       def map_args(job)
         out = []
-        out += ['-map', "0:v:#{video_index(job)}"]
-        out += ['-map', "0:a:#{audio_index(job)}?"]
+        out += [ '-map', "0:v:#{video_index(job)}" ]
+        out += [ '-map', "0:a:#{audio_index(job)}?" ]
         out
       end
 
@@ -102,7 +102,7 @@ module Jellyfin
         # Stream-copy short-circuit. Upstream EncodingHelper.cs:1009 checks
         # GetVideoEncoder == "copy" the same way; keep it first so neither
         # the backend nor CodecSelector has to deal with the copy case.
-        return ['-c:v', 'copy'] if job.stream_copy_video? || job.output_video_codec.to_s == 'copy'
+        return [ '-c:v', 'copy' ] if job.stream_copy_video? || job.output_video_codec.to_s == 'copy'
 
         # Hwaccel backends accept the codec FAMILY (h264 / hevc / av1) and
         # return the platform-specific encoder name (h264_videotoolbox etc).
@@ -126,7 +126,7 @@ module Jellyfin
           hw_type: backend ? job.options.hardware_acceleration_type : nil
         )
 
-        out = ['-c:v', encoder]
+        out = [ '-c:v', encoder ]
         out += backend ? backend.encoder_args(job) : quality_args(job, encoder)
         out += rate_control_args(job)
         out += pixel_format_args(job) unless hw_encoder # HW encoders pick their own pixel format
@@ -142,7 +142,7 @@ module Jellyfin
           chain = chain.sub(/\[v\]\[s\]overlay[^,]*|\[v\]\[s\]overlay[^,]*/, hw_overlay) if chain
           chain = "#{chain},#{hw_overlay}" unless chain.to_s.include?(hw_overlay)
         end
-        out += ['-vf', chain] unless chain.nil? || chain.empty?
+        out += [ '-vf', chain ] unless chain.nil? || chain.empty?
         out
       end
 
@@ -173,19 +173,19 @@ module Jellyfin
           # When the caller passes a bitrate, treat it as a ceiling (capped CRF).
           if job.output_video_bitrate
             b = Bitrate.video_bitrate_for(job)
-            ['-crf', crf.to_s, '-maxrate', b.to_s, '-bufsize', (b * 2).to_s]
+            [ '-crf', crf.to_s, '-maxrate', b.to_s, '-bufsize', (b * 2).to_s ]
           else
-            ['-crf', crf.to_s]
+            [ '-crf', crf.to_s ]
           end
         when :vbr
           b = Bitrate.video_bitrate_for(job)
-          ['-b:v', b.to_s, '-maxrate', (b * 1.5).to_i.to_s, '-bufsize', (b * 2).to_s]
+          [ '-b:v', b.to_s, '-maxrate', (b * 1.5).to_i.to_s, '-bufsize', (b * 2).to_s ]
         when :cbr
           b = Bitrate.video_bitrate_for(job)
-          ['-b:v', b.to_s, '-maxrate', b.to_s, '-bufsize', (b * 2).to_s, '-minrate', b.to_s]
+          [ '-b:v', b.to_s, '-maxrate', b.to_s, '-bufsize', (b * 2).to_s, '-minrate', b.to_s ]
         else
           b = Bitrate.video_bitrate_for(job)
-          ['-b:v', b.to_s]
+          [ '-b:v', b.to_s ]
         end
       end
 
@@ -232,14 +232,14 @@ module Jellyfin
       end
 
       def pixel_format_args(_job)
-        ['-pix_fmt', 'yuv420p']
+        [ '-pix_fmt', 'yuv420p' ]
       end
 
       def keyframe_args(job)
         fps = (job.video_stream&.frame_rate || 24).round
         gop = (job.segment_length * fps).clamp(24, 480)
-        ['-g', gop.to_s, '-keyint_min', gop.to_s, '-sc_threshold', '0',
-         '-force_key_frames', "expr:gte(t,n_forced*#{job.segment_length})"]
+        [ '-g', gop.to_s, '-keyint_min', gop.to_s, '-sc_threshold', '0',
+         '-force_key_frames', "expr:gte(t,n_forced*#{job.segment_length})" ]
       end
 
       def filter_chain(job)
@@ -269,9 +269,9 @@ module Jellyfin
         return [] if tonemap_active?(job)
         v = job.video_stream
         args = []
-        args.concat(['-color_primaries', v.color_primaries]) if v.color_primaries
-        args.concat(['-color_trc',       v.color_transfer])  if v.color_transfer
-        args.concat(['-colorspace',      v.color_space])     if v.color_space
+        args.concat([ '-color_primaries', v.color_primaries ]) if v.color_primaries
+        args.concat([ '-color_trc',       v.color_transfer ])  if v.color_transfer
+        args.concat([ '-colorspace',      v.color_space ])     if v.color_space
         args.concat(DolbyVision.output_args(v)) if DolbyVision.present?(v)
         args
       end
@@ -290,15 +290,15 @@ module Jellyfin
 
       def audio_args(job)
         encoder = CodecSelector.audio_encoder_for(job.output_audio_codec, @caps)
-        return ['-c:a', 'copy'] if encoder == 'copy' || job.stream_copy_audio?
+        return [ '-c:a', 'copy' ] if encoder == 'copy' || job.stream_copy_audio?
 
         b = Bitrate.audio_bitrate_for(job)
         ch = Bitrate.audio_channels_for(job)
         layout = Audio.channel_layout_for(ch)
 
-        single_track = ['-c:a', encoder, '-b:a', b.to_s, '-ac', ch.to_s,
-                        '-ar', job.output_audio_sample_rate.to_s]
-        single_track.concat(['-channel_layout', layout]) if layout
+        single_track = [ '-c:a', encoder, '-b:a', b.to_s, '-ac', ch.to_s,
+                        '-ar', job.output_audio_sample_rate.to_s ]
+        single_track.concat([ '-channel_layout', layout ]) if layout
         single_track.concat(Audio.filter_args(job, capabilities: @caps))
 
         if MultiAudio.enabled?(job)
@@ -318,26 +318,37 @@ module Jellyfin
         Audio.itsoffset_args(job.options.audio_itsoffset_seconds)
       end
 
-      # Timestamp normalization for HLS output. Safari's native HLS engine
-      # (and Playwright webkit) computes currentTime from segment PTS, so
-      # any mismatch between the playlist's EXTINF (which says segment 0
-      # is `[0..6s]`) and the actual segment's first PTS is fatal. With
-      # default ffmpeg settings, the MPEG-TS muxer adds a 1.4s VBV
-      # pre-roll → segment 0 contains samples at `[1.4..7.4s]` → Safari
-      # decodes the first frame, then stalls (currentTime stuck at 0,
-      # waiting for content that doesn't exist) and eventually surfaces
-      # MEDIA_ERR_SRC_NOT_SUPPORTED (code 4 → "source not supported").
-      # The fix is the five-flag combo below:
-      #   -copyts                  preserve input PTS through the pipeline
-      #   -avoid_negative_ts disabled keep ffmpeg from clamping after a shift
-      #   -start_at_zero           shift first output frame to PTS=0
-      #   -muxdelay 0              don't insert TS muxer VBV pre-roll
-      #   -muxpreload 0            don't insert TS muxer demux pre-roll
-      # See `feedback_safari_native_hls_recipe` memory + upstream
-      # EncodingHelper.cs HLS path.
-      def hls_timestamp_args
-        ['-copyts', '-avoid_negative_ts', 'disabled', '-start_at_zero',
-         '-muxdelay', '0', '-muxpreload', '0']
+      # Timestamp normalization for HLS output.
+      #
+      # Stream-copy path: source PTS is preserved end-to-end through `-c:v
+      # copy`. The MPEG-TS muxer would otherwise add a 1.4s VBV pre-roll
+      # → segment 0 contains samples at `[1.4..7.4s]` while #EXTINF says
+      # `[0..6s]` → Safari's currentTime locks at 0. The five-flag combo
+      # (`-copyts -avoid_negative_ts disabled -start_at_zero -muxdelay 0
+      # -muxpreload 0`) is the Safari-native-HLS recipe — see
+      # `project_safari_native_hls_recipe` memory.
+      #
+      # Full-transcode path: the encoder produces fresh frames, so we
+      # MUST NOT pass `-copyts -avoid_negative_ts disabled`. Why:
+      # `h264_videotoolbox` (the macOS HW encoder Caramba picks) emits
+      # negative DTS for the first few frames because of encoder
+      # lookahead. With `-avoid_negative_ts disabled`, those negative
+      # DTS pass through into the MPEG-TS muxer, which uses a 33-bit
+      # unsigned timestamp field — negative values wrap to ~95443s.
+      # Safari sees segment 0 with DTS ≈ 95443s, decides the source is
+      # broken, and surfaces MEDIA_ERR_SRC_NOT_SUPPORTED. Upstream
+      # Jellyfin's `-copyts -avoid_negative_ts disabled` template only
+      # works there because libx264 doesn't emit negative DTS at
+      # startup; the hardware path needs the default `make_zero`
+      # behaviour. Verified against the file
+      # `Everything Everywhere All at Once.mkv` (HEVC 10-bit, AC-3 5.1)
+      # where the orphan ffmpeg's segment 20 had start_pts=130s while
+      # the playlist advertised t=120s — a 10s mismatch from negative-DTS
+      # wraparound.
+      def hls_timestamp_args(job)
+        return [] unless job.stream_copy_video?
+        [ '-copyts', '-avoid_negative_ts', 'disabled', '-start_at_zero',
+         '-muxdelay', '0', '-muxpreload', '0' ]
       end
 
       def hls_output_args(job, playlist_path:, segment_template:)
@@ -360,21 +371,41 @@ module Jellyfin
                    audio_codec: job.output_audio_codec,
                    source_is_avc: job.video_stream&.is_avc
                  )
-               else
+        else
                  []
-               end
-        args.concat(hls_timestamp_args)
+        end
+        args.concat(hls_timestamp_args(job))
+        # `-max_muxing_queue_size 128` matches upstream Jellyfin
+        # (DynamicHlsController.cs:1637) and buffers packets across A/V
+        # drift on MKV sources with sparse keyframes.
+        args.concat([ '-max_muxing_queue_size', '128' ])
+        # NOTE: we intentionally do NOT pass `-max_delay 5000000` like
+        # upstream does. On the `h264_videotoolbox` path, that flag
+        # interacts with the encoder lookahead such that segment 0's
+        # first PTS lands at ~10s instead of the normal ~1.4s VBV
+        # pre-roll, making Safari's native HLS engine refuse to start
+        # playback (currentTime stuck at 0, ~10s gap to first content
+        # → MEDIA_ERR_SRC_NOT_SUPPORTED). Verified by bisecting the
+        # ffmpeg arg set on Apple Silicon against the file
+        # `Everything Everywhere All at Once.mkv` — adding `-max_delay
+        # 5000000` to the otherwise-clean command flipped segment 0's
+        # start_pts from 127920 (1.421s) to 901920 (10.021s).
+        # Upstream tolerates this flag because libx264 doesn't trigger
+        # the same muxer interleave behaviour as videotoolbox.
         # Playlist type follows EncodingJobInfo.IsSegmentedLiveStream:
         # live streams use a sliding window (`live`); finite VOD content
-        # uses an event/vod-with-EXT-X-ENDLIST playlist.
-        playlist_type = live_segmented?(job) ? 'live' : 'event'
+        # uses a vod playlist with EXT-X-ENDLIST appended when ffmpeg
+        # finishes. Matches upstream's
+        # `-hls_playlist_type {(isEventPlaylist ? "event" : "vod")}`.
+        playlist_type = live_segmented?(job) ? 'live' : 'vod'
         args.concat([
           '-f', 'hls',
           '-hls_time', job.segment_length.to_s,
           '-hls_playlist_type', playlist_type,
+          '-hls_list_size', '0',
           '-hls_flags', 'independent_segments+temp_file',
           '-hls_segment_type', 'mpegts',
-          '-hls_segment_filename', segment_template,
+          '-hls_segment_filename', segment_template
         ])
         # AES-128 encryption opt-in. EncodingOptions#hls_encryption_material is
         # set by the controller / Manager when the request asked for it.

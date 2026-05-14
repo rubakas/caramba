@@ -52,7 +52,7 @@ RSpec.describe Jellyfin::Output::MasterPlaylistBuilder do
     end
 
     it 'includes AUDIO rendition group when audio_renditions present' do
-      auds = [{ uri: 'audio/eng.m3u8', name: 'English', language: 'eng', default: true, channels: 2 }]
+      auds = [ { uri: 'audio/eng.m3u8', name: 'English', language: 'eng', default: true, channels: 2 } ]
       out = described_class.build(
         job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
         video_stream: video, audio_stream: audio, audio_renditions: auds
@@ -71,7 +71,7 @@ RSpec.describe Jellyfin::Output::MasterPlaylistBuilder do
     end
 
     it 'appends EXT-X-IMAGE-STREAM-INF trickplay lines for VOD streams' do
-      tp = [{ width: 320, height: 180, bandwidth: 460_800, uri: 'trickplay/320/index.m3u8' }]
+      tp = [ { width: 320, height: 180, bandwidth: 460_800, uri: 'trickplay/320/index.m3u8' } ]
       out = described_class.build(
         job: job, variant_url: 'main.m3u8', total_bitrate: 3_000_000,
         video_stream: video, audio_stream: audio, trickplay_resolutions: tp,
@@ -84,7 +84,7 @@ RSpec.describe Jellyfin::Output::MasterPlaylistBuilder do
     end
 
     it 'skips trickplay lines for live streams' do
-      tp = [{ width: 320, height: 180, bandwidth: 460_800, uri: 'tp/index.m3u8' }]
+      tp = [ { width: 320, height: 180, bandwidth: 460_800, uri: 'tp/index.m3u8' } ]
       out = described_class.build(
         job: job, variant_url: 'live.m3u8', total_bitrate: 3_000_000,
         video_stream: video, audio_stream: audio, trickplay_resolutions: tp,
@@ -121,19 +121,24 @@ RSpec.describe 'EncodingHelper HLS live-vs-vod', type: :model do
       sample_aspect_ratio: '1:1', is_interlaced: false, video_range_type: 'SDR', is_avc: true)
     a = Jellyfin::Probing::MediaStream.new(index: 1, type: :audio, codec: 'aac',
       channels: 2, sample_rate: 48_000)
-    src = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [v, a],
+    src = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v, a ],
       run_time_ticks: run_time_ticks)
     Jellyfin::Encoding::EncodingJobInfo.new(media_source: src,
       output_video_codec: 'h264', output_audio_codec: 'aac')
   end
 
-  it 'emits hls_playlist_type=event for VOD (run_time_ticks present)' do
+  it 'emits hls_playlist_type=vod for VOD (run_time_ticks present)' do
+    # Matches upstream DynamicHlsController.cs:1590:
+    #   "-hls_playlist_type {(isEventPlaylist ? "event" : "vod")} -hls_list_size 0"
+    # `vod` lets ffmpeg write EXT-X-ENDLIST when the encode completes; the
+    # controller's variant endpoint serves a hand-built playlist anyway.
     job = make_job(run_time_ticks: 600_000_000)
     args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
       job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
     )
     idx = args.index('-hls_playlist_type')
-    expect(args[idx + 1]).to eq('event')
+    expect(args[idx + 1]).to eq('vod')
+    expect(args).to include('-hls_list_size', '0')
   end
 
   it 'emits hls_playlist_type=live for segmented-live streams (run_time_ticks nil)' do
@@ -143,6 +148,73 @@ RSpec.describe 'EncodingHelper HLS live-vs-vod', type: :model do
     )
     idx = args.index('-hls_playlist_type')
     expect(args[idx + 1]).to eq('live')
+  end
+
+  it 'sends -max_muxing_queue_size 128 (matches upstream) but omits -max_delay' do
+    # `-max_muxing_queue_size 128` matches upstream
+    # (DynamicHlsController.cs:1637) and buffers packets across A/V
+    # drift on MKV sources with sparse keyframes.
+    #
+    # `-max_delay 5000000` is upstream's default but breaks the
+    # `h264_videotoolbox` path on Apple Silicon: it interacts with the
+    # encoder lookahead such that segment 0's first PTS lands at ~10s
+    # instead of the normal ~1.4s VBV pre-roll → Safari's native HLS
+    # engine refuses to start playback. Verified by bisecting the
+    # ffmpeg arg set against `Everything Everywhere All at Once.mkv` —
+    # adding the flag flipped segment 0's start_pts from 127920
+    # (1.421s) to 901920 (10.021s).
+    job = make_job(run_time_ticks: 600_000_000)
+    args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+      job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
+    )
+    expect(args).to include('-max_muxing_queue_size', '128')
+    expect(args).not_to include('-max_delay')
+  end
+
+  it 'omits the Safari timestamp recipe for full transcodes (encoder produces fresh PTS)' do
+    # For full transcode the encoder produces fresh frames starting at
+    # PTS=0, so we MUST NOT pass `-copyts -avoid_negative_ts disabled`.
+    # `h264_videotoolbox` (macOS HW encoder) emits NEGATIVE DTS for the
+    # first frames because of encoder lookahead — and with
+    # `-avoid_negative_ts disabled`, those negative DTS pass through to
+    # the MPEG-TS muxer's 33-bit unsigned timestamp field, wrapping to
+    # ~95443s. Safari sees segment 0 with DTS ≈ 95443s, decides the
+    # source is broken, and surfaces MEDIA_ERR_SRC_NOT_SUPPORTED.
+    # Upstream Jellyfin's template `-copyts -avoid_negative_ts disabled`
+    # works there because libx264 doesn't emit negative DTS at startup;
+    # the HW path needs the default `make_zero` behaviour.
+    job = make_job(run_time_ticks: 600_000_000) # default codecs: h264 + aac (transcode)
+    args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+      job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
+    )
+    expect(args).not_to include('-copyts')
+    expect(args).not_to include('-avoid_negative_ts')
+    expect(args).not_to include('-start_at_zero')
+    expect(args).not_to include('-muxdelay')
+    expect(args).not_to include('-muxpreload')
+  end
+
+  it 'applies -start_at_zero / -muxdelay 0 / -muxpreload 0 for stream-copy video' do
+    # The TS muxer's 1.4s VBV pre-roll only matters when source PTS is
+    # preserved through `-c:v copy`. Without these flags, segment 0
+    # starts at PTS=1.4s while #EXTINF claims [0..6s] → Safari's
+    # currentTime locks at 0.
+    v = Jellyfin::Probing::MediaStream.new(index: 0, type: :video, codec: 'h264',
+      width: 1920, height: 1080, frame_rate: 24.0, pixel_format: 'yuv420p',
+      sample_aspect_ratio: '1:1', is_interlaced: false, video_range_type: 'SDR', is_avc: true)
+    a = Jellyfin::Probing::MediaStream.new(index: 1, type: :audio, codec: 'aac',
+      channels: 2, sample_rate: 48_000)
+    src = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v, a ],
+      run_time_ticks: 600_000_000)
+    copy_job = Jellyfin::Encoding::EncodingJobInfo.new(
+      media_source: src, output_video_codec: 'copy', output_audio_codec: 'copy'
+    )
+    args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+      copy_job, playlist_path: '/tmp/p.m3u8', segment_template: '/tmp/%d.ts', capabilities: caps
+    )
+    expect(args).to include('-start_at_zero')
+    expect(args).to include('-muxdelay', '0')
+    expect(args).to include('-muxpreload', '0')
   end
 
   it 'splices HlsEncryption -hls_enc flags when material is on options' do
@@ -239,7 +311,7 @@ RSpec.describe 'TranscodeManager build_encoding_options' do
                    force_accurate_seek: true, enable_loudnorm: true, enable_drc: true,
                    http_user_agent: 'TestAgent/1.0',
                    http_headers: { 'X-Auth' => 'bearer' },
-                   concat_parts: ['/a.mkv', '/b.mkv']
+                   concat_parts: [ '/a.mkv', '/b.mkv' ]
                  })
     opts = manager.send(:build_encoding_options, job)
     expect(opts.auto_crop).to be(true)
@@ -248,7 +320,7 @@ RSpec.describe 'TranscodeManager build_encoding_options' do
     expect(opts.multi_audio_tracks).to be(true)
     expect(opts.http_user_agent).to eq('TestAgent/1.0')
     expect(opts.http_headers).to eq({ 'X-Auth' => 'bearer' })
-    expect(opts.concat_parts).to eq(['/a.mkv', '/b.mkv'])
+    expect(opts.concat_parts).to eq([ '/a.mkv', '/b.mkv' ])
   end
 
   # Regression: build_encoding_options used to ignore

@@ -239,13 +239,20 @@ export function buildBrowserProfile() {
   // + the HEVC code path on iOS/macOS).
   if (nativeHlsSupported()) {
     // HEVC via native HLS — Safari accepts both hvc1 / hev1 fourcc.
-    // jellyfin-web uses the bare "hvc1.1.L120" form (no constraint
-    // flags). Match that to avoid false negatives on older Safari.
+    // jellyfin-web's canPlayHevc (browserDeviceProfile.js:9-23) probes
+    // the bare "hvc1.1.L120" / "hev1.1.L120" forms (Main profile, level
+    // 4.0, no compatibility flag, no constraint flag). Safari returns
+    // empty for the more specific "hvc1.1.6.L120" form even though it
+    // decodes the bitstream — so the .6. variant gave a false negative,
+    // left 'hevc' out of videoCodecs, and made the server pick
+    // full_transcode for HEVC sources (vs audio_transcode in Chrome).
     const hevcNative =
-      nativeHlsCanPlay('hvc1.1.6.L120') ||
-      nativeHlsCanPlay('hev1.1.6.L120') ||
-      canPlayMp4('hvc1.1.6.L120') ||
-      canPlayMp4('hev1.1.6.L120')
+      canPlayMp4('hvc1.1.L120') ||
+      canPlayMp4('hev1.1.L120') ||
+      canPlayMp4('hvc1.1.0.L120') ||
+      canPlayMp4('hev1.1.0.L120') ||
+      nativeHlsCanPlay('hvc1.1.L120') ||
+      nativeHlsCanPlay('hev1.1.L120')
     if (hevcNative && !videoCodecs.includes('hevc')) videoCodecs.push('hevc', 'h265')
 
     // AC-3 / E-AC-3 via native HLS. The probe codec strings come from

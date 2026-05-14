@@ -240,6 +240,64 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Regression for the Safari "spinner forever then unsupported toast" bug.
+  # The transcoding engine's master playlist used to ALWAYS emit
+  # EXT-X-MEDIA:TYPE=SUBTITLES rendition groups. Safari fetches every
+  # subtitle URI in the master in parallel; the engine's webvtt index
+  # endpoint stalled on a 2.5h MKV → Safari aborted with code 4. Now
+  # the playback_controller threads the client's SubtitleProfiles
+  # decision through into the token's `subtitle_delivery` field; the
+  # engine only emits subtitle MEDIA when `Method=Hls`. Caramba clients
+  # declare Method=External → no subtitle MEDIA → Safari plays.
+  class HlsRenditionGatingTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+    end
+
+    def deliver_via_hls?(profile)
+      @controller.send(:hls_subtitle_delivery?, profile)
+    end
+
+    def trickplay?(profile)
+      @controller.send(:hls_trickplay?, profile)
+    end
+
+    test "External SubtitleProfile (caramba default) → no HLS subtitle delivery" do
+      profile = { "SubtitleProfiles" => [ { "Format" => "vtt", "Method" => "External" } ] }
+      refute deliver_via_hls?(profile)
+    end
+
+    test "Embed SubtitleProfile (native player) → no HLS subtitle delivery" do
+      profile = { "SubtitleProfiles" => [ { "Format" => "PGSSUB", "Method" => "Embed" } ] }
+      refute deliver_via_hls?(profile)
+    end
+
+    test "Hls SubtitleProfile (explicit opt-in) → HLS subtitle delivery" do
+      profile = { "SubtitleProfiles" => [ { "Format" => "vtt", "Method" => "Hls" } ] }
+      assert deliver_via_hls?(profile)
+    end
+
+    test "mixed profile with at least one Hls entry → HLS subtitle delivery" do
+      profile = { "SubtitleProfiles" => [
+        { "Format" => "PGSSUB", "Method" => "Embed" },
+        { "Format" => "vtt", "Method" => "Hls" }
+      ] }
+      assert deliver_via_hls?(profile)
+    end
+
+    test "nil / missing profile → no HLS subtitle delivery" do
+      refute deliver_via_hls?(nil)
+      refute deliver_via_hls?({})
+    end
+
+    test "Trickplay opt-in via top-level flag" do
+      assert trickplay?({ "Trickplay" => true })
+      assert trickplay?({ "EnableTrickplay" => "true" })
+      refute trickplay?({})
+      refute trickplay?(nil)
+    end
+  end
+
   # select_audio_track has to disambiguate same-language tracks (TrueHD eng
   # + AC3 eng on UHD remuxes) and even same-language same-codec tracks
   # (AAC stereo + AAC 5.1 from a single source). Three-key match. The

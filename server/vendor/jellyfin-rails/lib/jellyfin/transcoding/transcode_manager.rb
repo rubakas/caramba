@@ -294,10 +294,38 @@ module Jellyfin
       def start_supervisors(job)
         opts = Jellyfin::Encoding::EncodingOptions.new
         seg_len = (job.params[:segment_length] || Jellyfin::Rails.configuration.segment_length).to_i
-        job.cleaner = SegmentCleaner.new(job).tap(&:start)
+        # SegmentCleaner is only safe for live streams (sliding window).
+        # For VOD playback the controller serves a pre-generated playlist
+        # that references every segment; if the cleaner deletes segment
+        # N while Safari seeks back to it, SegmentWaiter waits 30s for a
+        # file ffmpeg won't recreate, then the segment endpoint 504s and
+        # Safari surfaces MEDIA_ERR_SRC_NOT_SUPPORTED. Upstream Jellyfin
+        # doesn't slide-window VOD segments (TranscodeManager.cs only
+        # deletes segments at job teardown via DeleteHlsPartialStreamFiles).
+        if live_segmented?(job)
+          job.cleaner = SegmentCleaner.new(job).tap(&:start)
+        end
         job.throttler = Throttler.new(job, segment_length: seg_len,
                                             throttle_seconds: opts.throttle_seconds,
                                             interval_s: opts.throttle_delay_seconds).tap(&:start)
+      end
+
+      # Treats a probe-able runtime as VOD, missing runtime as live.
+      # Matches `EncodingHelper#live_segmented?`. Probes lazily so we
+      # don't depend on `job.media_source` being set elsewhere.
+      def live_segmented?(job)
+        media_source = job.media_source || probe_media_source(job)
+        return true unless media_source
+        rtt = media_source.respond_to?(:run_time_ticks) ? media_source.run_time_ticks : nil
+        rtt.nil? || rtt.to_i.zero?
+      end
+
+      def probe_media_source(job)
+        path = job.params[:path]
+        return nil unless path && File.exist?(path)
+        job.media_source = Jellyfin::MediaEncoder::Probe.from_path(path)
+      rescue StandardError
+        nil
       end
 
       def stop_job_internals(job)

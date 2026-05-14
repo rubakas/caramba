@@ -12,7 +12,19 @@ module Jellyfin
     # Payload schema (all optional except `path`):
     #   { path:, video_codec:, video_bitrate:, audio_codec:, audio_bitrate:,
     #     audio_track:, subtitle_track:, subtitle_mode:, max_height:,
-    #     segment_length:, nonce: }
+    #     segment_length:, nonce:,
+    #     subtitle_delivery:, trickplay: }
+    #
+    # `subtitle_delivery` (`"external"` / `"embed"` / `"hls"` / `"encode"`,
+    # default `"external"`) decides whether the master playlist emits an
+    # `EXT-X-MEDIA:TYPE=SUBTITLES` rendition group. Only `"hls"` does;
+    # the other methods let the client fetch subs out-of-band. Mirrors
+    # upstream Jellyfin's `SubtitleDeliveryMethod` enum.
+    #
+    # `trickplay` (boolean, default false) gates `EXT-X-IMAGE-STREAM-INF`
+    # entries — Caramba clients don't render HLS trickplay yet, so
+    # leaving it off keeps Safari from blocking on the trickplay index
+    # endpoints.
     class Token
       class InvalidToken < StandardError; end
 

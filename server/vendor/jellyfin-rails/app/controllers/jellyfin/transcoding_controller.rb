@@ -4,6 +4,7 @@ require 'jellyfin/transcoding/transcode_manager'
 require 'jellyfin/transcoding/segment_waiter'
 require 'jellyfin/media_encoder/probe'
 require 'jellyfin/output/master_playlist_builder'
+require 'jellyfin/output/vod_playlist_generator'
 require 'jellyfin/encoding/encoding_job_info'
 
 module Jellyfin
@@ -19,6 +20,8 @@ module Jellyfin
         :path, :video_codec, :video_bitrate, :audio_codec, :audio_bitrate,
         :max_height, :video_track, :audio_track, :subtitle_track, :subtitle_mode,
         :segment_length, :start_time_ticks, :max_bitrate,
+        # Master-playlist rendition gating — see Token payload schema.
+        :subtitle_delivery, :trickplay,
         # Batch-J ffmpeg knobs surfaced as request params:
         :auto_crop, :two_pass, :frame_interpolation, :target_framerate,
         :multi_audio_tracks, :force_accurate_seek, :enable_loudnorm, :enable_drc,
@@ -41,8 +44,11 @@ module Jellyfin
 
       # Coerce booleans — accept "true"/"1"/true.
       %i[auto_crop two_pass frame_interpolation multi_audio_tracks
-         force_accurate_seek enable_loudnorm enable_drc hls_encryption].each do |k|
-        payload[k] = ActiveModel::Type::Boolean.new.cast(payload[k]) if payload.key?(k)
+         force_accurate_seek enable_loudnorm enable_drc hls_encryption
+         trickplay].each do |k|
+        next unless payload.key?(k)
+        v = payload[k]
+        payload[k] = v == true || %w[1 true yes on t].include?(v.to_s.downcase)
       end
 
       token = Jellyfin::Transcoding::Token.encode(payload)
@@ -58,15 +64,23 @@ module Jellyfin
 
     # GET /transcode/:token/master.m3u8
     #
-    # Mirrors DynamicHlsHelper.GetMasterPlaylistInternal: builds the master
-    # playlist string from the probed source + the variant playlist URL.
-    # Subtitle / audio / closed-caption / trickplay rendition groups are
-    # included when present.
+    # Mirrors DynamicHlsHelper.GetMasterPlaylistInternal. The rendition
+    # groups (`EXT-X-MEDIA:TYPE=SUBTITLES`, `EXT-X-IMAGE-STREAM-INF`) are
+    # emitted based on token-baked client choices:
+    #
+    #   subtitle_delivery == 'hls' → emit subtitle MEDIA group
+    #   trickplay == true         → emit image stream-inf entries
+    #
+    # Anything else (default: subs external, trickplay off) yields a
+    # bare master with just the variant STREAM-INF, matching what
+    # upstream Jellyfin emits for clients whose DeviceProfile declared
+    # `SubtitleDeliveryMethod=External`. Caramba's clients fall into this
+    # category — they render subtitles client-side via external WebVTT
+    # and don't use HLS trickplay.
     def master
       params_hash = decode_or_400!(params[:token]) or return
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
       job.ping!
-      wait_for_playlist!(job)
 
       media_source = probe_or_nil(params_hash[:path])
       variant_url = "main.m3u8"
@@ -86,7 +100,10 @@ module Jellyfin
                         output_video_codec: params_hash[:video_codec] || 'libx264',
                         output_audio_codec: params_hash[:audio_codec] || 'aac'
                       )
-                    end
+      end
+
+      hls_subs = params_hash[:subtitle_delivery].to_s.casecmp?('hls')
+      trickplay_on = truthy?(params_hash[:trickplay])
 
       master = Jellyfin::Output::MasterPlaylistBuilder.build(
         job: job,
@@ -96,9 +113,9 @@ module Jellyfin
         audio_stream: source_audio,
         output_video_codec: output_info&.actual_output_video_codec,
         output_audio_codec: output_info&.actual_output_audio_codec,
-        subtitle_tracks: build_subtitle_tracks(media_source, params[:token]),
-        trickplay_resolutions: build_trickplay_resolutions(params[:token]),
-        has_closed_captions: media_source &&
+        subtitle_tracks: hls_subs ? build_subtitle_tracks(media_source, params[:token]) : [],
+        trickplay_resolutions: trickplay_on ? build_trickplay_resolutions(params[:token]) : [],
+        has_closed_captions: hls_subs && media_source &&
           Jellyfin::Subtitle::ClosedCaptions.present?(media_source.default_video_stream),
         is_live_stream: live_stream?(media_source)
       )
@@ -106,12 +123,26 @@ module Jellyfin
       render plain: master, content_type: 'application/vnd.apple.mpegurl'
     end
 
-    # GET /transcode/:token/main.m3u8 — the actual variant playlist that
-    # ffmpeg's hls muxer produces. Master playlist references this URL.
+    # GET /transcode/:token/main.m3u8 — the variant playlist.
+    #
+    # For finite-duration sources we hand-build a complete VOD playlist
+    # (every segment + EXT-X-ENDLIST) from the probed runtime, mirroring
+    # upstream DynamicHlsPlaylistGenerator.CreateMainPlaylist. Sending
+    # ffmpeg's in-progress playlist instead works in hls.js but fails on
+    # Safari's native HLS engine — see VodPlaylistGenerator for details.
+    # Live streams (no probe-able run time) fall back to ffmpeg's playlist
+    # since we don't know the total upfront.
     def variant
       params_hash = decode_or_400!(params[:token]) or return
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
       job.ping!
+
+      media_source = probe_or_nil(params_hash[:path])
+      vod_body = build_vod_playlist(media_source, params_hash, job)
+      if vod_body
+        return render plain: vod_body, content_type: 'application/vnd.apple.mpegurl'
+      end
+
       wait_for_playlist!(job)
       send_file job.playlist_path, type: 'application/vnd.apple.mpegurl', disposition: 'inline'
     end
@@ -147,6 +178,11 @@ module Jellyfin
       Digest::SHA1.hexdigest(token)[0, 16]
     end
 
+    def truthy?(value)
+      return value if value == true || value == false
+      %w[1 true yes on t].include?(value.to_s.downcase)
+    end
+
     def wait_for_playlist!(job, timeout: 10)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       until File.exist?(job.playlist_path) && File.size(job.playlist_path) > 0
@@ -174,6 +210,28 @@ module Jellyfin
     def live_stream?(media_source)
       return false unless media_source
       media_source.run_time_ticks.nil? || media_source.run_time_ticks.to_i.zero?
+    end
+
+    # Hand-builds a complete VOD variant playlist from the probed runtime.
+    # Returns nil for live streams (caller falls back to ffmpeg's playlist).
+    # Mirrors upstream
+    # Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs#CreateMainPlaylist.
+    def build_vod_playlist(media_source, params_hash, job)
+      return nil if media_source.nil? || live_stream?(media_source)
+
+      total_seconds = media_source.run_time_ticks.to_f /
+                      Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND
+      seek_seconds = (params_hash[:start_time_ticks].to_f /
+                      Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND)
+      seg_len = job.segment_length_seconds
+
+      Jellyfin::Output::VodPlaylistGenerator.build(
+        total_duration_seconds: total_seconds,
+        segment_length_seconds: seg_len,
+        seek_seconds: seek_seconds,
+        segment_extension: 'ts',
+        container: 'ts'
+      )
     end
 
     def probe_or_nil(path)
@@ -207,7 +265,7 @@ module Jellyfin
     # server can produce and emit one EXT-X-IMAGE-STREAM-INF per width. We
     # emit two upstream defaults (320, 480) — production deploys can extend.
     def build_trickplay_resolutions(token)
-      [320, 480].map do |w|
+      [ 320, 480 ].map do |w|
         uri = Jellyfin::Rails::Engine.routes.url_helpers.trickplay_index_path(
           token: token, width: w
         )

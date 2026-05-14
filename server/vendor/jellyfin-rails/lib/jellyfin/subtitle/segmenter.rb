@@ -1,6 +1,7 @@
 require 'fileutils'
 require 'open3'
 require 'digest'
+require 'jellyfin/transcoding/async_keyed_locker'
 
 module Jellyfin
   module Subtitle
@@ -31,40 +32,54 @@ module Jellyfin
 
       # Builds segments and the per-track playlist. Returns a hash:
       #   { playlist:, segment_dir:, count:, language:, name: }
+      #
+      # Concurrent calls for the same `(source_path, stream_index)` are
+      # serialised through `AsyncKeyedLocker`: Safari fetches every
+      # `EXT-X-MEDIA:TYPE=SUBTITLES` URI in the master playlist in
+      # parallel (Forced/Full/SDH = 3 simultaneous index requests), and
+      # without the lock each spawned its own `ffmpeg ... -c:s webvtt`
+      # against the same source — multiple writers racing on the same
+      # `full.vtt`, blocking on filesystem, > 8s wall time. Safari then
+      # gave up on the master with MEDIA_ERR_SRC_NOT_SUPPORTED. Upstream
+      # Jellyfin serialises through `SubtitleManager.GetRemoteSubtitles`
+      # / file locks; we mirror that here.
       def segment(source_path:, stream_index:, segment_length:, language: nil, name: nil)
         return nil unless File.exist?(source_path)
         dir = cache_dir_for(source_path, stream_index)
-        manifest_path = File.join(dir, 'manifest.json')
-        if File.exist?(manifest_path) && fresh?(manifest_path, source_path)
-          return load_manifest(manifest_path).merge(segment_dir: dir)
+
+        Jellyfin::Transcoding::AsyncKeyedLocker.instance.with("subs:#{dir}") do
+          manifest_path = File.join(dir, 'manifest.json')
+          if File.exist?(manifest_path) && fresh?(manifest_path, source_path)
+            return load_manifest(manifest_path).merge(segment_dir: dir)
+          end
+
+          FileUtils.rm_rf(dir)
+          FileUtils.mkdir_p(dir)
+
+          full_vtt = File.join(dir, 'full.vtt')
+          unless extract_to(source_path, stream_index, full_vtt)
+            return nil
+          end
+
+          cues = parse_cues(File.read(full_vtt))
+          total_duration = cues.map(&:end_seconds).max || 0
+          count = (total_duration / segment_length.to_f).ceil
+          count = 1 if count.zero?
+          count.times do |i|
+            seg_start = i * segment_length
+            seg_end = (i + 1) * segment_length
+            write_segment(dir, i, cues, seg_start, seg_end)
+          end
+
+          playlist = build_playlist(count, segment_length, total_duration)
+          File.write(File.join(dir, 'index.m3u8'), playlist)
+
+          meta = { 'playlist' => playlist, 'count' => count, 'language' => language,
+                   'name' => name, 'mtime' => File.mtime(source_path).to_i }
+          File.write(manifest_path, JSON.dump(meta))
+
+          meta.merge('segment_dir' => dir).transform_keys(&:to_sym)
         end
-
-        FileUtils.rm_rf(dir)
-        FileUtils.mkdir_p(dir)
-
-        full_vtt = File.join(dir, 'full.vtt')
-        unless extract_to(source_path, stream_index, full_vtt)
-          return nil
-        end
-
-        cues = parse_cues(File.read(full_vtt))
-        total_duration = cues.map(&:end_seconds).max || 0
-        count = (total_duration / segment_length.to_f).ceil
-        count = 1 if count.zero?
-        count.times do |i|
-          seg_start = i * segment_length
-          seg_end = (i + 1) * segment_length
-          write_segment(dir, i, cues, seg_start, seg_end)
-        end
-
-        playlist = build_playlist(count, segment_length, total_duration)
-        File.write(File.join(dir, 'index.m3u8'), playlist)
-
-        meta = { 'playlist' => playlist, 'count' => count, 'language' => language,
-                 'name' => name, 'mtime' => File.mtime(source_path).to_i }
-        File.write(manifest_path, JSON.dump(meta))
-
-        meta.merge('segment_dir' => dir).transform_keys(&:to_sym)
       end
 
       def segment_path(source_path:, stream_index:, segment_index:)
