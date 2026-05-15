@@ -7,8 +7,10 @@
 export type PlayerEvent =
   | 'ready'
   | 'play'
+  | 'playing'
   | 'pause'
   | 'progress'
+  | 'seeking'
   | 'seek'
   | 'ratechange'
   | 'volumechange'
@@ -22,8 +24,10 @@ export type PlayerEvent =
 export type PlayerEventPayload = {
   ready: void;
   play: void;
+  playing: void;
   pause: void;
   progress: { currentTime: number; duration: number; buffered: number };
+  seeking: { currentTime: number };
   seek: { currentTime: number };
   ratechange: { rate: number };
   volumechange: { volume: number; muted: boolean };

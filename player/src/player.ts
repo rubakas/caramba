@@ -398,6 +398,13 @@ export class Player {
       this.events.emit('volumechange', { volume: v.volume, muted: v.muted });
     });
     v.addEventListener('waiting', () => this.events.emit('waiting', undefined));
+    // `playing` is the canonical "frames are actually painted now" signal
+    // — it fires after `play` once the decoder has enough data, and again
+    // after a `waiting`/buffer-stall once data resumes. Distinct from
+    // `play` (which fires the moment play() is invoked, before any frame
+    // has rendered) and from `progress` (which is our own 1s timer).
+    v.addEventListener('playing', () => this.events.emit('playing', undefined));
+    v.addEventListener('seeking', () => this.events.emit('seeking', { currentTime: v.currentTime }));
     v.addEventListener('ended', () => {
       this.stopProgressTimer();
       this.emitReporter('onStop');
