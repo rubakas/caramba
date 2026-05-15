@@ -261,6 +261,25 @@ function WebVideoPlayer() {
   const [paused, setPaused] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [buffering, setBuffering] = useState(true)
+  // True once the source has actually started decoding frames — first
+  // `progress` event with currentTime advancing past the resume position.
+  // Used to keep the spinner up across the brief gap between
+  // `ready` (metadata loaded) and the first frame painted, where Safari
+  // briefly transitions through `paused=true` and the center overlay
+  // would otherwise flash the pause icon.
+  const [playbackStarted, setPlaybackStarted] = useState(false)
+  // Last currentTime we saw in a progress tick. Used to detect actual
+  // time advance vs the seek-target plateau: on resume at t=1072,
+  // `currentTime` snaps to 1072 the moment we set it, but the first
+  // ~N progress ticks read 1072 over and over while ffmpeg fills the
+  // buffer. `playbackStarted` flips only on the first tick where t
+  // moves forward from this value.
+  const lastProgressTimeRef = useRef(null)
+  // Throttle for /api/playback/report_progress — last reported time in
+  // monotonic seconds. The player emits `progress` once per second; we
+  // only forward to the server every REPORT_PROGRESS_INTERVAL_MS so the
+  // request log stops drowning out everything else.
+  const lastReportRef = useRef(0)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [volume, setVolume] = useState(1)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -283,11 +302,18 @@ function WebVideoPlayer() {
       setCurrentTime(playerState.seekBase ?? playerState.startTime ?? 0)
       setPaused(false)
       setBuffering(true)
+      setPlaybackStarted(false)
+      lastReportRef.current = 0
+      lastProgressTimeRef.current = null
       setControlsVisible(true)
       setTrackMenuOpen(false)
       setTvMode('seek')
+      // Don't schedule an auto-hide here — the visibility effect below
+      // owns that decision and gates it on `playbackStarted`. Setting a
+      // timer here unconditionally hid the controls 3 s into the loading
+      // window if the effect's clearTimeout raced with this setTimeout.
       clearTimeout(hideTimerRef.current)
-      hideTimerRef.current = setTimeout(() => setControlsVisible(false), 3000)
+      hideTimerRef.current = null
     }
   }, [playerState.sessionId, playerState.open])
 
@@ -333,14 +359,33 @@ function WebVideoPlayer() {
       if (seekingRef.current) return
       setCurrentTime(t)
       setBuffering(false)
-      if (playerState.type === 'episode' || playerState.type === 'movie') {
-        api.reportProgress(t, playerState.duration || 0, {
-          type: playerState.type,
-          episodeId: playerState.episodeId,
-          movieId: playerState.movieId,
-          watchHistoryId: playerState.watchHistoryId,
-        })
+      // Flip the spinner off only on the first progress tick where t
+      // has actually advanced from a previous tick. On resume at t=1072
+      // the player snaps `currentTime` to 1072 immediately, so the first
+      // few progress ticks read 1072 while ffmpeg fills the buffer —
+      // `t > 0` would have set playbackStarted prematurely there. The
+      // delta check works for both fresh start (t goes 0 → 1 → 2 …) and
+      // resume (t plateaus at the seek target, then advances).
+      if (lastProgressTimeRef.current !== null &&
+          t - lastProgressTimeRef.current > 0.05) {
+        setPlaybackStarted(true)
       }
+      lastProgressTimeRef.current = t
+      if (playerState.type !== 'episode' && playerState.type !== 'movie') return
+      // Throttle the network call. The player emits `progress` every
+      // ~1 s; reporting that frequently spams Rails with a transaction
+      // per second and adds nothing — server-side bookkeeping only
+      // needs second-level resolution at multi-second granularity.
+      // 5 s matches what Jellyfin's official clients use.
+      const REPORT_PROGRESS_INTERVAL_S = 5
+      if (Math.abs(t - lastReportRef.current) < REPORT_PROGRESS_INTERVAL_S) return
+      lastReportRef.current = t
+      api.reportProgress(t, playerState.duration || 0, {
+        type: playerState.type,
+        episodeId: playerState.episodeId,
+        movieId: playerState.movieId,
+        watchHistoryId: playerState.watchHistoryId,
+      })
     })
     const offEnded  = player.on('ended', () => {
       if (playerState.type === 'episode') playNextEpisode()
@@ -383,20 +428,28 @@ function WebVideoPlayer() {
     setControlsVisible(true)
     clearTimeout(hideTimerRef.current)
     hideTimerRef.current = setTimeout(() => {
-      if (!paused && !trackMenuOpen && (!isAndroidTV || tvMode === 'seek')) {
+      // Auto-hide only while the spinner is OFF and playback is actually
+      // running. Anything that keeps the spinner visible — initial load
+      // (`!playbackStarted`) or a mid-stream stall (`buffering`) — must
+      // also keep the controls visible, otherwise the user sees a
+      // spinner over a blank overlay and can't reach the close button.
+      // Pause and track-menu open both pin them open via the effect
+      // below.
+      if (!paused && !trackMenuOpen && playbackStarted && !buffering &&
+          (!isAndroidTV || tvMode === 'seek')) {
         setControlsVisible(false)
       }
     }, 3000)
-  }, [paused, trackMenuOpen, isAndroidTV, tvMode])
+  }, [paused, trackMenuOpen, playbackStarted, buffering, isAndroidTV, tvMode])
 
   useEffect(() => {
-    if (paused || trackMenuOpen) {
+    if (paused || trackMenuOpen || !playbackStarted || buffering) {
       setControlsVisible(true)
       clearTimeout(hideTimerRef.current)
     } else {
       showControls()
     }
-  }, [paused, trackMenuOpen, showControls])
+  }, [paused, trackMenuOpen, playbackStarted, buffering, showControls])
 
   useEffect(() => {
     if (isAndroidTV && controlsVisible && playBtnRef.current && !trackMenuOpen) {
@@ -664,9 +717,9 @@ function WebVideoPlayer() {
           </div>
         )}
 
-        {(paused || buffering) && (
+        {(paused || buffering || !playbackStarted) && (
           <div className="video-player-tv-center">
-            {buffering ? (
+            {(buffering || !playbackStarted) ? (
               <div className="spinner" style={{ width: 48, height: 48 }} />
             ) : (
               <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.9">
@@ -940,7 +993,7 @@ function WebVideoPlayer() {
           }}
           refraction={playBtnGlass}
         >
-          {buffering ? (
+          {(buffering || !playbackStarted) ? (
             <div className="spinner" style={{ width: 28, height: 28 }} />
           ) : paused ? (
             <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21"/></svg>
