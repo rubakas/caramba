@@ -3,6 +3,7 @@ import Navbar from '../components/Navbar'
 import ServerDiscovery from '../components/ServerDiscovery'
 import { defaultDiscover } from '../lib/discovery'
 import { useApi, useCapabilities } from '../context/ApiContext'
+import { useDebugPlayback } from '../hooks/useDebugPlayback'
 
 /**
  * Settings page. Shared between three runtimes:
@@ -35,6 +36,7 @@ export default function Settings({
   )
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
+  const [debugPlaybackEnabled, setDebugPlaybackEnabled] = useDebugPlayback()
 
   // Android TV API URL state
   const [androidApiUrlInput, setAndroidApiUrlInput] = useState(apiUrl || 'http://localhost:3001')
@@ -175,6 +177,28 @@ export default function Settings({
             </div>
           </section>
         )}
+
+        {/* Debug: playback overlay toggle */}
+        <section className="settings-section">
+          <h2 className="settings-section-title">Debug</h2>
+          <p className="settings-help">
+            Show strategy, codec, resolution, HDR, and audio info on the player.
+          </p>
+          <div className="settings-form">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+              <span style={{ flex: 1 }}>Show playback debug overlay</span>
+              <span className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={debugPlaybackEnabled}
+                  onChange={(e) => setDebugPlaybackEnabled(e.target.checked)}
+                />
+                <span className="toggle-switch-track" />
+                <span className="toggle-switch-thumb" />
+              </span>
+            </label>
+          </div>
+        </section>
 
         {/* Desktop: downloads folder */}
         {isDesktopMode && canDownload && (

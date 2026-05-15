@@ -6,6 +6,7 @@ import { useApi, useCapabilities } from '../context/ApiContext'
 import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
+import { useDebugPlayback } from '../hooks/useDebugPlayback'
 
 // Human-readable language names for common ISO 639 codes
 const LANG_NAMES = {
@@ -57,11 +58,14 @@ function subtitleLabel(stream) {
   return info ? `${lang} — ${info}` : lang
 }
 
-// Dev-only overlay that surfaces what the playback pipeline is actually doing —
+// Overlay that surfaces what the playback pipeline is actually doing —
 // which strategy was picked, source codec/res/bitrate, HDR transfer, audio
-// layout. Visible only when Vite is in dev mode.
+// layout. Gated by the "Show playback debug overlay" Settings toggle
+// (default-on in dev builds, default-off in prod) — see
+// `useDebugPlayback`.
 function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
-  if (!import.meta.env.DEV) return null
+  const [debugEnabled] = useDebugPlayback()
+  if (!debugEnabled) return null
 
   const STRATEGY_COLOR = {
     direct_play:     '#34c759',
