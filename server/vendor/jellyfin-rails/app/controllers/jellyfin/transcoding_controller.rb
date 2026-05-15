@@ -153,6 +153,16 @@ module Jellyfin
       params_hash = decode_or_400!(params[:token]) or return
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
       segment_id = params[:segment].to_i
+      # Trigger restart-on-gap. When the client jumps to a segment far ahead
+      # of where ffmpeg currently sits (e.g. user resumes at t=1072s on a
+      # newly-started transcode), `request_segment` kills the current ffmpeg
+      # and re-spawns with `-ss segment_id*segment_length -start_number
+      # segment_id` so the produced files are named to match the requested
+      # segment. Mirrors upstream Jellyfin's `GetDynamicSegment`
+      # (Jellyfin.Api/Controllers/DynamicHlsController.cs:1487-1525) which
+      # restarts ffmpeg whenever `segmentId` is before `currentTranscodingIndex`
+      # or beyond a 24-second gap.
+      manager.request_segment(job.id, segment_id)
       manager.note_segment_served(job.id, segment_id)
 
       file = Jellyfin::Transcoding::SegmentWaiter.wait(job, segment_id)
@@ -179,23 +189,39 @@ module Jellyfin
     # (each retry triggered a fresh ffmpeg startup + first-segment
     # buffering when the previous one had already exited).
     #
-    # Synchronise on the existence of the FIRST media segment instead.
-    # ffmpeg writes media[0] only after init has been fully flushed,
-    # so by the time `0.mp4` shows up on disk, `-1.mp4` is guaranteed
-    # complete.
+    # Synchronise on the existence of ANY media segment instead. ffmpeg
+    # writes media[N] only after init has been fully flushed, so by the
+    # time the first media file shows up on disk `-1.mp4` is guaranteed
+    # complete. We can't hard-code `0.mp4`: when the player resumes
+    # mid-stream the segment endpoint restarts ffmpeg at the requested
+    # segment N via `TranscodeManager#request_segment`, so ffmpeg
+    # produces `-1.mp4` + `N.mp4` and never `0.mp4`. The old hard-coded
+    # wait for `0.mp4` then timed out at 10 s and Safari got a 504 on
+    # the init file, which surfaced as a stalled spinner with no
+    # error event — the user's "movies don't play" symptom.
     def init_segment
       params_hash = decode_or_400!(params[:token]) or return
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
       job.ping!
       init_path = job.init_segment_path
-      first_seg = job.segment_path(0)
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
-      until init_path && File.exist?(init_path) && File.exist?(first_seg)
+      until init_path && File.exist?(init_path) && any_media_segment?(job)
         return render(json: { error: 'init segment timeout' }, status: :gateway_timeout) if
           Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
         sleep 0.05
       end
       send_file init_path, type: 'video/mp4', disposition: 'inline'
+    end
+
+    # True once ffmpeg has flushed at least one non-init segment. The
+    # init file (`-1.{ext}`) finalises on first media-segment flush, so
+    # waiting for "any 0..N segment exists" is sufficient to guarantee
+    # the init segment is complete on disk.
+    def any_media_segment?(job)
+      Dir.glob(File.join(job.dir, "*.#{job.segment_extension}")).any? do |path|
+        index = File.basename(path, ".#{job.segment_extension}").to_i
+        index >= 0
+      end
     end
 
     private
@@ -257,13 +283,20 @@ module Jellyfin
     # Returns nil for live streams (caller falls back to ffmpeg's playlist).
     # Mirrors upstream
     # Jellyfin.MediaEncoding.Hls/Playlist/DynamicHlsPlaylistGenerator.cs#CreateMainPlaylist.
+    #
+    # Playlist always covers the full source runtime — segments are numbered
+    # 0..N-1 across `0..total_runtime`, independent of any client-side seek.
+    # The player JS does `video.currentTime = startTime` after load and
+    # hls.js picks the right segment from the playlist; ffmpeg restarts
+    # at the requested segment via `TranscodeManager#request_segment`.
+    # This matches upstream Jellyfin
+    # (`CreateMainPlaylist` uses `request.TotalRuntimeTicks` with no seek
+    # subtraction — DynamicHlsPlaylistGenerator.cs:46).
     def build_vod_playlist(media_source, params_hash, job)
       return nil if media_source.nil? || live_stream?(media_source)
 
       total_seconds = media_source.run_time_ticks.to_f /
                       Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND
-      seek_seconds = (params_hash[:start_time_ticks].to_f /
-                      Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND)
       seg_len = job.segment_length_seconds
 
       # For stream-copy video, segment boundaries fall on source
@@ -285,7 +318,7 @@ module Jellyfin
       Jellyfin::Output::VodPlaylistGenerator.build(
         total_duration_seconds: total_seconds,
         segment_length_seconds: seg_len,
-        seek_seconds: seek_seconds,
+        seek_seconds: 0,
         segment_extension: job.segment_extension,
         container: job.segment_container,
         init_segment_uri: job.segment_container == 'mp4' ? '-1.mp4' : nil,

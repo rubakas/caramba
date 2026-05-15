@@ -98,6 +98,28 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(chain).to include('tonemap_videotoolbox=tonemap=bt2390')
     end
 
+    # Regression: the HW tonemap leg MUST close with `hwdownload,format=nv12`
+    # so frames leave the videotoolbox CVPixelBuffer surface and land in
+    # system memory before the downstream encoder / auto_scale runs.
+    # Without the download, ffmpeg crashes with
+    #   Impossible to convert between the formats supported by the filter
+    #   'Parsed_tonemap_videotoolbox_0' and the filter 'auto_scale_0'
+    # the encoder never opens, no segments are written, and the init
+    # segment endpoint loops on 504s — the user's "I see -1.mp4 requested
+    # over and over and it fails" symptom on every HDR full-transcode
+    # title (Aladdin / Ratatouille / Iron Giant 4K HDR rips). Mirrors
+    # upstream Jellyfin's `EncodingHelper.GetHwTonemapFilter` which
+    # always appends hwdownload + format=… after the HW tonemap step.
+    it 'closes the HW tonemap chain with hwdownload+format so downstream SW consumers can read frames' do
+      job = make_job(hdr: true)
+      chain = described_class.filter_chain(job, caps)
+      expect(chain).to include('hwdownload')
+      expect(chain).to match(/hwdownload,format=(nv12|yuv420p)/)
+      # `hwdownload` must come AFTER `tonemap_videotoolbox` — otherwise we
+      # download SW frames that were never on the GPU surface.
+      expect(chain.index('hwdownload')).to be > chain.index('tonemap_videotoolbox')
+    end
+
     def make_job(hdr: false)
       v = Jellyfin::Probing::MediaStream.new(
         index: 0, type: :video, codec: hdr ? 'hevc' : 'h264',

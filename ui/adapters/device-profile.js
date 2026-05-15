@@ -300,12 +300,13 @@ export function buildBrowserProfile() {
   const hlsFmp4AudioCodecs = audioCodecs.filter(c =>
     [ 'aac', 'ac3', 'eac3', 'mp3', 'flac', 'opus' ].includes(c))
 
-  const transcodingProfiles = [
-    { Container: 'ts', Type: 'Video', Protocol: 'hls',
-      VideoCodec: hlsTsVideoCodecs.join(','),
-      AudioCodec: hlsTsAudioCodecs.join(','),
-      MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS },
-  ]
+  // Order matches jellyfin-web's `browserDeviceProfile.js`:910-944 —
+  // fMP4 first, MPEG-TS second. The server picks the first matching
+  // TranscodingProfile, so listing fMP4 first makes HEVC sources (and
+  // every transcode that the fMP4 profile accepts) go through fMP4
+  // segments. Safari plays fMP4 segments natively and Jellyfin's
+  // browser client uses this exact same ordering.
+  const transcodingProfiles = []
   if (hlsFmp4VideoCodecs.length > 1) {
     transcodingProfiles.push({
       Container: 'mp4', Type: 'Video', Protocol: 'hls',
@@ -314,6 +315,12 @@ export function buildBrowserProfile() {
       MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS,
     })
   }
+  transcodingProfiles.push({
+    Container: 'ts', Type: 'Video', Protocol: 'hls',
+    VideoCodec: hlsTsVideoCodecs.join(','),
+    AudioCodec: hlsTsAudioCodecs.join(','),
+    MaxAudioChannels: TRANSCODE_TARGET_MAX_AUDIO_CHANNELS,
+  })
 
   const profile = {
     Name: 'caramba-browser',

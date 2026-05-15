@@ -73,13 +73,31 @@ RSpec.describe 'TranscodeManager shared sessions + restart-at-segment' do
     manager.stop!('seek-test')
   end
 
-  it 'leaves the job alone when the requested segment is near the current position' do
+  it 'leaves the job alone when the requested segment matches the current start_segment' do
     job = manager.ensure_started(id: 'no-seek', params: { path: fixture, segment_length: 1 })
     pid_before = job.pid
-    manager.request_segment('no-seek', 1)
+    manager.request_segment('no-seek', 0)
     expect(job.start_segment).to eq(0)
     expect(job.pid).to eq(pid_before)
     manager.stop!('no-seek')
+  end
+
+  it 'restarts on first segment request when it does not match the start_segment' do
+    # Matches upstream's GetDynamicSegment behaviour: when
+    # `currentTranscodingIndex is null` (no segment produced yet), the
+    # next segment request determines where ffmpeg is started/restarted.
+    # Without this, ffmpeg keeps emitting `0.ts, 1.ts, …` while the
+    # client (via the player's seekOnPlaybackStart) requests the segment
+    # that maps to its currentTime — a mismatch that wedges Safari on a
+    # "waiting" state until the player gives up (the user's "movies
+    # don't play in Safari" report).
+    job = manager.ensure_started(id: 'mismatch', params: { path: fixture, segment_length: 1 })
+    initial_log = job.stderr_path
+    manager.request_segment('mismatch', 3)
+    expect(job.start_segment).to eq(3)
+    expect(job.restart_count).to be >= 1
+    expect(job.stderr_path).not_to eq(initial_log)
+    manager.stop!('mismatch')
   end
 end
 

@@ -13,7 +13,8 @@ module Jellyfin
                     :start_segment, :last_served_segment, :ref_count,
                     :progress_reader, :live_stream_id, :media_source,
                     :fonts_dir,
-                    :play_session_id, :is_user_paused
+                    :play_session_id, :is_user_paused,
+                    :aligned_to_client
 
       def initialize(id:, params:, root_dir:)
         @id = id
@@ -53,11 +54,27 @@ module Jellyfin
         # (MediaBrowser.MediaEncoding/Transcoding/TranscodeManager.cs).
         @play_session_id = params[:play_session_id]
         @is_user_paused = false
+        # ensure_started pre-spawns ffmpeg at `-ss 0 -start_number 0` to
+        # have a process running by the time the variant playlist is
+        # requested. The player JS, however, seeks to the user's resume
+        # time via `seekOnPlaybackStart` and hls.js then requests the
+        # segment that covers that timestamp — segment 4 for a 24-second
+        # resume on a 6-second-segment playlist. Without alignment, the
+        # pre-spawned ffmpeg keeps emitting `0.mp4, 1.mp4, …` while the
+        # client waits for `4.mp4`, which never arrives.
+        #
+        # `aligned_to_client` flips true the first time the segment
+        # endpoint observes a client request. `TranscodeManager#request_segment`
+        # uses that signal to restart ffmpeg at the requested segment
+        # exactly once per session — subsequent requests fall through to
+        # the gap-based seek-restart logic that mirrors upstream
+        # `DynamicHlsController.GetDynamicSegment`.
+        @aligned_to_client = false
       end
 
       def attach!  = @ref_count += 1
       def detach!
-        @ref_count = [@ref_count - 1, 0].max
+        @ref_count = [ @ref_count - 1, 0 ].max
       end
 
       # Rotates the ffmpeg log path so each restart writes to its own file.

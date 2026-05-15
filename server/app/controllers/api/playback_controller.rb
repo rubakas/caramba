@@ -112,7 +112,24 @@ class Api::PlaybackController < Api::BaseController
       path: file_path,
       audio_track: audio_stream_index,
       subtitle_track: is_bitmap ? subtitle_stream_index : nil,
-      start_time_ticks: (start_time * 10_000_000).to_i.presence,
+      # NOTE: start_time is intentionally NOT baked into the token. The player
+      # JS does `video.currentTime = startTime` after loading the master
+      # playlist (`seekOnPlaybackStart` in `player/src/media-helper.ts`), and
+      # hls.js then requests the segment that covers that timestamp. Mirrors
+      # upstream Jellyfin's `DynamicHlsController.GetDynamicSegment`
+      # (Jellyfin.Api/Controllers/DynamicHlsController.cs:1430-1432) which
+      # explicitly rejects `StartTimeTicks` on segment requests — the seek
+      # is per-segment-request, not per-session. The far-ahead segment
+      # request triggers `TranscodeManager#request_segment` →
+      # `restart_at_segment` which spawns ffmpeg with the correct
+      # `-ss N*segment_length -start_number N`.
+      #
+      # Baking `start_time_ticks` here caused a double-seek bug for any
+      # `startTime > segment_length`: the engine seeked ffmpeg by `-ss
+      # startTime` AND the player seeked the playlist by `currentTime =
+      # startTime`. Playlist's "segment 4" then meant `source 24-30s`
+      # to the player but `source 48-54s` to ffmpeg. Resume on Aladdin
+      # at 24s hung Safari on a 4.ts that ffmpeg was naming 0.ts.
       max_bitrate: client_profile.max_video_bitrate,
       # Master-playlist rendition gating. Mirrors upstream's
       # SubtitleDeliveryMethod enum: only when the client's DeviceProfile
@@ -132,17 +149,23 @@ class Api::PlaybackController < Api::BaseController
     if pre_decision.direct_stream?
       transcode_token_params[:video_codec] = "copy"
       transcode_token_params[:audio_codec] = "copy"
-      # HEVC/AV1 stream-copy must use fMP4 segments. Safari's native HLS
-      # engine rejects HEVC inside MPEG-TS (Apple's HLS spec mandates
-      # fMP4 for HEVC). Matches what upstream Jellyfin serves Safari for
-      # the same content — see the network panel comparison the user
-      # captured: jellyfin emits `-1.mp4` (init) + `N.mp4` (media
-      # fragments) and stream-copies at ~50× realtime.
-      source_video_codec = info.dig(:video, :codec).to_s.downcase
-      if %w[hevc h265 av1 av01].include?(source_video_codec)
-        transcode_token_params[:segment_container] = "mp4"
-      end
     end
+
+    # Pick the segment container from the client's TranscodingProfiles.
+    # Mirrors upstream Jellyfin's `StreamBuilder.GetVideoTranscodeProfile`
+    # selection: walk TranscodingProfiles in order, take the first whose
+    # `VideoCodec` covers the codec we'll emit. jellyfin-web's
+    # `browserDeviceProfile.js:910` pushes the fMP4 profile FIRST and the
+    # MPEG-TS profile second, so HEVC sources (and every h264 transcode
+    # that fMP4 also accepts) end up as fMP4 segments — that's exactly
+    # what Safari fetches when playing the same content via Jellyfin's
+    # native client. Without this branch the engine fell back to its
+    # `ts` default for full transcodes, and Safari hung on the `*.ts`
+    # output for 4K HDR HEVC → h264 jobs.
+    target_video_codec = transcode_token_params[:video_codec] == "copy" ?
+      info.dig(:video, :codec).to_s.downcase : "h264"
+    selected_container = pick_segment_container(device_profile_raw, target_video_codec)
+    transcode_token_params[:segment_container] = selected_container if selected_container
 
     direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)
     transcode_token = Jellyfin::Transcoding::Token.encode(transcode_token_params)
@@ -343,6 +366,39 @@ class Api::PlaybackController < Api::BaseController
     Set.new(Array(device_profile&.dig("DirectPlayProfiles")).flat_map { |entry|
       entry["AudioCodec"].to_s.split(/\s*,\s*/).map(&:downcase)
     })
+  end
+
+  # Walks the client's TranscodingProfiles (in declaration order) and
+  # returns the Container of the first entry whose VideoCodec list covers
+  # `target_video_codec`. Used to pick `segment_container` for the HLS
+  # output. Mirrors upstream Jellyfin's behaviour where jellyfin-web's
+  # `browserDeviceProfile.js:910` deliberately places the fMP4 profile
+  # before the MPEG-TS profile so HEVC sources stream-copy into fMP4
+  # and h264 transcodes also land in fMP4 segments (the second `ts`
+  # profile only wins when the first doesn't cover the codec — e.g.
+  # legacy devices that omit the fMP4 profile entirely).
+  def pick_segment_container(device_profile, target_video_codec)
+    return nil if device_profile.nil?
+    target = target_video_codec.to_s.downcase
+    Array(device_profile["TranscodingProfiles"]).each do |entry|
+      next unless entry["Type"].to_s.casecmp?("video")
+      next unless entry["Protocol"].to_s.casecmp?("hls")
+      codecs = entry["VideoCodec"].to_s.split(/\s*,\s*/).map(&:downcase)
+      next unless codecs.any? { |c| segment_codec_match?(c, target) }
+      container = entry["Container"].to_s.downcase
+      return container if %w[mp4 ts].include?(container)
+    end
+    nil
+  end
+
+  # Loose codec equality for matching client-declared codecs against the
+  # codec ffmpeg will emit. Mirrors `Decision#codec_alias?` so the same
+  # h264/avc and hevc/h265 synonyms resolve identically here and in the
+  # direct-play decision tree.
+  def segment_codec_match?(declared, target)
+    return true if declared == target
+    eq = [ %w[h264 avc], %w[hevc h265 h.265], %w[av1 av01] ]
+    eq.any? { |group| group.include?(declared) && group.include?(target) }
   end
 
   # True when the client's DeviceProfile lists at least one SubtitleProfile

@@ -83,7 +83,22 @@ module Jellyfin
           # tonemap_videotoolbox is the jellyfin-ffmpeg HDR filter for Apple silicon.
           return nil unless job.hdr_input? && caps.supports_filter?('tonemap_videotoolbox')
           peak = job.options.tonemapping_peak
-          "tonemap_videotoolbox=tonemap=#{job.options.tonemapping_algorithm}:peak=#{peak}:format=nv12"
+          # `tonemap_videotoolbox` runs on CVPixelBuffer surfaces and emits
+          # videotoolbox-tagged nv12 (GPU memory). `hwdownload + format=nv12`
+          # brings the frames back to system memory so the downstream
+          # encoder (or any SW filter / `-pix_fmt yuv420p` auto-scale) can
+          # consume them. Without the download leg ffmpeg fails with
+          #   Impossible to convert between the formats supported by the
+          #   filter 'Parsed_tonemap_videotoolbox_0' and the filter
+          #   'auto_scale_0'
+          # and nothing is written to the output — the symptom users see is
+          # the init segment endpoint timing out at 10 s on every HDR
+          # transcode (Aladdin / Ratatouille / Iron Giant 4K HDR rips).
+          # Mirrors upstream Jellyfin's `EncodingHelper.GetHwTonemapFilter`
+          # (EncodingHelper.cs ~6705) which always closes the HW filter
+          # block with `hwdownload` + `format=…` so the encoder side stays
+          # on system memory.
+          "tonemap_videotoolbox=tonemap=#{job.options.tonemapping_algorithm}:peak=#{peak}:format=nv12,hwdownload,format=nv12"
         end
 
         def encoder_args(_job)

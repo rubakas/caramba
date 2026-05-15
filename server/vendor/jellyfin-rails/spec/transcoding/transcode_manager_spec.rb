@@ -75,3 +75,65 @@ RSpec.describe Jellyfin::Transcoding::TranscodeManager do
     expect(job.alive?).to be(false)
   end
 end
+
+# Stream lookup semantics: track-selection params from the controller
+# carry the GLOBAL ffprobe stream index (`s.index`), matching upstream
+# Jellyfin's `AudioStreamIndex` / `VideoStreamIndex` / `SubtitleStreamIndex`.
+# Upstream resolves these via `EncodingHelper.GetMediaStream`, which
+# filters by stream type and picks the one whose `.Index` matches —
+# NOT the Nth element of the per-type sublist. Regression for the case
+# of multi-audio MKVs (typical of foreign-language releases like
+# EEAAO with UKR_ENG): the controller picks `audio_track=3` (global
+# stream index of the matched English AC-3), the engine previously did
+# `audio_streams[3]` and either picked the wrong audio or fell through
+# to default — never the audio the user asked for.
+RSpec.describe Jellyfin::Transcoding::TranscodeManager, 'stream lookup' do
+  let(:manager) { Jellyfin::Transcoding::TranscodeManager.new }
+
+  def stream(index, type, **rest)
+    Jellyfin::Probing::MediaStream.new(index: index, type: type, **rest)
+  end
+
+  let(:source) do
+    Jellyfin::Probing::MediaSourceInfo.new(
+      id: 'eeaao', path: '/x.mkv', container: 'mkv', run_time_ticks: 0,
+      streams: [
+        stream(0, :video, codec: 'hevc'),
+        stream(1, :audio, codec: 'ac3', channels: 6, language: 'ukr'),
+        stream(2, :audio, codec: 'ac3', channels: 2, language: 'ukr'),
+        stream(3, :audio, codec: 'ac3', channels: 2, language: 'eng'),
+        stream(4, :audio, codec: 'ac3', channels: 6, language: 'eng'),
+        stream(5, :subtitle, codec: 'subrip', language: 'eng'),
+        stream(6, :subtitle, codec: 'hdmv_pgs_subtitle', language: 'ukr')
+      ]
+    )
+  end
+
+  it 'select_audio_stream looks up by global ffprobe stream index' do
+    picked = manager.send(:select_audio_stream, source, 3)
+    expect(picked.index).to eq(3)
+    expect(picked.language).to eq('eng')
+    expect(picked.channels).to eq(2)
+  end
+
+  it 'select_video_stream looks up by global ffprobe stream index' do
+    picked = manager.send(:select_video_stream, source, 0)
+    expect(picked.index).to eq(0)
+    expect(picked.codec).to eq('hevc')
+  end
+
+  it 'select_subtitle_stream looks up by global ffprobe stream index' do
+    picked = manager.send(:select_subtitle_stream, source, 5)
+    expect(picked.index).to eq(5)
+    expect(picked.codec).to eq('subrip')
+  end
+
+  it 'select_audio_stream falls back to default when global index has no match' do
+    picked = manager.send(:select_audio_stream, source, 99)
+    expect(picked.index).to eq(1) # first audio = default fallback
+  end
+
+  it 'select_subtitle_stream returns nil when global index has no match' do
+    expect(manager.send(:select_subtitle_stream, source, 99)).to be_nil
+  end
+end

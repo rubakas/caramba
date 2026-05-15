@@ -51,8 +51,20 @@ module Jellyfin
         args += video_args(job, backend: backend)
         args += audio_args(job)
         args += Filters::Rotation.metadata_args(job)
-        args += hls_output_args(job, playlist_path: playlist_path, segment_template: segment_template)
-        args += Seek.hls_segment_number_args(plan.start_segment)
+        # `-start_number N` is an OUTPUT option for the HLS muxer, so it
+        # must appear BEFORE the playlist URL — anything after the output
+        # filename triggers ffmpeg's "Trailing option(s) found in the
+        # command: may be ignored." warning and the option is silently
+        # dropped. Effect: ffmpeg numbers segments `0.mp4, 1.mp4, …`
+        # instead of `N.mp4, N+1.mp4, …`, and the segment endpoint waits
+        # 30 s for `178.mp4` that ffmpeg names `0.mp4` — surfaces as
+        # 504 Gateway Timeout on every resume / mid-playlist segment
+        # request. Mirrors upstream Jellyfin's
+        # `EncodingHelper.GetHlsMuxerArgs` which places `-start_number`
+        # in the same output-options block as the rest of the HLS flags.
+        args += hls_output_args(job, playlist_path: playlist_path,
+                                     segment_template: segment_template,
+                                     start_segment: plan.start_segment)
         args
       end
 
@@ -379,7 +391,7 @@ module Jellyfin
 
       # Segment container is locked at job creation; pre-compute so the
       # bitstream-filter + muxer-tag branches see the same value.
-      def hls_output_args(job, playlist_path:, segment_template:)
+      def hls_output_args(job, playlist_path:, segment_template:, start_segment: 0)
         container = job_segment_container(job)
 
         # The `{h264,hevc}_mp4toannexb` bitstream filter converts MP4-
@@ -471,6 +483,10 @@ module Jellyfin
           args.concat([ '-hls_segment_options', 'movflags=+frag_discont' ])
         end
         args.concat([ '-hls_segment_filename', segment_template ])
+        # `-start_number` must precede the output URL — see comment in
+        # `command_line_arguments`. Empty array when start_segment is 0
+        # (no change from ffmpeg's default of 0).
+        args.concat(Seek.hls_segment_number_args(start_segment))
         # AES-128 encryption opt-in. EncodingOptions#hls_encryption_material is
         # set by the controller / Manager when the request asked for it.
         args.concat(Jellyfin::Output::HlsEncryption.output_args(job.options.hls_encryption_material))

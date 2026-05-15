@@ -138,28 +138,72 @@ module Jellyfin
       end
 
       # Called when a client requests a segment that may be ahead of where
-      # ffmpeg currently sits. If the gap exceeds the restart threshold, the
-      # current process is killed and ffmpeg is re-spawned with -ss pointing at
-      # the requested segment. Mirrors TranscodeManager.cs's seek-on-restart
-      # behavior.
-      RESTART_GAP_SEGMENTS = 10
-
+      # ffmpeg currently sits. Mirrors upstream
+      # `DynamicHlsController.GetDynamicSegment`
+      # (Jellyfin.Api/Controllers/DynamicHlsController.cs:1487-1500): restart
+      # ffmpeg whenever the requested segment is far from where ffmpeg is
+      # currently producing, including the "ffmpeg just spawned but hasn't
+      # produced anything yet" case.
+      #
+      # Three restart triggers:
+      #   1. ffmpeg has produced no segments yet AND the requested segment
+      #      doesn't match the start position the job was spawned at.
+      #      Upstream: `currentTranscodingIndex is null` ⇒ startTranscoding.
+      #   2. Client seeks BACKWARDS (requested segment < current job's
+      #      start_segment). Upstream: `segmentId < currentTranscodingIndex`.
+      #   3. Client seeks FORWARD beyond the natural look-ahead window
+      #      (gap > 24s ÷ segment_length). Upstream:
+      #      `segmentGapRequiringTranscodingChange = 24 / SegmentLength`.
       def request_segment(id, segment_n)
         AsyncKeyedLocker.instance.with("job:#{id}") do
           @mutex.synchronize do
             job = @jobs[id]
             return nil unless job
 
-            current = current_segment_for(job)
-            gap = segment_n.to_i - current
-            if gap >= RESTART_GAP_SEGMENTS
-              restart_at_segment(job, segment_n.to_i)
-            end
+            existing = produced_segment_indices(job)
+            target = segment_n.to_i
+            gap_threshold = [ (24.0 / job.segment_length_seconds.to_f).floor, 1 ].max
+
+            # First client request wins: align ffmpeg to whatever segment
+            # the player is asking for. `ensure_started` pre-spawns ffmpeg
+            # at `-ss 0 -start_number 0` because we need *a* job object
+            # to compose the master/variant playlists, but the player
+            # immediately seeks to its resume time and the first segment
+            # request is rarely segment 0. Without this branch the
+            # pre-spawned ffmpeg keeps emitting `0.mp4, 1.mp4, …` and the
+            # client waits forever for `4.mp4` on a 24-second resume.
+            #
+            # Subsequent requests fall through to the gap-based restart
+            # logic upstream uses (DynamicHlsController.cs:1487-1500).
+            should_restart =
+              if !job.aligned_to_client
+                target != job.start_segment
+              elsif existing.empty?
+                target != job.start_segment
+              elsif target < job.start_segment
+                true
+              elsif (target - existing.max) > gap_threshold
+                true
+              else
+                false
+              end
+
+            restart_at_segment(job, target) if should_restart
+            job.aligned_to_client = true
             job.ping!
-            job.last_served_segment = segment_n.to_i
+            job.last_served_segment = target
             job
           end
         end
+      end
+
+      # Returns the sorted list of media-segment indices that ffmpeg has
+      # written to disk for this job. Excludes the fMP4 init segment
+      # (`-1.mp4`) since `.to_i` would parse it as -1.
+      def produced_segment_indices(job)
+        Dir.glob(File.join(job.dir, "*.#{job.segment_extension}"))
+           .map { |f| File.basename(f, ".#{job.segment_extension}").to_i }
+           .reject(&:negative?)
       end
 
       # Called by the controller every time a segment is delivered to a client.
@@ -349,7 +393,7 @@ module Jellyfin
         job.progress_reader = ProgressReader.new(progress_pipe)
 
         args = build_args(job) + job.progress_reader.args_for_ffmpeg
-        cmd = [Jellyfin::Rails.configuration.ffmpeg_path, *args]
+        cmd = [ Jellyfin::Rails.configuration.ffmpeg_path, *args ]
         stderr = File.open(job.stderr_path, 'w')
         job.pid = Process.spawn(*cmd, out: stderr, err: stderr)
         job.started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -559,19 +603,32 @@ module Jellyfin
         requested
       end
 
+      # `idx` is the GLOBAL ffprobe stream index (`s.index`), matching
+      # upstream Jellyfin's `AudioStreamIndex` / `VideoStreamIndex` /
+      # `SubtitleStreamIndex` semantics. Upstream resolves via
+      # `EncodingHelper.GetMediaStream` (EncodingHelper.cs:3147) which
+      # filters by `MediaStreamType` and picks the one whose `.Index`
+      # matches — NOT the Nth element of the per-type sublist. The port
+      # previously used `audio_streams[idx]` (per-type list index),
+      # which silently picked the wrong audio for any multi-audio MKV
+      # whose first audio wasn't at stream-list index 0 — e.g. EEAAO
+      # with [video=0, audio=1, audio=2, audio=3=eng, subs…]: the
+      # controller picks `audio_track=3` (global) and the engine
+      # returned `audio_streams[3]` (the *fourth* audio if one even
+      # exists, otherwise nil → fall through to default = first audio).
       def select_video_stream(source, idx)
         return source.default_video_stream if idx.nil?
-        source.video_streams[idx.to_i] || source.default_video_stream
+        source.video_streams.find { |s| s.index == idx.to_i } || source.default_video_stream
       end
 
       def select_audio_stream(source, idx)
         return source.default_audio_stream if idx.nil?
-        source.audio_streams[idx.to_i] || source.default_audio_stream
+        source.audio_streams.find { |s| s.index == idx.to_i } || source.default_audio_stream
       end
 
       def select_subtitle_stream(source, idx)
         return nil if idx.nil?
-        source.subtitle_streams[idx.to_i]
+        source.subtitle_streams.find { |s| s.index == idx.to_i }
       end
 
       def ensure_reaper!

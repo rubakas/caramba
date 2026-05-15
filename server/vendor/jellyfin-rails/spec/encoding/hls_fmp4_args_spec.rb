@@ -97,4 +97,45 @@ RSpec.describe 'EncodingHelper HLS fMP4 args (regression)' do
       expect(args).not_to include('movflags=+frag_discont')
     end
   end
+
+  # Regression: `-start_number N` is an OUTPUT option for the HLS muxer,
+  # so it MUST appear before the output URL. The port previously appended
+  # it after the playlist path (at the very end of the arg array), which
+  # makes ffmpeg log "Trailing option(s) found in the command: may be
+  # ignored." and silently drop the flag — so a restart at segment N
+  # produced `0.mp4, 1.mp4, …` instead of `N.mp4, N+1.mp4, …`. Every
+  # resume / mid-playlist segment request then 504'd at SegmentWaiter's
+  # 30 s deadline because `N.mp4` never appeared on disk. Mirrors
+  # upstream Jellyfin's `EncodingHelper.GetHlsMuxerArgs`, which inlines
+  # `-start_number` in the same output-options block as the HLS flags.
+  describe '-start_number placement' do
+    it 'places -start_number before the playlist URL when start_segment > 0' do
+      info = make_info(segment_container: 'mp4')
+      args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+        info,
+        playlist_path: '/tmp/transcodes/job/master.m3u8',
+        segment_template: '/tmp/transcodes/job/%d.mp4',
+        start_segment: 178,
+        capabilities: caps
+      )
+      sn_idx = args.index('-start_number')
+      url_idx = args.index('/tmp/transcodes/job/master.m3u8')
+      expect(sn_idx).not_to be_nil
+      expect(args[sn_idx + 1]).to eq('178')
+      expect(url_idx).not_to be_nil
+      expect(sn_idx).to be < url_idx
+    end
+
+    it 'omits -start_number entirely when start_segment is 0' do
+      info = make_info(segment_container: 'mp4')
+      args = Jellyfin::Encoding::EncodingHelper.command_line_arguments(
+        info,
+        playlist_path: '/tmp/transcodes/job/master.m3u8',
+        segment_template: '/tmp/transcodes/job/%d.mp4',
+        start_segment: 0,
+        capabilities: caps
+      )
+      expect(args).not_to include('-start_number')
+    end
+  end
 end
