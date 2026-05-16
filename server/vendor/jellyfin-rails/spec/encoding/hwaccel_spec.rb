@@ -132,6 +132,56 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     end
   end
 
+  describe Jellyfin::Encoding::Hwaccel::Qsv do
+    let(:caps) do
+      caps_for(
+        encoders: %w[h264_qsv hevc_qsv],
+        filters:  %w[scale_qsv hwupload],
+        hwaccels: %w[qsv]
+      )
+    end
+
+    # Regression: the QSV filter chain MUST start with `format=nv12|qsv`
+    # before `hwupload`, mirroring Vaapi#filter_chain. Without it, when
+    # ffmpeg's QSV decoder isn't engaged for the source codec (or HW
+    # decode silently falls back to SW), frames hit `hwupload` as
+    # `yuv420p`. ffmpeg then auto-inserts an `auto_scale` filter that
+    # can't bridge software YUV to a QSV hardware surface and crashes
+    # with "Impossible to convert between the formats supported by the
+    # filter 'Parsed_hwupload_0' and the filter 'auto_scale_0'", the
+    # encoder never opens, no segments get written, and the init segment
+    # endpoint loops on 504s — the user's "Iron Giant buffers forever"
+    # symptom on every full_transcode title. Pattern mirrors the SW-
+    # decode branch of upstream EncodingHelper.cs:4750 which always
+    # appends `format=nv12` before any eventual hwupload.
+    it 'prepends format=nv12|qsv before hwupload to bridge SW decode output' do
+      job = make_job
+      chain = described_class.filter_chain(job, caps)
+      expect(chain).to start_with('format=nv12|qsv,hwupload=extra_hw_frames=64')
+    end
+
+    it 'appends a scale_qsv leg when output_height is set' do
+      job = make_job(output_height: 1080)
+      chain = described_class.filter_chain(job, caps)
+      expect(chain).to include("scale_qsv=-2:'min(1080,ih)'")
+    end
+
+    def make_job(output_height: nil)
+      v = Jellyfin::Probing::MediaStream.new(
+        index: 0, type: :video, codec: 'h264',
+        width: 1920, height: 1080, frame_rate: 24.0,
+        video_range: 'SDR', video_range_type: 'SDR'
+      )
+      source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v ])
+      Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: source,
+        output_video_codec: 'h264'
+      ).tap do |job|
+        job.define_singleton_method(:output_height) { output_height }
+      end
+    end
+  end
+
   describe Jellyfin::Encoding::EncodingHelper, 'with HW accel' do
     it 'uses h264_videotoolbox when HW accel is enabled and available' do
       caps = Class.new do
