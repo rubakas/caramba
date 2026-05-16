@@ -3,19 +3,59 @@
 #
 # Multi-arch Caramba server image.
 #
-# Build locally:
-#   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t ghcr.io/rubakas/caramba-server:dev server
+# Build context is the REPO ROOT (not server/) so the web-build stage
+# can see the pnpm workspace it depends on. Always invoke as:
 #
-# Run on a UGREEN NAS (or any Intel/AMD Linux box with /dev/dri):
-#   see docker-compose.yml at the repo root.
+#   docker buildx build -f server/Dockerfile <repo-root>
+#
+# server/bin/build does this automatically.
 
 ARG RUBY_VERSION=4.0.2
-FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
+ARG NODE_VERSION=22
+
+# ── React SPA build (platform-agnostic) ─────────────────────────────────
+# Runs once on the BUILDPLATFORM so we don't pay QEMU emulation per target
+# arch — JS bundles are platform-neutral. Output lands at /repo/web/dist/.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web-build
+WORKDIR /repo
+# Pin pnpm to the same major as the host (matches the lockfileVersion 9.0
+# that the repo currently uses). pnpm 11+ treats unapproved build scripts
+# (esbuild, @sentry/cli) as fatal; pnpm 10 only warns.
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+
+# Copy workspace metadata first so pnpm install gets cached separately
+# from source changes.
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY web/package.json web/
+COPY ui/package.json ui/
+COPY player/package.json player/
+COPY desktop/package.json desktop/
+COPY android-tv/package.json android-tv/
+COPY tests/package.json tests/
+
+# Install only web's workspace closure: web/ + ui/ + player/. android-tv/,
+# desktop/, and tests/ (Playwright, Electron, Capacitor CLI) are not needed
+# for a server-side SPA bundle. @capacitor/* is referenced from VideoPlayer.jsx
+# but externalized in web/vite.config.js so rolldown leaves it as a literal
+# import — never resolved at build time.
+#
+# --ignore-scripts skips any remaining postinstalls (e.g. @sentry/cli).
+# esbuild's per-platform binary still lands via optionalDependencies,
+# which aren't scripts.
+# --frozen-lockfile keeps the image deterministic.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@caramba/web..."
+
+# Source for the packages web actually consumes.
+COPY web web
+COPY ui ui
+COPY player player
+
+RUN pnpm --filter @caramba/web exec vite build
+
+# ── Ruby base (target-arch) ─────────────────────────────────────────────
+FROM docker.io/library/ruby:${RUBY_VERSION}-slim AS base
 ARG TARGETARCH
 
-# Link this image to the Caramba repo in GHCR — makes the package show up
-# under the repo's Packages sidebar and inherit its visibility / README.
 LABEL org.opencontainers.image.source="https://github.com/rubakas/caramba"
 LABEL org.opencontainers.image.description="Caramba media server (Rails + jellyfin-rails) for UGREEN NAS / generic Linux."
 LABEL org.opencontainers.image.licenses="MIT"
@@ -65,7 +105,7 @@ ENV RAILS_ENV="production" \
     BUNDLE_WITHOUT="development" \
     LD_PRELOAD="/usr/local/lib/libjemalloc.so"
 
-# ── jellyfin-ffmpeg ───────────────────────────────────────────────────────
+# ── jellyfin-ffmpeg (target-arch) ───────────────────────────────────────
 # Download the portable jellyfin-ffmpeg build that matches the target arch
 # of THIS image (not the build host). When using buildx with --platform,
 # Docker sets TARGETARCH automatically (amd64 | arm64). The version and
@@ -95,7 +135,7 @@ RUN set -eux; \
     test -x "/ffmpeg/${dir}/ffprobe"; \
     "/ffmpeg/${dir}/ffmpeg" -version
 
-# ── Gem build stage ───────────────────────────────────────────────────────
+# ── Gem build stage ─────────────────────────────────────────────────────
 FROM base AS build
 
 RUN apt-get update -qq && \
@@ -103,21 +143,21 @@ RUN apt-get update -qq && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Copy the whole vendor tree (jellyfin-rails engine + bundled JS + …) so
-# bundler can resolve path:-style gems. Globbing with `vendor/*` would
-# flatten the subdirectories into ./vendor/ and lose jellyfin-rails/.
-COPY vendor/ ./vendor/
-COPY Gemfile Gemfile.lock ./
+# bundler can resolve path:-style gems. Paths are relative to the repo
+# root, not server/.
+COPY server/vendor/ ./vendor/
+COPY server/Gemfile server/Gemfile.lock ./
 
 RUN bundle install && \
     rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
     bundle exec bootsnap precompile -j 1 --gemfile
 
-COPY . .
+COPY server/ ./
 
 RUN bundle exec bootsnap precompile -j 1 app/ lib/
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-# ── Final image ───────────────────────────────────────────────────────────
+# ── Final image ─────────────────────────────────────────────────────────
 FROM base
 
 # Non-root user. The render/video GIDs vary per host kernel, so the user is
@@ -129,8 +169,10 @@ RUN groupadd --system --gid 1000 rails && \
 
 COPY --chown=rails:rails --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
 COPY --chown=rails:rails --from=build /rails /rails
-# Drop the platform-matched jellyfin-ffmpeg into the path the initializer
-# expects. The setup-ffmpeg script (used in dev) lays it out the same way.
+# Built React SPA from the Node stage — drops index.html, favicon.png, and
+# assets/ alongside Rails' own error pages (400.html, 404.html, etc.).
+COPY --chown=rails:rails --from=web-build /repo/web/dist/ /rails/public/
+# Platform-matched jellyfin-ffmpeg.
 COPY --chown=rails:rails --from=ffmpeg /ffmpeg /rails/vendor/ffmpeg
 
 USER 1000:1000

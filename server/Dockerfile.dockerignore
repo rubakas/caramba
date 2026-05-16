@@ -1,0 +1,51 @@
+# Build context is the repo root. Strip everything we don't need so the
+# context tarball stays small and the build is reproducible.
+#
+# BuildKit picks this file up automatically when invoked as
+#   docker buildx build -f server/Dockerfile <repo-root>
+# (precedence: <dockerfile>.dockerignore wins over the root .dockerignore).
+
+# Heavyweight build outputs + caches.
+**/node_modules
+**/dist
+**/dist-react
+desktop/dist
+android-tv/android/build
+android-tv/android/app/build
+android-tv/android/.gradle
+
+# VCS + IDE.
+.git
+.github
+.idea
+.vscode
+
+# Logs / tmp / OS junk.
+**/log
+**/tmp
+**/.DS_Store
+**/*.log
+
+# Rails-side: never copy dev-only state into the image.
+server/log
+server/tmp
+server/storage
+server/.bundle
+server/.env*
+server/config/master.key
+server/config/credentials/*.key
+
+# Host-side ffmpeg binaries — the Dockerfile downloads the Linux variant
+# inside the image, never the developer's macOS/Windows one.
+server/vendor/ffmpeg
+
+# Test fixtures + e2e artifacts.
+tests/playwright-report
+tests/test-results
+
+# Top-level dev files that don't belong in the image.
+.env*
+.claude
+.cursor
+*.md
+deploy

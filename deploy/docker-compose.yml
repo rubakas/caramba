@@ -27,6 +27,11 @@ services:
   caramba-server:
     image: ${CARAMBA_IMAGE:-ghcr.io/rubakas/caramba-server:latest}
     container_name: caramba-server
+    # Pull the latest image every time the container is (re)created. UGOS
+    # Docker UI has no "Pull" button, so this is the only way to get fresh
+    # images without SSH'ing in. Tagged versions (e.g. :1.5.0) get pulled
+    # the same way — Docker still checks the digest.
+    pull_policy: always
     restart: unless-stopped
     ports:
       # host_port:container_port — Puma listens on 3000 inside the container

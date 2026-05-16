@@ -74,12 +74,15 @@ if $PUBLISH; then
 
   echo ""
   echo "Building + pushing $PLATFORMS → $TAG_VERSION + :latest"
+  # Build context is the repo root so the Node stage can resolve the pnpm
+  # workspace (web/, ui/, player/ live next to server/).
   docker buildx build \
     --platform "$PLATFORMS" \
     --tag "$TAG_VERSION" \
     --tag "$TAG_LATEST" \
+    -f "$ROOT_DIR/server/Dockerfile" \
     --push \
-    .
+    "$ROOT_DIR"
   echo ""
   echo "Pushed: $TAG_VERSION"
   echo "Pushed: $TAG_LATEST"
@@ -98,8 +101,9 @@ else
     --platform "$PLATFORM" \
     --tag "$TAG_VERSION" \
     --tag "$TAG_LATEST" \
+    -f "$ROOT_DIR/server/Dockerfile" \
     --load \
-    .
+    "$ROOT_DIR"
   echo ""
   echo "Built local image: $TAG_VERSION"
   docker images "$IMAGE" --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'

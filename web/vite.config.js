@@ -26,6 +26,15 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     sourcemap: 'hidden',
+    // @capacitor/* is referenced from ui/components/VideoPlayer.jsx behind
+    // an `if (isAndroidTV)` runtime guard. It's never executed on the web,
+    // so make it external — rolldown won't try to resolve it during build,
+    // and the dynamic import string stays in the bundle (unreachable code).
+    // The android-tv build uses vite.config.android.js which doesn't apply
+    // this external, so Capacitor resolves normally there.
+    rollupOptions: {
+      external: [/^@capacitor\//],
+    },
   },
   server: {
     port: 3000,

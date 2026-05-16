@@ -34,7 +34,9 @@
 /node_modules/
 /app/assets/builds/*
 !/app/assets/builds/.keep
-/public/assets
+# Note: do NOT ignore /public/assets — server/bin/build stages the Vite
+# SPA build (web/dist/) into public/ before invoking docker build, and
+# public/assets/ is where the JS chunks land.
 
 # Ignore CI service files.
 /.github
