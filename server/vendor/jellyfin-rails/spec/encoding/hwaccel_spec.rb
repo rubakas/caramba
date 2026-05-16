@@ -303,6 +303,41 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       args = described_class.encoder_args(job)
       expect(args.each_cons(2).to_a).to include([ '-global_quality', '28' ])
     end
+
+    # Regression: `-preset medium` produced 30-60s first-segment latency
+    # on 4K sources (encoder pipeline takes ~6s of source frames to flush
+    # the init segment at ~0.1× realtime; medium is way too slow on a
+    # 15W iGPU). Upstream defaults QSV to `veryfast` (EncodingHelper.cs:
+    # 1761) — the HW encoder's quality is fixed by `-global_quality`, not
+    # by software preset, so faster preset = same quality + much lower
+    # latency. Symptom: "almost a minute to start playback, every seek
+    # takes the same time, this is not acceptable".
+    it 'uses -preset veryfast (not medium) for fast first-segment + seek' do
+      job = make_job
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-preset', 'veryfast' ])
+    end
+
+    # Regression: `-low_power 1` switches QSV from the GPGPU encoder
+    # path to Intel's VDEnc fixed-function block. Faster init AND lower
+    # CPU usage on the host (frees cycles for the SW filter chain when
+    # PGS burn-in forces SW fallback). Upstream cs:2092-2107.
+    it 'enables -low_power 1 for Intel VDEnc' do
+      job = make_job
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-low_power', '1' ])
+    end
+
+    # Regression: `-mbbrc 1` (MacroBlock-level bitrate control) is the
+    # main quality knob beyond `-global_quality` for QSV; distributes
+    # bits to busy regions, gives a visibly cleaner picture at the same
+    # average bitrate. Without it the encoder is uniform-quality and
+    # busy scenes get blocky. Upstream cs:1621.
+    it 'enables -mbbrc 1 for MacroBlock-level rate control (quality boost)' do
+      job = make_job
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-mbbrc', '1' ])
+    end
   end
 
   describe Jellyfin::Encoding::EncodingHelper, 'graphical-subtitle burn-in HW fallback' do

@@ -67,19 +67,52 @@ module Jellyfin
           end
         end
 
-        # Encoder args for h264_qsv / hevc_qsv. The generic
-        # `rate_control_args` emits `-crf N` which h264_qsv does NOT
-        # understand — without `-global_quality` the encoder silently
-        # falls back to default CQP (~QP 25-26), producing visibly
-        # blocky/pixelated output even though the source is high-bitrate.
-        # ICQ mode (Intel Constant Quality) is the QSV equivalent of CRF;
-        # passing the same numeric value (e.g. 23) gives roughly
-        # comparable visual quality. Mirrors upstream Jellyfin (which
-        # always emits `-global_quality` for QSV encoders).
+        # Encoder args for h264_qsv / hevc_qsv. Mirrors upstream Jellyfin's
+        # GetVideoQualityParam (EncodingHelper.cs:2037-2117) and
+        # GetVideoBitrateParam (cs:1609-1644) for the QSV branch.
+        #
+        # Key choices and why:
+        #
+        # `-preset veryfast` — upstream's default for QSV (cs:1761). With
+        # `medium` the encoder pipeline takes ~30-60 s to produce its
+        # first segment on a 4K source, manifesting as a long blank-screen
+        # delay at play AND on every seek (HLS restarts ffmpeg per seek).
+        # `veryfast` drops first-segment latency to ~2-3 s on the same
+        # source — the hardware encoder is the bottleneck, not the
+        # software preset, so faster preset = lower CPU + lower latency.
+        #
+        # `-look_ahead 0` — disables encoder-side rate-control look-ahead.
+        # Cuts the encoder's internal queue depth, which directly trims
+        # the startup latency. We don't need rate-control look-ahead
+        # because we're in ICQ (constant-quality) mode.
+        #
+        # `-low_power 1` — turns on Intel's VDEnc fixed-function encoder.
+        # Lower CPU usage AND faster init than the GPGPU encoder path
+        # (upstream cs:2092-2107 / EnableIntelLowPowerH264HwEncoder).
+        # Available on all Gen11+ Intel iGPUs (your i3-1315U is Gen13).
+        #
+        # `-mbbrc 1` — MacroBlock-level bitrate control. Same average
+        # bitrate but distributes bits to busy regions, giving a
+        # visibly cleaner image at the same numeric quality target.
+        # Upstream cs:1621.
+        #
+        # `-async_depth 4` — encoder's async queue. 4 is upstream's
+        # balance between throughput and latency (deeper queues encode
+        # faster but stall the first-segment flush).
+        #
+        # `-global_quality N` — Intel Constant Quality (ICQ) mode. This
+        # is QSV's equivalent of libx264's `-crf`. Without it, h264_qsv
+        # silently falls back to default CQP ~25-26 and produces visibly
+        # blocky output. The numeric value mirrors what the SW path uses
+        # for the same target codec, so quality stays consistent when
+        # the user flips CARAMBA_HWACCEL between qsv and none.
         def encoder_args(job)
           [
-            '-preset', 'medium',
-            '-look_ahead', '0',
+            '-preset',         'veryfast',
+            '-look_ahead',     '0',
+            '-low_power',      '1',
+            '-mbbrc',          '1',
+            '-async_depth',    '4',
             '-global_quality', quality_for(job).to_s
           ]
         end
