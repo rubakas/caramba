@@ -2,18 +2,23 @@
 #
 # Build all Caramba apps (desktop + android-tv + server docker image).
 #
-# Usage: bin/build                # Build all three
-#        bin/build --publish      # Build all + publish to GitHub (Releases + ghcr.io)
-#        bin/build --android-tv   # Build only Android TV
-#        bin/build --desktop      # Build only Desktop
-#        bin/build --server       # Build only the server Docker image
+# Usage: bin/build                        # Build all three with the current version
+#        bin/build --publish              # Prompt for version bump, then build all + publish
+#        bin/build --publish --bump=patch # Skip prompt, bump patch (minor / major / none also valid)
+#        bin/build --android-tv           # Build only Android TV
+#        bin/build --desktop              # Build only Desktop
+#        bin/build --server               # Build only the server Docker image
 #
-# Filter flags are additive — e.g. `--desktop --server` builds those two.
+# Target filters are additive. Version bumping only happens when --publish
+# is set; without it, sub-builds reuse whatever's in package.json today.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+ROOT_DIR="$(pwd)"
+ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 
 PUBLISH=""
+BUMP=""
 BUILD_DESKTOP=""
 BUILD_ANDROID_TV=""
 BUILD_SERVER=""
@@ -21,6 +26,7 @@ BUILD_SERVER=""
 for arg in "$@"; do
   case "$arg" in
     --publish) PUBLISH="--publish" ;;
+    --bump=*) BUMP="${arg#--bump=}" ;;
     --desktop) BUILD_DESKTOP=true ;;
     --android-tv) BUILD_ANDROID_TV=true ;;
     --server) BUILD_SERVER=true ;;
@@ -35,7 +41,71 @@ if [ -z "$BUILD_DESKTOP$BUILD_ANDROID_TV$BUILD_SERVER" ]; then
   BUILD_SERVER=true
 fi
 
+# ── Version bump (only when publishing) ─────────────────────────────────
+if [ -n "$PUBLISH" ]; then
+  CURRENT_VERSION=$(node -e "console.log(require('$ROOT_PACKAGE_JSON').version)")
+  CURRENT_NUM="${CURRENT_VERSION#v}"
+  IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_NUM"
+
+  PREVIEW_PATCH="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+  PREVIEW_MINOR="v${MAJOR}.$((MINOR + 1)).0"
+  PREVIEW_MAJOR="v$((MAJOR + 1)).0.0"
+
+  if [ -z "$BUMP" ]; then
+    if [ ! -t 0 ]; then
+      echo "stdin is not a TTY — defaulting to --bump=patch (use --bump=<level> for non-interactive runs)."
+      BUMP="patch"
+    else
+      echo ""
+      echo "Current version: $CURRENT_VERSION"
+      echo "Pick the next version:"
+      echo "  1) patch  → $PREVIEW_PATCH"
+      echo "  2) minor  → $PREVIEW_MINOR"
+      echo "  3) major  → $PREVIEW_MAJOR"
+      echo "  4) none   → keep $CURRENT_VERSION (republish)"
+      read -rp "Choose [1]: " CHOICE
+      CHOICE="${CHOICE:-1}"
+      case "$CHOICE" in
+        1|patch) BUMP="patch" ;;
+        2|minor) BUMP="minor" ;;
+        3|major) BUMP="major" ;;
+        4|none)  BUMP="none" ;;
+        *) echo "Invalid choice: $CHOICE"; exit 1 ;;
+      esac
+    fi
+  fi
+
+  case "$BUMP" in
+    patch) NEW_VERSION="$PREVIEW_PATCH" ;;
+    minor) NEW_VERSION="$PREVIEW_MINOR" ;;
+    major) NEW_VERSION="$PREVIEW_MAJOR" ;;
+    none)  NEW_VERSION="$CURRENT_VERSION" ;;
+    *) echo "Invalid --bump value: $BUMP (use patch | minor | major | none)"; exit 1 ;;
+  esac
+
+  if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
+    echo "Keeping version $CURRENT_VERSION (no bump)."
+  else
+    HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
+    if [ "$HEAD_MSG" = "$NEW_VERSION" ]; then
+      echo "Version $NEW_VERSION already committed at HEAD — skipping commit."
+    else
+      node -e "
+        const fs = require('fs');
+        const pkg = JSON.parse(fs.readFileSync('$ROOT_PACKAGE_JSON', 'utf-8'));
+        pkg.version = '$NEW_VERSION';
+        fs.writeFileSync('$ROOT_PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
+      "
+      git add "$ROOT_PACKAGE_JSON"
+      git commit -m "$NEW_VERSION" --no-verify
+      echo "Bumped $CURRENT_VERSION → $NEW_VERSION ($BUMP)"
+    fi
+  fi
+fi
+
+# ── Run the requested builds ────────────────────────────────────────────
 if [ "${BUILD_DESKTOP:-}" = true ]; then
+  echo ""
   echo "═══════════════════════════════════════════════════════════════"
   echo "Building Desktop app..."
   echo "═══════════════════════════════════════════════════════════════"

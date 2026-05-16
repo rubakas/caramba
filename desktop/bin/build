@@ -58,33 +58,12 @@ if [ ! -e node_modules/electron ]; then
   ln -sf ../../node_modules/electron node_modules/electron
 fi
 
-# ── 2. Version handling ─────────────────────────────────────────────
-# Skip bumping if the last commit already matches the current version.
+# ── 2. Read version ─────────────────────────────────────────────────
+# Version bumping is now owned by the root bin/build (which prompts for
+# major/minor/patch when --publish is passed). Here we just read whatever
+# package.json currently says and bake it into the build.
 CURRENT_VERSION=$(node -e "console.log(require('$ROOT_PACKAGE_JSON').version)")
-HEAD_MSG=$(git log -1 --format='%s' 2>/dev/null || echo "")
-
-if [[ "$HEAD_MSG" == "$CURRENT_VERSION" ]]; then
-  echo "Version $CURRENT_VERSION (already committed — skipping bump)"
-else
-  # Bump patch version (strip 'v' prefix, bump, add back)
-  VERSION_NUM="${CURRENT_VERSION#v}"
-  IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_NUM"
-  PATCH=$((PATCH + 1))
-  NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-
-  # Update root package.json and commit the bump
-  node -e "
-    const fs = require('fs');
-    const pkg = JSON.parse(fs.readFileSync('$ROOT_PACKAGE_JSON', 'utf-8'));
-    pkg.version = '$NEW_VERSION';
-    fs.writeFileSync('$ROOT_PACKAGE_JSON', JSON.stringify(pkg, null, 2) + '\n');
-  "
-  git add "$ROOT_PACKAGE_JSON"
-  git commit -m "$NEW_VERSION" --no-verify
-
-  echo "Version $CURRENT_VERSION → $NEW_VERSION"
-  CURRENT_VERSION="$NEW_VERSION"
-fi
+echo "Version: $CURRENT_VERSION"
 
 # ── 3. Version for electron-builder ────────────────────────────────
 # electron-builder needs version WITHOUT 'v' prefix
@@ -104,23 +83,20 @@ pnpm exec vite build
 # when auth token is set, but we never want maps inside the asar bundle.
 find dist-react -name '*.js.map' -delete 2>/dev/null || true
 
-# ── 5. Setup libVLC binaries ───────────────────────────────────────
-# ffmpeg lives on the server now — desktop only needs libVLC for the
-# embedded engine and the external "Open in VLC" launcher.
-echo "Ensuring libVLC + native module..."
-bin/setup-vlc
-
-# ── 6. Build macOS package ─────────────────────────────────────────
+# ── 5. Build macOS package ─────────────────────────────────────────
+# No libVLC binaries to bundle — playback is the in-renderer Jellyfin
+# Player JS runtime, and "Open in VLC" launches the user's installed
+# VLC.app via electron/services/libvlc-player.js (external subprocess).
 echo ""
 echo "Building macOS app $CURRENT_VERSION..."
 pnpm exec electron-builder --mac --publish never -c.extraMetadata.version="$VERSION_NUM"
 
-# ── 7. Summary ─────────────────────────────────────────────────────
+# ── 6. Summary ─────────────────────────────────────────────────────
 echo ""
 echo "Build complete: $CURRENT_VERSION"
 ls -lh dist/*.dmg 2>/dev/null || true
 
-# ── 8. Publish to GitHub Releases ──────────────────────────────────
+# ── 7. Publish to GitHub Releases ──────────────────────────────────
 if $PUBLISH; then
   bin/publish
 

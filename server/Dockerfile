@@ -12,35 +12,45 @@
 
 ARG RUBY_VERSION=4.0.2
 FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
+ARG TARGETARCH
 
 WORKDIR /rails
 
 # Runtime packages.
 #
-# - curl, libjemalloc2, libvips, sqlite3 — Rails baseline.
-# - VAAPI / Intel Quick Sync userspace stack (used by jellyfin-ffmpeg when
-#   /dev/dri is mounted into the container):
-#     libva2, libva-drm2, libva-x11-2 — VAAPI runtime
-#     intel-media-va-driver-non-free  — iHD driver (Gen8+ incl. Alder/Raptor Lake)
-#     i965-va-driver                  — legacy iHD fallback (older Intel iGPUs)
-#     intel-opencl-icd                — OpenCL on Intel (used by tonemap)
-#     vainfo                          — debugging on the host (`vainfo` inside container)
-#     mesa-va-drivers                 — generic AMD/Mesa VAAPI fallback
-# Enable Debian non-free + non-free-firmware so intel-media-va-driver-non-free
-# (the iHD driver Intel publishes for QSV/VAAPI) is installable. Matches what
-# Jellyfin's own server image does.
-RUN sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list && \
-    apt-get update -qq && \
+# Cross-arch baseline (amd64 + arm64):
+#   curl, libjemalloc2, libvips, sqlite3 — Rails baseline.
+#   libva2, libva-drm2, libva-x11-2     — VAAPI runtime.
+#   mesa-va-drivers                     — generic AMD/Mesa VAAPI fallback.
+#   vainfo                              — debug helper inside the container.
+#
+# amd64 only — Intel Quick Sync stack. Lives in non-free, so we enable it
+# first. Skipped on arm64 because the Intel packages are x86-only and
+# arm64 deployments (Raspberry Pi etc.) don't have an Intel iGPU anyway:
+#   intel-media-va-driver-non-free — iHD driver (Gen8+, incl. Alder/Raptor Lake)
+#   i965-va-driver                 — legacy fallback for older Intel iGPUs
+#
+# Note: intel-opencl-icd is not packaged in Debian Trixie. OpenCL-based HDR
+# tonemapping is therefore unavailable inside this image, but jellyfin-rails
+# uses VAAPI tonemap by default on QSV anyway, so it's not blocking.
+RUN set -eux; \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+      sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list; \
+    fi; \
+    apt-get update -qq; \
     apt-get install --no-install-recommends -y \
       curl ca-certificates xz-utils \
       libjemalloc2 libvips sqlite3 \
       libva2 libva-drm2 libva-x11-2 \
-      intel-media-va-driver-non-free i965-va-driver \
-      intel-opencl-icd \
       mesa-va-drivers \
-      vainfo && \
-    ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so && \
+      vainfo; \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get install --no-install-recommends -y \
+        intel-media-va-driver-non-free \
+        i965-va-driver; \
+    fi; \
+    ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so; \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 ENV RAILS_ENV="production" \
@@ -86,7 +96,10 @@ RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y build-essential git libyaml-dev pkg-config && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-COPY vendor/* ./vendor/
+# Copy the whole vendor tree (jellyfin-rails engine + bundled JS + …) so
+# bundler can resolve path:-style gems. Globbing with `vendor/*` would
+# flatten the subdirectories into ./vendor/ and lose jellyfin-rails/.
+COPY vendor/ ./vendor/
 COPY Gemfile Gemfile.lock ./
 
 RUN bundle install && \

@@ -29,7 +29,10 @@ services:
     container_name: caramba-server
     restart: unless-stopped
     ports:
-      - "${CARAMBA_PORT:-3001}:80"
+      # host_port:container_port — Thruster (the reverse proxy bundled in
+      # the image) always listens on 80 inside the container. Only the
+      # host side is configurable.
+      - "${CARAMBA_PORT:-3000}:80"
     environment:
       RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:?paste server/config/master.key contents}
       CARAMBA_TOKEN_SECRET: ${CARAMBA_TOKEN_SECRET:-}

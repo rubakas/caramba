@@ -5,8 +5,9 @@
 # Version is read from the root package.json (shared with desktop / android-tv).
 # Does NOT auto-increment — use desktop/bin/build for that.
 #
-# Usage: bin/build                # Build for the current host platform, load into local docker
-#        bin/build --publish      # Multi-arch (linux/amd64 + linux/arm64) push to ghcr.io
+# Usage: bin/build                       # Build for the current host platform, load into local docker
+#        bin/build --publish             # linux/amd64 push to ghcr.io (UGREEN NAS is x86_64)
+#        bin/build --publish --multi-arch  # Also build linux/arm64 (~5 min extra)
 #
 set -euo pipefail
 
@@ -15,10 +16,12 @@ ROOT_DIR="$(cd .. && pwd)"
 ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
 
 PUBLISH=false
+MULTI_ARCH=false
 for arg in "$@"; do
   case "$arg" in
     --publish) PUBLISH=true ;;
-    *) echo "Unknown flag: $arg (use --publish)"; exit 1 ;;
+    --multi-arch) MULTI_ARCH=true ;;
+    *) echo "Unknown flag: $arg (use --publish, --multi-arch)"; exit 1 ;;
   esac
 done
 
@@ -61,10 +64,18 @@ if $PUBLISH; then
     echo "      If push fails, run: gh auth token | docker login ghcr.io -u <github-user> --password-stdin" >&2
   fi
 
+  if $MULTI_ARCH; then
+    PLATFORMS="linux/amd64,linux/arm64"
+  else
+    # UGREEN's entire NAS lineup is x86_64; skip arm64 unless explicitly
+    # requested via --multi-arch (saves ~5 min per release).
+    PLATFORMS="linux/amd64"
+  fi
+
   echo ""
-  echo "Building + pushing multi-arch (linux/amd64, linux/arm64) → $TAG_VERSION + :latest"
+  echo "Building + pushing $PLATFORMS → $TAG_VERSION + :latest"
   docker buildx build \
-    --platform linux/amd64,linux/arm64 \
+    --platform "$PLATFORMS" \
     --tag "$TAG_VERSION" \
     --tag "$TAG_LATEST" \
     --push \
