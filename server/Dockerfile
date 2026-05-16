@@ -74,7 +74,13 @@ WORKDIR /rails
 # first. Skipped on arm64 because the Intel packages are x86-only and
 # arm64 deployments (Raspberry Pi etc.) don't have an Intel iGPU anyway:
 #   intel-media-va-driver-non-free — iHD driver (Gen8+, incl. Alder/Raptor Lake)
-#   i965-va-driver                 — legacy fallback for older Intel iGPUs
+#   i965-va-driver                 — legacy VAAPI fallback for older Intel iGPUs
+#   libmfx-gen1.2                  — oneVPL runtime, required for QSV (hevc_qsv,
+#                                    h264_qsv). Without it ffmpeg returns
+#                                    "Error creating a MFX session: -9" and
+#                                    falls back to nothing.
+#   libvpl2                        — oneVPL dispatcher that loads libmfx-gen
+#                                    at runtime.
 #
 # Note: intel-opencl-icd is not packaged in Debian Trixie. OpenCL-based HDR
 # tonemapping is therefore unavailable inside this image, but jellyfin-rails
@@ -90,11 +96,14 @@ RUN set -eux; \
       libjemalloc2 libvips sqlite3 \
       libva2 libva-drm2 libva-x11-2 \
       mesa-va-drivers \
-      vainfo; \
+      vainfo \
+      procps; \
     if [ "$TARGETARCH" = "amd64" ]; then \
       apt-get install --no-install-recommends -y \
         intel-media-va-driver-non-free \
-        i965-va-driver; \
+        i965-va-driver \
+        libmfx-gen1.2 \
+        libvpl2; \
     fi; \
     ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so; \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
