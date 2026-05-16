@@ -133,37 +133,105 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
   end
 
   describe Jellyfin::Encoding::Hwaccel::Qsv do
-    let(:caps) do
-      caps_for(
-        encoders: %w[h264_qsv hevc_qsv],
-        filters:  %w[scale_qsv hwupload],
-        hwaccels: %w[qsv]
-      )
+    # Caps with a QSV decoder available for h264 — triggers the HW-decode
+    # branch (vpp_qsv on QSV surfaces).
+    let(:hw_caps) do
+      Class.new do
+        def supports_encoder?(n); %w[h264_qsv hevc_qsv].include?(n); end
+        def supports_filter?(n);  %w[vpp_qsv scale_qsv hwupload].include?(n); end
+        def supports_hwaccel?(n); n == 'qsv'; end
+        def supports_decoder?(n); %w[h264_qsv hevc_qsv vp9_qsv av1_qsv mpeg2_qsv].include?(n); end
+      end.new
     end
 
-    # Regression: the QSV filter chain MUST start with `format=nv12|qsv`
-    # before `hwupload`, mirroring Vaapi#filter_chain. Without it, when
-    # ffmpeg's QSV decoder isn't engaged for the source codec (or HW
-    # decode silently falls back to SW), frames hit `hwupload` as
-    # `yuv420p`. ffmpeg then auto-inserts an `auto_scale` filter that
-    # can't bridge software YUV to a QSV hardware surface and crashes
-    # with "Impossible to convert between the formats supported by the
-    # filter 'Parsed_hwupload_0' and the filter 'auto_scale_0'", the
-    # encoder never opens, no segments get written, and the init segment
-    # endpoint loops on 504s — the user's "Iron Giant buffers forever"
-    # symptom on every full_transcode title. Pattern mirrors the SW-
-    # decode branch of upstream EncodingHelper.cs:4750 which always
-    # appends `format=nv12` before any eventual hwupload.
-    it 'prepends format=nv12|qsv before hwupload to bridge SW decode output' do
+    # Caps WITHOUT a QSV decoder for the source codec — exercises the
+    # SW-decode → h264_qsv encode branch.
+    let(:sw_caps) do
+      Class.new do
+        def supports_encoder?(n); %w[h264_qsv].include?(n); end
+        def supports_filter?(n);  true; end
+        def supports_hwaccel?(n); n == 'qsv'; end
+        def supports_decoder?(_); false; end
+      end.new
+    end
+
+    # Regression: device init must precede everything (so `-filter_hw_device qs`
+    # binds vpp_qsv / h264_qsv to the QSV-on-VAAPI device). Mirrors
+    # GetQsvDeviceArgs on Linux (EncodingHelper.cs:938-960) chaining
+    # vaapi=va:/dev/dri/renderD128,driver=iHD → qsv=qs@va → -filter_hw_device qs.
+    it 'emits VAAPI→QSV device chain and pins the filter device' do
       job = make_job
-      chain = described_class.filter_chain(job, caps)
-      expect(chain).to start_with('format=nv12|qsv,hwupload=extra_hw_frames=64')
+      args = described_class.decode_args(job, hw_caps)
+      expect(args).to include('-init_hw_device')
+      expect(args).to include(a_string_starting_with('vaapi=va:'))
+      expect(args).to include('qsv=qs@va')
+      expect(args).to include('-filter_hw_device')
+      expect(args).to include('qs')
     end
 
-    it 'appends a scale_qsv leg when output_height is set' do
+    # Regression: when ffmpeg has a QSV decoder for the source codec
+    # (h264_qsv here), decode runs on the iGPU AND outputs QSV surfaces
+    # so the filter graph can run on-GPU (vpp_qsv + h264_qsv). Upstream
+    # EncodingHelper.cs:4760-4807 takes the same branch.
+    it 'requests -hwaccel_output_format qsv when a QSV decoder is available' do
+      job = make_job
+      args = described_class.decode_args(job, hw_caps)
+      expect(args.each_cons(2).to_a).to include([ '-hwaccel', 'qsv' ])
+      expect(args.each_cons(2).to_a).to include([ '-hwaccel_output_format', 'qsv' ])
+    end
+
+    # Regression: codecs without a QSV decoder fall back to SW decode +
+    # h264_qsv encode. Setting `-hwaccel qsv -hwaccel_output_format qsv`
+    # in that case blew up format negotiation (the original Iron Giant
+    # bug — ffmpeg auto_scale couldn't bridge QSV surfaces to the SW
+    # filter chain). On SW decode we only emit the device-init args; the
+    # SW decoder runs without hwaccel and the resulting CPU NV12 frames
+    # are handed straight to h264_qsv, which uploads them internally
+    # using the QSV device we already wired up.
+    it 'omits -hwaccel and -hwaccel_output_format when no QSV decoder is available' do
+      job = make_job
+      args = described_class.decode_args(job, sw_caps)
+      expect(args).not_to include('-hwaccel')
+      expect(args).not_to include('-hwaccel_output_format')
+      expect(args).to include('-init_hw_device') # device chain still needed for h264_qsv
+      expect(args).to include('-filter_hw_device')
+    end
+
+    # Regression: HW-decode branch uses vpp_qsv (the single-pass GPU
+    # filter that does scale + format + tonemap) — no hwupload needed
+    # since frames are already on the iGPU. Mirrors hwScalePrefix="vpp"
+    # in upstream EncodingHelper.cs:4785.
+    it 'uses vpp_qsv for the HW-decode filter chain' do
+      job = make_job(output_height: 720)
+      chain = described_class.filter_chain(job, hw_caps)
+      expect(chain).to eq("vpp_qsv=w=-2:h='min(720,ih)':format=nv12")
+    end
+
+    it 'uses vpp_qsv=format=nv12 when no resize is needed (HW decode)' do
+      job = make_job
+      chain = described_class.filter_chain(job, hw_caps)
+      expect(chain).to eq('vpp_qsv=format=nv12')
+    end
+
+    # Regression: SW-decode branch hands CPU NV12 to h264_qsv, which
+    # uploads to the iGPU internally. No explicit `hwupload` filter —
+    # adding one breaks ffmpeg's format negotiation when input is
+    # CPU-side yuv420p ("Impossible to convert between the formats
+    # supported by the filter 'Parsed_hwupload_1' and the filter
+    # 'auto_scale_0'"). Mirrors EncodingHelper.cs:4750 which ends the
+    # SW branch with `format=nv12` and lets the HW encoder do the upload.
+    it 'uses SW scale + format=nv12 for the SW-decode filter chain (no hwupload)' do
       job = make_job(output_height: 1080)
-      chain = described_class.filter_chain(job, caps)
-      expect(chain).to include("scale_qsv=-2:'min(1080,ih)'")
+      chain = described_class.filter_chain(job, sw_caps)
+      expect(chain).to eq("scale=-2:'min(1080,ih)':flags=lanczos,format=nv12")
+      expect(chain).not_to include('hwupload')
+      expect(chain).not_to include('vpp_qsv')
+    end
+
+    it 'still emits format=nv12 when no resize is needed (SW decode)' do
+      job = make_job
+      chain = described_class.filter_chain(job, sw_caps)
+      expect(chain).to eq('format=nv12')
     end
 
     def make_job(output_height: nil)
