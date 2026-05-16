@@ -93,24 +93,52 @@ module Jellyfin
         # HW-decode branch (mirrors EncodingHelper.cs:4760-4807). Input is
         # already a QSV surface; vpp_qsv handles scale + format in one
         # GPU-side pass. h264_qsv consumes the QSV surface directly.
+        #
+        # HDR sources need `:tonemap=1` (upstream EncodingHelper.cs:4537),
+        # which iHD's VPL runtime evaluates on the iGPU — single-pass
+        # HDR-PQ → SDR-Rec.709 conversion. Without it, vpp_qsv produces
+        # nv12 frames that still carry HDR signaling, h264_qsv (an 8-bit
+        # encoder that can't pass HDR through) silently stalls, no
+        # segments are written, init-segment 504s. Symptom: 4K HEVC HDR
+        # rips (Aladdin, etc.) buffer forever even though the SDR equivalent
+        # works. Gen11+ iGPUs support vpp_qsv tonemap; older silicon would
+        # need the OpenCL bridge upstream uses (not ported).
         def hw_decode_chain(job)
           out_h = job.output_height
-          if out_h
+          vpp = if out_h
             "vpp_qsv=w=-2:h='min(#{out_h},ih)':format=nv12"
           else
             'vpp_qsv=format=nv12'
           end
+          vpp += ':tonemap=1' if job.hdr_input?
+          vpp
         end
 
         # SW-decode branch (mirrors EncodingHelper.cs:4730-4757). Input is
         # CPU memory (yuv420p / yuv420p10le); we scale + format-convert in
         # software and hand CPU NV12 to h264_qsv, which uploads internally
         # — no explicit hwupload needed.
+        #
+        # HDR sources get an extra `zscale,tonemap` leg before format=nv12
+        # so the HDR-PQ pixels are converted to SDR-Rec.709 in software.
+        # Mirrors upstream EncodingHelper's swTonemap path (cs:4099-ish).
         def sw_decode_chain(job)
           parts = []
+          if job.hdr_input?
+            parts << 'zscale=t=linear:npl=100'
+            parts << 'format=gbrpf32le'
+            parts << 'zscale=p=bt709'
+            parts << "tonemap=hable:desat=0:peak=#{tonemap_peak(job)}"
+            parts << 'zscale=t=bt709:m=bt709:r=tv'
+          end
           parts << "scale=-2:'min(#{job.output_height},ih)':flags=lanczos" if job.output_height
           parts << 'format=nv12'
           parts.join(',')
+        end
+
+        def tonemap_peak(job)
+          peak = job.options&.tonemapping_peak if job.options.respond_to?(:tonemapping_peak)
+          peak.is_a?(Numeric) && peak.positive? ? peak : 100
         end
 
         def vaapi_device

@@ -234,11 +234,42 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(chain).to eq('format=nv12')
     end
 
-    def make_job(output_height: nil)
+    # Regression: 4K HEVC HDR rips (Aladdin etc.) used to silently stall
+    # h264_qsv — vpp_qsv converted P010 → NV12 but left HDR signaling on
+    # the frames, and the H.264 encoder (8-bit, no HDR support) hung
+    # mid-pipeline. Init-segment requests looped on 504s with no error
+    # message. Upstream EncodingHelper.cs:4537 appends `:tonemap=1` to
+    # vpp_qsv for HDR sources — Gen11+ iHD performs HDR-PQ → SDR-Rec.709
+    # conversion in the same VPL pass. Without it, the encoder gets
+    # garbage.
+    it 'appends :tonemap=1 to vpp_qsv when input is HDR (HW decode)' do
+      job = make_job(codec: 'hevc', hdr: true, output_height: 1080)
+      chain = described_class.filter_chain(job, hw_caps)
+      expect(chain).to eq("vpp_qsv=w=-2:h='min(1080,ih)':format=nv12:tonemap=1")
+    end
+
+    it 'omits :tonemap=1 on SDR sources (HW decode)' do
+      job = make_job(codec: 'hevc', hdr: false, output_height: 1080)
+      chain = described_class.filter_chain(job, hw_caps)
+      expect(chain).not_to include('tonemap=1')
+    end
+
+    # SW-decode HDR: same end-state (nv12 SDR) but via the zscale/tonemap
+    # software leg since vpp_qsv isn't reachable from CPU frames.
+    it 'inserts a zscale+tonemap leg before format=nv12 on SW-decode HDR' do
+      job = make_job(codec: 'hevc', hdr: true)
+      chain = described_class.filter_chain(job, sw_caps)
+      expect(chain).to include('zscale=t=linear')
+      expect(chain).to match(/tonemap=hable/)
+      expect(chain).to end_with('format=nv12')
+    end
+
+    def make_job(output_height: nil, codec: 'h264', hdr: false)
       v = Jellyfin::Probing::MediaStream.new(
-        index: 0, type: :video, codec: 'h264',
+        index: 0, type: :video, codec: codec,
         width: 1920, height: 1080, frame_rate: 24.0,
-        video_range: 'SDR', video_range_type: 'SDR'
+        video_range: hdr ? 'HDR' : 'SDR',
+        video_range_type: hdr ? 'HDR10' : 'SDR'
       )
       source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v ])
       Jellyfin::Encoding::EncodingJobInfo.new(
