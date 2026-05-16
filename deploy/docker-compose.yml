@@ -29,10 +29,10 @@ services:
     container_name: caramba-server
     restart: unless-stopped
     ports:
-      # host_port:container_port — Thruster (the reverse proxy bundled in
-      # the image) always listens on 80 inside the container. Only the
-      # host side is configurable.
-      - "${CARAMBA_PORT:-3000}:80"
+      # host_port:container_port — Puma listens on 3000 inside the container
+      # (Rails 8 default, set via PORT env in the Dockerfile). Only the
+      # host side is configurable from here.
+      - "${CARAMBA_PORT:-3000}:3000"
     environment:
       RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:?paste server/config/master.key contents}
       CARAMBA_TOKEN_SECRET: ${CARAMBA_TOKEN_SECRET:-}
@@ -61,7 +61,7 @@ services:
       # you'll register as a MediaFolder in Caramba's web UI.
       - ${MEDIA_PATH:?set MEDIA_PATH, e.g. /volume1/Media}:/media:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost/up || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/up || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

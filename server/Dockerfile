@@ -14,6 +14,12 @@ ARG RUBY_VERSION=4.0.2
 FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
 ARG TARGETARCH
 
+# Link this image to the Caramba repo in GHCR — makes the package show up
+# under the repo's Packages sidebar and inherit its visibility / README.
+LABEL org.opencontainers.image.source="https://github.com/rubakas/caramba"
+LABEL org.opencontainers.image.description="Caramba media server (Rails + jellyfin-rails) for UGREEN NAS / generic Linux."
+LABEL org.opencontainers.image.licenses="MIT"
+
 WORKDIR /rails
 
 # Runtime packages.
@@ -131,5 +137,11 @@ USER 1000:1000
 
 ENTRYPOINT ["/rails/bin/docker-entrypoint"]
 
-EXPOSE 80
-CMD ["./bin/thrust", "./bin/rails", "server"]
+# Puma listens on PORT (defaults to 3000 from server/config/puma.rb). No
+# Thruster reverse proxy — it's not in the Gemfile, and Rails 8 + Puma is
+# enough for an API + small SPA. RAILS_SERVE_STATIC_FILES=1 lets Rails
+# serve the built React assets from public/.
+ENV PORT=3000 \
+    RAILS_SERVE_STATIC_FILES=1
+EXPOSE 3000
+CMD ["./bin/rails", "server"]
