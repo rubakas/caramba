@@ -1,3 +1,5 @@
+require 'jellyfin/encoding/graphical_sub_canvas'
+
 module Jellyfin
   module Encoding
     # Port of EncodingHelper.GetInputModifier (cs:7216). Builds the args that
@@ -58,6 +60,17 @@ module Jellyfin
         if job.media_source.path.to_s.match?(/\A(rtsp|rtmp|udp|srt|rtp):/)
           args << '-re'
         end
+
+        # 11. Graphical-subtitle canvas size. ffmpeg's PGS demuxer can't
+        # auto-detect the bitmap canvas dimensions for some streams (it
+        # logs "Could not find codec parameters for stream X (Subtitle:
+        # hdmv_pgs_subtitle): unspecified size" and bails on the overlay
+        # filter). Upstream Jellyfin emits `-canvas_size WxH` as an input
+        # modifier (EncodingHelper.cs:1246, GetGraphicalSubCanvasSize).
+        # The port had the helper file but no caller — the burn job
+        # silently produced no usable segments (504s at the client) on
+        # files like Office US S01E03 (HEVC 10-bit + PGS).
+        args.concat(Jellyfin::Encoding::GraphicalSubCanvas.args(job))
 
         args
       end

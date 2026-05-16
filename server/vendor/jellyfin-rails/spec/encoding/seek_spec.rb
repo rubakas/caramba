@@ -38,15 +38,32 @@ RSpec.describe Jellyfin::Encoding::Seek do
       expect(plan.post_input).to eq([])
     end
 
-    it 'switches to post-input accurate seek when burning subtitles' do
+    it 'stays on pre-input fast seek when burning subtitles' do
+      # Burn-in does NOT justify accurate seek. The old behaviour (post-
+      # input `-ss`) made every bitmap-sub resume decode-from-zero up to
+      # the seek point, taking minutes on long sources and timing out
+      # the client (verified 2026-05-16 on The Iron Giant: resume at
+      # source-time 2028 s never produced an init segment within 30 s).
+      # The PgsOverlay filter aligns by source-time PTS, so landing on
+      # the keyframe ≤ target via fast seek is fine; hls.js bridges the
+      # few seconds between keyframe and target via SourceBuffer
+      # timestampOffset.
       plan = described_class.plan_for(make_job(start_seconds: 30, burn: true))
-      expect(plan.pre_input).to eq([])
-      expect(plan.post_input).to eq(['-ss', '30.000'])
+      expect(plan.pre_input).to eq(['-ss', '30.000'])
+      expect(plan.post_input).to eq([])
     end
 
-    it 'uses accurate seek for HDR with tonemapping' do
+    it 'stays on pre-input fast seek for HDR with tonemapping' do
+      # HDR tonemap is frame-local — landing on the keyframe ≤ target is
+      # fine and hls.js bridges the slack via SourceBuffer.timestampOffset.
+      # The old `return true if hdr_input? && tonemap` made every resume
+      # on an HDR source decode-from-zero, e.g. The Devil Wears Prada at
+      # source-time 678 s timed out before any output appeared (verified
+      # 2026-05-16). Accurate seek stays available via the explicit
+      # `force_accurate_seek` option for non-HLS outputs.
       plan = described_class.plan_for(make_job(start_seconds: 30, hdr: true, tonemap: true))
-      expect(plan.post_input).to eq(['-ss', '30.000'])
+      expect(plan.pre_input).to eq(['-ss', '30.000'])
+      expect(plan.post_input).to eq([])
     end
 
     it 'uses fast seek for stream-copy regardless of options' do

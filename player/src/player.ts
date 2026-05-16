@@ -19,6 +19,7 @@ import {
 import { Reporter, ReporterState } from './extensions/reporter';
 import { SlotName, SlotRegistry, SLOT_NAMES } from './extensions/slots';
 import { activateSubtitleTrack, deactivateSubtitleTrack, SubtitleHandle } from './subtitles';
+import { VIDEO_CLASS as PLAYER_VIDEO_CLASS } from './subtitles/presets';
 import {
   bindHlsErrorRecovery, getSavedVolume, saveVolume, playWithPromise,
   describeMediaError, enableHlsJsPlayerForCodecs, seekOnPlaybackStart,
@@ -303,6 +304,7 @@ export class Player {
     this.root.style.position = 'relative';
 
     const video = document.createElement('video');
+    video.className = PLAYER_VIDEO_CLASS;
     video.style.width = '100%';
     video.style.height = '100%';
     video.style.display = 'block';

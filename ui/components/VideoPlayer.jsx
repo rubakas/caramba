@@ -1,5 +1,5 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
-import { Player } from '@jellyfin-rails/player'
+import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
+import { Player, SUB_SIZES, SUB_STYLES, buildCueCss } from '@jellyfin-rails/player'
 import { refractive } from '../config/refractive'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi, useCapabilities } from '../context/ApiContext'
@@ -131,20 +131,8 @@ function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
   )
 }
 
-// Subtitle size presets
-const SUB_SIZES = [
-  { id: 'small',  label: 'S',  em: '1.4em' },
-  { id: 'medium', label: 'M',  em: '1.9em' },
-  { id: 'large',  label: 'L',  em: '2.6em' },
-]
-
-// Subtitle appearance presets
-const SUB_STYLES = [
-  { id: 'classic',     label: 'Classic',     css: 'background: rgba(0,0,0,0.75); color: #fff; text-shadow: none;' },
-  { id: 'outline',     label: 'Outline',     css: 'background: transparent; color: #fff; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px #000;' },
-  { id: 'drop-shadow', label: 'Drop Shadow', css: 'background: transparent; color: #fff; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), 0 0 8px rgba(0,0,0,0.6);' },
-  { id: 'transparent', label: 'Transparent', css: 'background: rgba(0,0,0,0.4); color: #fff; text-shadow: none;' },
-]
+// Subtitle size + style presets live in @jellyfin-rails/player so the
+// renderer + styling stay in lockstep. Imported above as SUB_SIZES/SUB_STYLES.
 
 // Native player branch — when the CarambaPlayer Capacitor plugin is present
 // (Android TV native build) we skip the Player JS runtime entirely and let
@@ -339,12 +327,40 @@ function WebVideoPlayer() {
     const url = playerState.hlsUrl || playerState.streamUrl
     if (!url) return
 
+    // Build a TrackProvider that exposes the active external subtitle (text
+    // codecs only — bitmap subs are burned into the transcode server-side).
+    // The Rails server probes the source, picks the active stream, and
+    // returns a server-extracted WebVTT URL (`/_jellyfin/subtitles/...`).
+    // Mirrors upstream jellyfin-web's `enableNativeTrackSupport` + native
+    // `<track>` path in `plugins/htmlVideoPlayer/plugin.js:1461`. Every
+    // audio/subtitle switch re-issues /api/playback/start which produces a
+    // new HLS URL + new subtitleUrl, recreating this Player with the
+    // updated provider.
+    const subtitleUrl = playerState.subtitleUrl
+    const activeSubtitleIndex = playerState.activeSubtitleIndex
+    const subtitleStreams = playerState.subtitleStreams || []
+    const trackProvider = {
+      getSubtitleTracks: () => {
+        if (!subtitleUrl) return []
+        const stream = subtitleStreams.find(s => s.index === activeSubtitleIndex)
+        return [{
+          id: activeSubtitleIndex ?? 'active',
+          url: subtitleUrl,
+          language: stream?.language || '',
+          label: stream ? subtitleLabel(stream) : 'Subtitles',
+          codec: 'vtt',
+          default: true,
+        }]
+      },
+    }
+
     const player = new Player(mount, {
       source: { hlsUrl: url },
       controls: false,
       keyboardShortcuts: false,
       autoplay: true,
       startAtSeconds: playerState.startTime || 0,
+      trackProvider,
     })
     playerRef.current = player
 
@@ -404,15 +420,15 @@ function WebVideoPlayer() {
       playerState.startTime, playerState.type, playerState.episodeId, playerState.movieId,
       playerState.watchHistoryId, playerState.duration, api, closePlayer, playNextEpisode, showToast])
 
-  // Inject dynamic ::cue styling for the current size/style preset.
+  // Inject dynamic ::cue styling for the current size/style preset. CSS
+  // body comes from the player package so size/style definitions stay in
+  // one place (player/src/subtitles/presets.ts). Selector targets the
+  // player's video class directly — no `!important` needed because the
+  // class gives us specificity over the UA default cue rule.
   useEffect(() => {
-    const sizeObj = SUB_SIZES.find(s => s.id === subtitleSize) || SUB_SIZES[1]
-    const styleObj = SUB_STYLES.find(s => s.id === subtitleStyle) || SUB_STYLES[0]
-
     const styleEl = document.createElement('style')
-    styleEl.textContent = `.jellyfin-player video::cue { font-size: ${sizeObj.em}; font-family: inherit; ${styleObj.css} }`
+    styleEl.textContent = buildCueCss({ sizeId: subtitleSize, styleId: subtitleStyle })
     document.head.appendChild(styleEl)
-
     return () => { document.head.removeChild(styleEl) }
   }, [subtitleSize, subtitleStyle])
 
@@ -527,8 +543,10 @@ function WebVideoPlayer() {
   }, [switchAudio])
 
   const handleSwitchSubtitle = useCallback(async (subtitleStreamIndex) => {
+    const player = playerRef.current
+    const currentVideoTime = player?.currentTime || 0
     setLoading(true)
-    const result = await switchSubtitle(subtitleStreamIndex)
+    const result = await switchSubtitle(subtitleStreamIndex, currentVideoTime)
     if (!result) setLoading(false)
   }, [switchSubtitle])
 

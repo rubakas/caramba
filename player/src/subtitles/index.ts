@@ -26,6 +26,37 @@ export async function activateSubtitleTrack(
     el.srclang = track.language ?? '';
     el.default = !!track.default;
     video.appendChild(el);
+    // Force `mode = 'showing'` once the track is parsed, and push cues
+    // higher up the video so the host player's bottom controls don't
+    // overlap them. Mirrors upstream jellyfin-web `plugin.js:1500-1512`:
+    //   - explicit `mode = 'showing'` because the `default` attribute is
+    //     unreliable across browsers
+    //   - explicit `cue.line` because native WebVTT defaults to `auto`
+    //     (browser-picked, near-bottom). The host has its own UI chrome
+    //     down there, so subs need to sit above it.
+    // `cue.line` is writable per the WHATWG spec; the value is a percentage
+    // (0..100) from the top when `snapToLines = false` is set, otherwise a
+    // line index. We use the percentage form (~84% from top = ~16% from
+    // bottom) so subtitle position is resolution-independent.
+    const positionCues = () => {
+      const tt = el.track;
+      if (!tt || !tt.cues) return;
+      for (let i = 0; i < tt.cues.length; i++) {
+        const cue = tt.cues[i] as VTTCue;
+        if (cue.line === 'auto') {
+          cue.snapToLines = false;
+          cue.line = 84;
+        }
+      }
+    };
+    const showWhenReady = () => {
+      try {
+        positionCues();
+        if (el.track) el.track.mode = 'showing';
+      } catch { /* */ }
+    };
+    if (el.track && el.readyState >= 2) showWhenReady();
+    el.addEventListener('load', showWhenReady, { once: true });
     return { kind: 'native', trackEl: el };
   }
 

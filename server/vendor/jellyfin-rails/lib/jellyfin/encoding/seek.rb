@@ -52,9 +52,23 @@ module Jellyfin
 
       def accurate_seek?(job)
         return false if job.stream_copy_video?
-        return true  if job.burn_subtitles?
-        return true  if job.hdr_input? && job.options.enable_tonemapping
-        # Custom callers can mark precise seek explicitly via the option.
+        # NOTE: neither `burn_subtitles?` nor `hdr_input? + tonemap` is
+        # alone a reason to use accurate seek for HLS output. Accurate
+        # seek (`-ss` AFTER `-i`) decodes from frame 0 up to the target
+        # before writing anything — for a non-zero resume on a 2 h source
+        # that's MANY MINUTES of pure decode before the init segment
+        # flushes, so the client always 504s before playback can start.
+        # Verified 2026-05-16:
+        #   - bitmap burn (Iron Giant @ resume 2028 s): never started
+        #   - HDR tonemap (Devil Wears Prada @ resume 678 s): never
+        #     started, ffmpeg stuck decoding 11+ minutes of 4K HEVC
+        # Both filters operate frame-locally; landing on the keyframe
+        # ≤ target and emitting from there is fine. hls.js bridges the
+        # few seconds of slack via SourceBuffer.timestampOffset, same
+        # mechanism it uses for every other segment restart.
+        # Callers that genuinely need accurate seek (e.g. progressive
+        # MP4 with no HLS container to absorb the offset) opt in via
+        # the explicit option below.
         return true  if job.options.respond_to?(:force_accurate_seek) && job.options.force_accurate_seek
         false
       end

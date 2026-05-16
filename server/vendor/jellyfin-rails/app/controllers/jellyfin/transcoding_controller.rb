@@ -204,7 +204,19 @@ module Jellyfin
       job = manager.ensure_started(id: derive_job_id(params[:token]), params: params_hash)
       job.ping!
       init_path = job.init_segment_path
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+      # The init file (`-1.{ext}`) only finalises on first media-segment
+      # flush. Cold-start time depends on what ffmpeg has to do:
+      #   - direct_stream (`-c copy`): 1–3 s (no decode, no encode)
+      #   - audio_transcode only: 2–5 s (audio encoder warmup)
+      #   - full transcode with bitmap burn-in: 10–30 s (HEVC/h264
+      #     decode + PGS overlay graph compile + HW encoder init + first
+      #     keyframed segment encoded)
+      # 10 s was the old budget; bitmap burn-in jobs blew through it
+      # consistently and 504'd the init request, killing playback.
+      # Match `SegmentWaiter::DEFAULT_TIMEOUT_S` so the init and segment
+      # endpoints have the same patience.
+      timeout_s = Jellyfin::Transcoding::SegmentWaiter::DEFAULT_TIMEOUT_S
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout_s
       until init_path && File.exist?(init_path) && any_media_segment?(job)
         return render(json: { error: 'init segment timeout' }, status: :gateway_timeout) if
           Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline

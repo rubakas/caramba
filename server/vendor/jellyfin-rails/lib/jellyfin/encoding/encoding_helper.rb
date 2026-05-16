@@ -13,6 +13,7 @@ require 'jellyfin/encoding/profile_mapping'
 require 'jellyfin/encoding/audio'
 require 'jellyfin/encoding/seek'
 require 'jellyfin/encoding/quality'
+require 'jellyfin/encoding/graphical_sub_canvas'
 require 'jellyfin/encoding/dolby_vision'
 require 'jellyfin/encoding/bitstream_filters'
 
@@ -45,6 +46,15 @@ module Jellyfin
         args += dovi_input_args(job)        # `-strict unofficial` before ffmpeg sees DV NALs
         args += backend ? backend.decode_args(job, @caps) : []
         args += plan.pre_input              # FAST seek (jump on keyframe before decode)
+        # `-canvas_size WxH` MUST go before `-i` for the input that carries
+        # the graphical subtitle stream. Without it, ffmpeg's PGS demuxer
+        # logs "Could not find codec parameters for stream X (Subtitle:
+        # hdmv_pgs_subtitle): unspecified size" and the overlay filter
+        # never sees usable subtitle frames — burn-in produces segments
+        # but they take too long / the overlay leg silently no-ops.
+        # `Encoding::GraphicalSubCanvas` was a defined-but-unused port of
+        # `EncodingHelper.cs:1246`. Calling it here closes that gap.
+        args += GraphicalSubCanvas.args(job)
         args += input_args_list             # handles file / http / concat / stream
         args += plan.post_input             # ACCURATE seek (decode+discard after input)
         args += map_args(job)
@@ -105,9 +115,28 @@ module Jellyfin
 
       def map_args(job)
         out = []
-        out += [ '-map', "0:v:#{video_index(job)}" ]
+        # When subtitle burn-in produces a `-filter_complex` graph with a
+        # labelled `[vout]` output (graphical PGS/DVB/DVDsub path), the
+        # video stream must be mapped from that label — `0:v:N` would
+        # leave the unfiltered video as the output and the overlay would
+        # never make it to disk. The filter-complex case is detected the
+        # same way the args emitter does (`-vf` vs `-filter_complex`) so
+        # the two sides stay in lockstep.
+        out += [ '-map', graphical_burn_in_filter?(job) ? '[vout]' : "0:v:#{video_index(job)}" ]
         out += [ '-map', "0:a:#{audio_index(job)}?" ]
         out
+      end
+
+      # True when the active filter chain references the subtitle stream
+      # (i.e. `Filters::SubtitleBurn` produced a multi-input graph for a
+      # graphical sub). `-vf` can't host multi-input graphs — it needs
+      # `-filter_complex` plus a labelled output map. Text-sub burn uses
+      # the single-input `subtitles=...` filter and stays on `-vf`.
+      def graphical_burn_in_filter?(job)
+        return false unless job.burn_subtitles?
+        Filters::SubtitleBurn::GRAPHICAL_CODECS.include?(
+          job.subtitle_stream&.codec.to_s.downcase
+        )
       end
 
       def video_args(job, backend: nil)
@@ -168,8 +197,49 @@ module Jellyfin
           chain = chain.sub(/\[v\]\[s\]overlay[^,]*|\[v\]\[s\]overlay[^,]*/, hw_overlay) if chain
           chain = "#{chain},#{hw_overlay}" unless chain.to_s.include?(hw_overlay)
         end
-        out += [ '-vf', chain ] unless chain.nil? || chain.empty?
+        # Graphical subtitle burn-in (PGS/DVB/DVD) needs `-filter_complex` —
+        # the overlay graph references a second input (`[0:s:N]`) and `-vf`
+        # only takes single-input chains. ffmpeg accepts the graph syntax
+        # via `-vf` without an error message but silently produces no
+        # output, manifesting as init_segment requests timing out at the
+        # client (init_segment 504s, master hangs). Mirrors upstream
+        # `EncodingHelper.cs:6256` which emits the same `-filter_complex`
+        # for the graphical-sub path.
+        if graphical_burn_in_filter?(job) && chain && !chain.empty?
+          out += [ '-filter_complex', graphical_burn_in_filter_complex(job, chain) ]
+        elsif chain && !chain.empty?
+          out += [ '-vf', chain ]
+        end
         out
+      end
+
+      # Builds the `-filter_complex` argument for the graphical subtitle
+      # burn-in path. `chain` is what `filter_chain` produced — the comma-
+      # joined sequence of video filters culminating in
+      # `Jellyfin::Subtitle::PgsOverlay`'s multi-input fragment
+      # (`[0:s:N]scale=W:H,format=yuva420p[subs];[v][subs]overlay=…[vout]`).
+      # When no other video filters fire, `chain` IS that fragment and
+      # just needs a `[0:v:N]copy[v];` prefix so the `[v]` label exists.
+      # When other filters DO fire, they must be wrapped to label their
+      # output as `[v]`. The simple two-case split below mirrors the
+      # upstream filter assembly at EncodingHelper.cs:6261-6263.
+      def graphical_burn_in_filter_complex(job, chain)
+        # The PgsOverlay fragment contains `[v][subs]overlay=...[vout]` —
+        # `[v]` is a CONSUMER (an input to overlay), so we still need a
+        # producer somewhere upstream in the same graph. Two cases:
+        #   1) chain starts with the overlay fragment itself (no
+        #      preceding video filters fired) — synthesize `[v]` via
+        #      `[0:v:N]copy[v]`.
+        #   2) chain has comma-joined video transforms before the
+        #      overlay fragment (split on the first `;` that bridges into
+        #      the PgsOverlay sub-graph) — wrap them so they label their
+        #      output as `[v]`.
+        if chain.start_with?('[0:s:')
+          "[0:v:#{video_index(job)}]copy[v];#{chain}"
+        else
+          parts = chain.split(';', 2)
+          "[0:v:#{video_index(job)}]#{parts[0]}[v];#{parts[1]}"
+        end
       end
 
       def quality_args(job, encoder)

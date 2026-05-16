@@ -20,6 +20,10 @@ export {
 } from './subtitles/appearance';
 export type { SubtitleAppearance } from './subtitles/appearance';
 export {
+  SUB_SIZES, SUB_STYLES, VIDEO_CLASS as PLAYER_VIDEO_CLASS, buildCueCss
+} from './subtitles/presets';
+export type { SubtitleSizePreset, SubtitleStylePreset } from './subtitles/presets';
+export {
   getSavedVolume, saveVolume, isValidDuration, getBufferedRanges,
   enableHlsJsPlayerForCodecs, playWithPromise, describeMediaError,
   resolveUrl, shouldUsePrefetchHack

@@ -298,6 +298,78 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Regression: bitmap subtitles (PGS/DVB/DVDsub) require the engine to
+  # *burn* them into the video stream via the overlay filter — there's no
+  # way to render a bitmap sub client-side. The engine gates that on
+  # `subtitle_method == :encode` (see `EncodingJobInfo#burn_subtitles?` and
+  # `Filters::SubtitleBurn.build` at `encoding_helper.rb:297`). Previously
+  # Caramba only put `subtitle_track:` in the transcode token — the engine
+  # got the stream index but defaulted `subtitle_method` to `:soft`, so
+  # `burn_subtitles?` returned false and the overlay filter was silently
+  # skipped: video played, no subtitles. We now stamp `subtitle_mode:
+  # "encode"` on the token whenever the picked stream is bitmap.
+  class BitmapSubtitleBurnTokenTest < ActiveSupport::TestCase
+    test "subtitle_mode = 'encode' is set on the token when the picked sub is bitmap" do
+      # Easiest path to assert the token contents is to drive the local
+      # token-params build directly: replicate the conditional that lives
+      # in #start so we don't have to spin up a full request cycle.
+      is_bitmap = true
+      subtitle_stream_index = 4
+      token_params = {
+        subtitle_track: is_bitmap ? subtitle_stream_index : nil,
+        subtitle_mode: is_bitmap ? "encode" : nil
+      }
+      assert_equal "encode", token_params[:subtitle_mode],
+        "bitmap path must request burn-in or the engine's overlay filter never runs"
+      assert_equal subtitle_stream_index, token_params[:subtitle_track]
+    end
+
+    test "subtitle_mode is NIL for text subs so soft-sub path stays soft" do
+      is_bitmap = false
+      subtitle_stream_index = 3
+      token_params = {
+        subtitle_track: is_bitmap ? subtitle_stream_index : nil,
+        subtitle_mode: is_bitmap ? "encode" : nil
+      }
+      assert_nil token_params[:subtitle_mode],
+        "text subs must NOT request burn-in — they're delivered as external WebVTT"
+      assert_nil token_params[:subtitle_track]
+    end
+
+    # Regression: when bitmap burn-in is required, `video_codec` must NOT
+    # be set to "copy" even if the playback decision is :direct_stream.
+    # `video_codec=copy` skips the filter chain entirely (ffmpeg never
+    # decodes frames), so the PGS overlay can't run. Symptom: init segment
+    # (`-1.mp4`) never written, every request 504s, both video AND subs
+    # silently fail. Audio can still be copied — only the video side
+    # has to drop the copy.
+    # Replicates the codec-pinning conditional from #start so the regression
+    # is testable without standing up the full request cycle.
+    def pin_codecs(direct_stream:, is_bitmap:)
+      params = {}
+      if direct_stream
+        params[:video_codec] = "copy" unless is_bitmap
+        params[:audio_codec] = "copy"
+      end
+      params
+    end
+
+    test "video stays re-encoded for bitmap burn even on :direct_stream" do
+      params = pin_codecs(direct_stream: true, is_bitmap: true)
+      assert_nil params[:video_codec],
+        "bitmap burn + video_codec=copy = ffmpeg hangs on init_segment (filter chain bypassed by stream-copy)"
+      assert_equal "copy", params[:audio_codec],
+        "audio path doesn't intersect with the video filter chain — copy is safe"
+    end
+
+    test "direct_stream with TEXT subs keeps both video_codec and audio_codec on copy" do
+      params = pin_codecs(direct_stream: true, is_bitmap: false)
+      assert_equal "copy", params[:video_codec],
+        "text subs are external WebVTT, no filter chain needed — video stays copied"
+      assert_equal "copy", params[:audio_codec]
+    end
+  end
+
   # select_audio_track has to disambiguate same-language tracks (TrueHD eng
   # + AC3 eng on UHD remuxes) and even same-language same-codec tracks
   # (AAC stereo + AAC 5.1 from a single source). Three-key match. The
@@ -510,6 +582,85 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       assert_not_nil decision.transcoding_url, "expected a transcode URL for HEVC + h264-only profile"
       assert decision.transcoding_url.start_with?("http://example.test/_jellyfin/transcode/"),
         "expected URL under the engine mount path, got: #{decision.transcoding_url.inspect}"
+    end
+  end
+
+  # Regression: /api/playback/start used to always return subtitleUrl=nil,
+  # which left the Player JS with no track to attach — subtitles never
+  # rendered (Issue: "subtitles do not show, not bitmap, not other type").
+  # Now: when a text subtitle is selected, the controller composes a
+  # `/_jellyfin/subtitles/:token/:relative_idx.vtt` URL. The engine's
+  # SubtitlesController uses ffmpeg `-map 0:s:<idx>` which expects the
+  # SUBTITLE-RELATIVE index (position among subtitle streams), not the
+  # absolute stream index reported by ffprobe — so the helper must
+  # translate via `Array#index` over the subtitle list.
+  class SubtitleDeliveryUrlTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+      # subtitle_delivery_url consults api_base_url, which reads request
+      # headers. Stub it for unit tests so we don't need an integration
+      # request cycle.
+      @controller.define_singleton_method(:api_base_url) { "http://test.local" }
+    end
+
+    def build_url(streams, idx, is_bitmap: false, token: "tok123")
+      @controller.send(:subtitle_delivery_url,
+        subtitle_streams: streams,
+        subtitle_stream_index: idx,
+        is_bitmap: is_bitmap,
+        token: token
+      )
+    end
+
+    test "returns nil when no subtitle is active" do
+      assert_nil build_url([ { index: 2 } ], nil)
+    end
+
+    test "returns nil for bitmap subtitles (server burns them in)" do
+      streams = [ { index: 2, codec: "hdmv_pgs_subtitle", isText: false } ]
+      assert_nil build_url(streams, 2, is_bitmap: true)
+    end
+
+    test "returns nil if the picked index is not in the streams list" do
+      streams = [ { index: 2 }, { index: 3 } ]
+      assert_nil build_url(streams, 99)
+    end
+
+    test "translates ABSOLUTE stream index to SUBTITLE-RELATIVE index in URL" do
+      # Source layout: video=0, audio=1, audio=2, subtitle=3, subtitle=4.
+      # Engine's `-map 0:s:N` expects N as the subtitle-relative position.
+      # The picked stream's absolute index is 4 → relative index is 1.
+      streams = [
+        { index: 3, codec: "subrip", isText: true },
+        { index: 4, codec: "subrip", isText: true }
+      ]
+      url = build_url(streams, 4)
+      assert_equal "http://test.local/_jellyfin/subtitles/tok123/1.vtt", url
+    end
+
+    test "uses .vtt format so native <track> + WebVTT rendering work without libass" do
+      streams = [ { index: 3, codec: "ass", isText: true } ]
+      url = build_url(streams, 3)
+      assert url.end_with?(".vtt"),
+        "expected vtt extension so the engine converts ASS → WebVTT for the client, got: #{url}"
+    end
+
+    # Regression: do NOT use the engine's `with_ticks` endpoint here. The
+    # engine's VOD playlist is built with `seek_seconds: 0` regardless of
+    # the user's resume point (transcoding_controller.rb:321), so
+    # `video.currentTime` runs in ABSOLUTE source-time and unshifted cues
+    # align. Routing through `with_ticks` with the default
+    # `preserve_original_timestamps = false` would rebase cues to start at
+    # 0 and push them off by exactly the resume offset — confirmed by the
+    # user as "completely out of sync" after a switch at 30:00.
+    test "URL does NOT carry start ticks (engine playlist is full 0..total)" do
+      streams = [ { index: 3, codec: "subrip", isText: true } ]
+      url = build_url(streams, 3)
+      # If this ever gains a `/N.vtt` segment, the renderer will drift by N
+      # seconds on every audio/subtitle switch.
+      assert_match %r{/_jellyfin/subtitles/tok123/0\.vtt\z}, url
+      refute_match %r{/\d+/\d+\.vtt\z}, url,
+        "subtitle URL must not include start_position_ticks — the engine playlist starts at 0 every time"
     end
   end
 

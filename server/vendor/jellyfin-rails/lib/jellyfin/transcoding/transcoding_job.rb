@@ -1,4 +1,7 @@
 require 'fileutils'
+require 'jellyfin/output/vod_playlist_generator'
+require 'jellyfin/keyframes/extractor'
+require 'jellyfin/media_encoder/probe'
 
 module Jellyfin
   module Transcoding
@@ -89,9 +92,82 @@ module Jellyfin
 
       # Returns the timestamp (in seconds) at which ffmpeg should be (re)started
       # to satisfy a client requesting `segment_n`.
+      #
+      # CRITICAL: for stream-copy paths the playlist uses keyframe-derived
+      # VARIABLE segment durations (`VodPlaylistGenerator#compute_segments_from_keyframes`),
+      # so segment N's position in the playlist is NOT `N * segment_length`.
+      # Using the multiplication on those playlists made `-ss` land between
+      # keyframes — fast-seek then snaps backward to the previous keyframe,
+      # ffmpeg emits content from there, and hls.js positions it via
+      # `timestampOffset` matching the playlist's nominal position for
+      # segment N. The result is `video.currentTime` running AHEAD of the
+      # rendered frames by exactly one keyframe interval (~4 s on most 24 fps
+      # h264 rips), which the user sees as subtitles firing a few seconds
+      # early after Resume. For equal-length playlists (no keyframe data,
+      # full transcode with `-force_key_frames`) the multiplication is
+      # correct and we keep it as the fallback.
+      #
+      # SECOND CATCH (kept tripping us): even when the nominal position IS
+      # exactly at a keyframe, ffmpeg's matroska demuxer fast-seek has a
+      # ~150ms backoff window — `av_index_search_timestamp` uses strict `<`
+      # so a `-ss` matching a cue point lands on the PREVIOUS cue. Verified
+      # empirically against The Office UK S01E01 (2026-05-16):
+      #   -ss 852.852 → output first PTS = 848.848 (one keyframe back)
+      #   -ss 852.999 → output first PTS = 852.852 ✓
+      # We bias the seek slightly past the target keyframe so ffmpeg's
+      # binary search picks the target as the largest-cue-strictly-less-than.
+      # The bias is capped at half the next segment's duration so we never
+      # cross into the following keyframe on tight GOPs.
+      SEEK_KEYFRAME_BIAS = 0.5
+
       def seek_seconds_for(segment_n)
-        segment_n.to_i * segment_length_seconds
+        n = segment_n.to_i
+        return 0 if n.zero?
+        durations = segment_durations
+        return n * segment_length_seconds unless durations
+        nominal = durations.first(n).sum
+        # `durations[n]` is the duration of the segment we're starting (the
+        # one containing the keyframe at `nominal`). Capping the bias at
+        # half of it guarantees we stay before the NEXT keyframe.
+        cap = (durations[n] || segment_length_seconds.to_f) * 0.4
+        bias = [SEEK_KEYFRAME_BIAS, cap].min
+        nominal + bias
       end
+
+      # Cached array of #EXTINF durations matching the playlist the client
+      # has. Returns nil when we can't derive a keyframe-based segmentation
+      # (full transcode, non-MKV, missing Cues index), which signals
+      # `seek_seconds_for` to fall back to `N * segment_length`.
+      # Probes lazily because callers may need the durations before
+      # `transcode_manager#probe_media_source` sets `job.media_source`.
+      def segment_durations
+        return @segment_durations if defined?(@segment_durations)
+        @segment_durations = compute_segment_durations
+      end
+
+      def compute_segment_durations
+        return nil unless params[:video_codec].to_s == 'copy'
+        path = params[:path]
+        return nil unless path
+        kf = Jellyfin::Keyframes::Extractor.for(path)&.keyframe_seconds
+        return nil if kf.nil? || kf.empty?
+        total_seconds = media_source&.run_time_ticks.to_f /
+                        Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND
+        if total_seconds <= 0
+          probed = Jellyfin::MediaEncoder::Probe.from_path(path) rescue nil
+          total_seconds = probed&.run_time_ticks.to_f /
+                          Jellyfin::Output::VodPlaylistGenerator::TICKS_PER_SECOND
+          return nil if total_seconds <= 0
+        end
+        Jellyfin::Output::VodPlaylistGenerator.send(
+          :compute_segments_from_keyframes,
+          keyframe_seconds: kf,
+          total_duration_seconds: total_seconds,
+          seek_seconds: 0,
+          segment_length_seconds: segment_length_seconds.to_f
+        )
+      end
+      private :compute_segment_durations
 
       def alive?
         return false unless pid

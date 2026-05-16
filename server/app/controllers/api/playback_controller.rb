@@ -112,6 +112,17 @@ class Api::PlaybackController < Api::BaseController
       path: file_path,
       audio_track: audio_stream_index,
       subtitle_track: is_bitmap ? subtitle_stream_index : nil,
+      # Tell the engine to BURN the bitmap subtitle into the video stream.
+      # Without this, `EncodingJobInfo#subtitle_method` defaults to `:soft`
+      # and `burn_subtitles?` returns false → the overlay filter is never
+      # inserted into the filter chain, so the bitmap track is silently
+      # ignored (no error, no subs, no warning). Setting it to `:encode`
+      # is what flips `Filters::SubtitleBurn.build` on in
+      # `encoding_helper.rb:297` and the engine renders the PGS planes
+      # onto the video frames before re-encoding. Only sent when we've
+      # actually picked a bitmap stream — soft subs stay soft so text-sub
+      # paths don't get yanked onto the burn-in path by mistake.
+      subtitle_mode: is_bitmap ? "encode" : nil,
       # NOTE: start_time is intentionally NOT baked into the token. The player
       # JS does `video.currentTime = startTime` after loading the master
       # playlist (`seekOnPlaybackStart` in `player/src/media-helper.ts`), and
@@ -147,7 +158,15 @@ class Api::PlaybackController < Api::BaseController
       trickplay: hls_trickplay?(device_profile_raw) || nil
     }.compact
     if pre_decision.direct_stream?
-      transcode_token_params[:video_codec] = "copy"
+      # `video_codec=copy` and `subtitle_mode=encode` are MUTUALLY EXCLUSIVE.
+      # Stream-copy skips the filter chain (ffmpeg never decodes frames),
+      # so the PGS overlay filter can't run — the burn-in silently no-ops
+      # and the segments either come out without subs OR ffmpeg hangs on
+      # init because `-map [vout]` references a label nothing produced.
+      # When we've committed to burning a bitmap sub, force re-encode of
+      # the video; audio can still copy. (`audio_codec=copy` stays a safe
+      # win because the audio path doesn't run through any video filter.)
+      transcode_token_params[:video_codec] = "copy" unless is_bitmap
       transcode_token_params[:audio_codec] = "copy"
     end
 
@@ -169,6 +188,13 @@ class Api::PlaybackController < Api::BaseController
 
     direct_token    = Jellyfin::Transcoding::Token.encode(path: file_path)
     transcode_token = Jellyfin::Transcoding::Token.encode(transcode_token_params)
+
+    subtitle_url = subtitle_delivery_url(
+      subtitle_streams: info[:subtitleStreams],
+      subtitle_stream_index: subtitle_stream_index,
+      is_bitmap: is_bitmap,
+      token: direct_token
+    )
 
     # PlaybackInfo.for composes URLs as `"#{base_url}/stream/..."` and
     # `"#{base_url}/transcode/..."` — relative to the engine's mount point,
@@ -209,7 +235,7 @@ class Api::PlaybackController < Api::BaseController
       duration: info[:duration],
       startTime: start_time,
       seekBase: 0,
-      subtitleUrl: nil,
+      subtitleUrl: subtitle_url,
       video: info[:video],
       bitrate: info[:bitrate],
       audioStreams: info[:audioStreams],
@@ -494,6 +520,31 @@ class Api::PlaybackController < Api::BaseController
     parsed.deep_stringify_keys
   rescue JSON::ParserError
     nil
+  end
+
+  # External subtitle URL — only for text subs that the client renders itself
+  # (vtt/srt/ass/ssa/mov_text/etc). Bitmap subs (PGS/DVB/DVDsub) take the
+  # `is_bitmap = true` branch and get burned into the transcode upstream,
+  # so the client never fetches them. Mirrors upstream Jellyfin's
+  # SubtitleDeliveryMethod=External path (StreamInfo.cs:1254): a token-based
+  # URL that the engine resolves with ffmpeg `-map 0:s:<relative_index>` —
+  # the URL carries the SUBTITLE-RELATIVE index, not the absolute stream
+  # index (see Jellyfin::SubtitlesController#extract_to).
+  #
+  # NOTE: WebVTT cue timestamps stay at ABSOLUTE source time because the
+  # engine's VOD playlist is built with `seek_seconds: 0` regardless of the
+  # actual playback resume point (transcoding_controller.rb:321) — every
+  # /start call ships the same full 0..total playlist and the transcoder
+  # restarts ffmpeg per requested segment. So hls.js drives
+  # `video.currentTime` in absolute source-time, and unshifted cues align.
+  # Routing through the engine's `with_ticks` endpoint with the default
+  # `preserve_original_timestamps = false` would rebase cues to start at 0
+  # and push them off by exactly the resume offset.
+  def subtitle_delivery_url(subtitle_streams:, subtitle_stream_index:, is_bitmap:, token:)
+    return nil if subtitle_stream_index.nil? || is_bitmap
+    relative_idx = Array(subtitle_streams).index { |s| s[:index] == subtitle_stream_index }
+    return nil if relative_idx.nil?
+    "#{api_base_url}/_jellyfin/subtitles/#{token}/#{relative_idx}.vtt"
   end
 
   def api_base_url

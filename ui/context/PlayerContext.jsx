@@ -240,7 +240,12 @@ export function PlayerProvider({ children }) {
         audioStreams: result.audioStreams || prev.audioStreams,
         subtitleStreams: result.subtitleStreams || prev.subtitleStreams,
         activeAudioIndex: result.activeAudioIndex ?? prev.activeAudioIndex,
-        activeSubtitleIndex: result.activeSubtitleIndex ?? prev.activeSubtitleIndex,
+        // `null` is a valid active subtitle value (= subtitles Off). Using
+        // `??` here would treat the user's "Off" request as "no info" and
+        // fall back to the previous index, leaving the ✓ stuck on the old
+        // selection while the engine actually delivers no subtitle. Trust
+        // the server's explicit value.
+        activeSubtitleIndex: 'activeSubtitleIndex' in result ? result.activeSubtitleIndex : prev.activeSubtitleIndex,
         isBitmapSubtitle: !!result.isBitmapSubtitle,
         strategy: result.strategy || prev.strategy,
       }))
@@ -283,20 +288,21 @@ export function PlayerProvider({ children }) {
     })
   }, [savePreferences])
 
-  const switchSubtitle = useCallback(async (subtitleStreamId) => {
+  const switchSubtitle = useCallback(async (subtitleStreamId, currentVideoTime) => {
     const cur = stateRef.current
     const subtitleStream = subtitleStreamId != null
       ? cur.subtitleStreams.find(s => (s.id ?? s.index) === subtitleStreamId)
       : null
     const audioStream = cur.audioStreams.find(s => (s.id ?? s.index) === cur.activeAudioIndex)
 
+    const absoluteResume = (cur.seekBase || 0) + (currentVideoTime || 0)
     const result = await relaunchWithPrefs({
       audioLanguage: audioStream?.language,
       audioCodec: audioStream?.codec,
       audioChannels: audioStream?.channels,
       subtitleLanguage: subtitleStream?.language,
       subtitleOff: subtitleStream == null,
-    }, (cur.seekBase || 0) + 0)
+    }, absoluteResume)
 
     if (result) {
       savePreferences(stateRef.current, { activeSubtitleIndex: subtitleStreamId })
