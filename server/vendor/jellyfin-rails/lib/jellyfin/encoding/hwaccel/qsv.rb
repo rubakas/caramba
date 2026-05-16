@@ -183,29 +183,39 @@ module Jellyfin
         # IMPORTANT: width/height must be concrete integers. vpp_qsv's
         # argument parser doesn't evaluate ffmpeg's expression DSL
         # (`-2`, `min(…,ih)`) the way the generic `scale` filter does —
-        # passing them silently stalls the filter graph (no error, no
-        # frames produced, init-segment requests loop on 504s). Upstream
-        # `GetHwScaleFilter` (EncodingHelper.cs:3255) always computes
-        # concrete integers via `GetFixedOutputSize`; we mirror that
-        # here. Symptom seen: Iron Giant (1080p → 1080p, scale was a
-        # no-op) worked, Aladdin (4K → 1080p, scale actually invoked)
-        # silently stalled.
+        # passing them silently stalls the filter graph. Upstream
+        # `GetHwScaleFilter` (cs:3255) always computes concrete integers.
         #
         # HDR sources also need `:tonemap=1` (upstream cs:4537) so iHD's
         # VPL runtime converts HDR-PQ → SDR-Rec.709 in the same pass —
         # without it, h264_qsv (8-bit, no HDR support) silently stalls.
+        #
+        # **Final `setparams` tags the output as SDR BT.709 limited-range.**
+        # vpp_qsv silently strips / mangles input frame metadata,
+        # especially when tonemap is active — the output frames then
+        # claim BT.2020/PQ (from the HDR source) while the actual
+        # pixel values are SDR BT.709, OR they claim no range at all
+        # and Safari assumes full-range, displaying limited-range
+        # pixels as washed-out / low-contrast. Mirrors upstream
+        # `setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709`
+        # (cs:6308-6316) which Jellyfin emits for every SDR output.
+        # `range=tv` is the H.264 broadcast convention; matches what
+        # every other transcoder + every reasonable display expects.
         def hw_decode_chain(job)
-          parts = [ 'vpp_qsv' ]
           out_w, out_h = fixed_output_size(job)
           dims_set = out_w && out_h
-          format_set = true  # always force format=nv12 for the h264_qsv encoder
-
           arg_pairs = []
           arg_pairs << "w=#{out_w}" << "h=#{out_h}" if dims_set
-          arg_pairs << 'format=nv12' if format_set
+          arg_pairs << 'format=nv12'
           arg_pairs << 'tonemap=1' if job.hdr_input?
+          "vpp_qsv=#{arg_pairs.join(':')},#{sdr_setparams}"
+        end
 
-          dims_set ? "vpp_qsv=#{arg_pairs.join(':')}" : "vpp_qsv=#{arg_pairs.join(':')}"
+        # Same SDR signaling for the SW-decode path. setparams is a
+        # zero-cost metadata-only filter — no pixel work — so it's
+        # safe to append to every chain regardless of decode path.
+        def sdr_setparams
+          'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv'
         end
 
         # SW-decode branch (mirrors EncodingHelper.cs:4730-4757). Input is
@@ -228,6 +238,7 @@ module Jellyfin
           out_w, out_h = fixed_output_size(job)
           parts << "scale=#{out_w}:#{out_h}:flags=lanczos" if out_w && out_h
           parts << 'format=nv12'
+          parts << sdr_setparams
           parts.join(',')
         end
 

@@ -208,13 +208,30 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     it 'uses vpp_qsv with concrete dims for the HW-decode filter chain' do
       job = make_job(src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, hw_caps)
-      expect(chain).to eq('vpp_qsv=w=1920:h=1080:format=nv12')
+      expect(chain).to start_with('vpp_qsv=w=1920:h=1080:format=nv12')
     end
 
     it 'uses vpp_qsv=format=nv12 when no resize is needed (HW decode)' do
       job = make_job
       chain = described_class.filter_chain(job, hw_caps)
-      expect(chain).to eq('vpp_qsv=format=nv12')
+      expect(chain).to start_with('vpp_qsv=format=nv12')
+    end
+
+    # Regression: vpp_qsv strips / mangles output frame color metadata,
+    # especially when tonemap=1 is active (HDR→SDR pixel conversion
+    # without rewriting the BT.2020/PQ tags). Without `setparams` after
+    # the QSV pass, the encoder writes H.264 with the wrong colorspace
+    # signal — Safari reads "BT.2020 / PQ" but the pixels are SDR
+    # BT.709, displaying them washed-out and low-contrast (the user's
+    # "Aladdin colors are way off" symptom vs the same file via real
+    # Jellyfin on the same NAS). Upstream Jellyfin emits the same
+    # setparams for all SDR output (cs:6308).
+    it 'ends the HW chain with setparams that locks output to BT.709 limited-range' do
+      job = make_job
+      chain = described_class.filter_chain(job, hw_caps)
+      expect(chain).to end_with(
+        'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv'
+      )
     end
 
     # Regression: SW-decode branch hands CPU NV12 to h264_qsv, which
@@ -227,7 +244,7 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     it 'uses SW scale + format=nv12 for the SW-decode filter chain (no hwupload)' do
       job = make_job(src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, sw_caps)
-      expect(chain).to eq('scale=1920:1080:flags=lanczos,format=nv12')
+      expect(chain).to start_with('scale=1920:1080:flags=lanczos,format=nv12')
       expect(chain).not_to include('hwupload')
       expect(chain).not_to include('vpp_qsv')
     end
@@ -235,7 +252,8 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     it 'still emits format=nv12 when no resize is needed (SW decode)' do
       job = make_job
       chain = described_class.filter_chain(job, sw_caps)
-      expect(chain).to eq('format=nv12')
+      expect(chain).to start_with('format=nv12')
+      expect(chain).to end_with('range=tv')
     end
 
     # Regression: 4K HEVC HDR rips (Aladdin etc.) used to silently stall
@@ -249,7 +267,8 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     it 'appends :tonemap=1 to vpp_qsv when input is HDR (HW decode)' do
       job = make_job(codec: 'hevc', hdr: true, src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, hw_caps)
-      expect(chain).to eq('vpp_qsv=w=1920:h=1080:format=nv12:tonemap=1')
+      expect(chain).to start_with('vpp_qsv=w=1920:h=1080:format=nv12:tonemap=1')
+      expect(chain).to end_with('range=tv')
     end
 
     it 'omits :tonemap=1 on SDR sources (HW decode)' do
@@ -259,13 +278,15 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     end
 
     # SW-decode HDR: same end-state (nv12 SDR) but via the zscale/tonemap
-    # software leg since vpp_qsv isn't reachable from CPU frames.
+    # software leg since vpp_qsv isn't reachable from CPU frames. The
+    # final setparams locks the output as BT.709 SDR limited-range.
     it 'inserts a zscale+tonemap leg before format=nv12 on SW-decode HDR' do
       job = make_job(codec: 'hevc', hdr: true)
       chain = described_class.filter_chain(job, sw_caps)
       expect(chain).to include('zscale=t=linear')
       expect(chain).to match(/tonemap=hable/)
-      expect(chain).to end_with('format=nv12')
+      expect(chain).to include('format=nv12')
+      expect(chain).to end_with('range=tv')
     end
 
     def make_job(output_height: nil, codec: 'h264', hdr: false, src_width: 1920, src_height: 1080)
