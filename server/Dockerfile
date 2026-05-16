@@ -1,77 +1,122 @@
 # syntax=docker/dockerfile:1
 # check=error=true
+#
+# Multi-arch Caramba server image.
+#
+# Build locally:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t ghcr.io/rubakas/caramba-server:dev server
+#
+# Run on a UGREEN NAS (or any Intel/AMD Linux box with /dev/dri):
+#   see docker-compose.yml at the repo root.
 
-# This Dockerfile is designed for production, not development. Use with Kamal or build'n'run by hand:
-# docker build -t server .
-# docker run -d -p 80:80 -e RAILS_MASTER_KEY=<value from config/master.key> --name server server
-
-# For a containerized dev environment, see Dev Containers: https://guides.rubyonrails.org/getting_started_with_devcontainer.html
-
-# Make sure RUBY_VERSION matches the Ruby version in .ruby-version
 ARG RUBY_VERSION=4.0.2
 FROM docker.io/library/ruby:$RUBY_VERSION-slim AS base
 
-# Rails app lives here
 WORKDIR /rails
 
-# Install base packages
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl libjemalloc2 libvips sqlite3 && \
+# Runtime packages.
+#
+# - curl, libjemalloc2, libvips, sqlite3 — Rails baseline.
+# - VAAPI / Intel Quick Sync userspace stack (used by jellyfin-ffmpeg when
+#   /dev/dri is mounted into the container):
+#     libva2, libva-drm2, libva-x11-2 — VAAPI runtime
+#     intel-media-va-driver-non-free  — iHD driver (Gen8+ incl. Alder/Raptor Lake)
+#     i965-va-driver                  — legacy iHD fallback (older Intel iGPUs)
+#     intel-opencl-icd                — OpenCL on Intel (used by tonemap)
+#     vainfo                          — debugging on the host (`vainfo` inside container)
+#     mesa-va-drivers                 — generic AMD/Mesa VAAPI fallback
+# Enable Debian non-free + non-free-firmware so intel-media-va-driver-non-free
+# (the iHD driver Intel publishes for QSV/VAAPI) is installable. Matches what
+# Jellyfin's own server image does.
+RUN sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/main$/main contrib non-free non-free-firmware/' /etc/apt/sources.list && \
+    apt-get update -qq && \
+    apt-get install --no-install-recommends -y \
+      curl ca-certificates xz-utils \
+      libjemalloc2 libvips sqlite3 \
+      libva2 libva-drm2 libva-x11-2 \
+      intel-media-va-driver-non-free i965-va-driver \
+      intel-opencl-icd \
+      mesa-va-drivers \
+      vainfo && \
     ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-# Set production environment variables and enable jemalloc for reduced memory usage and latency.
 ENV RAILS_ENV="production" \
     BUNDLE_DEPLOYMENT="1" \
     BUNDLE_PATH="/usr/local/bundle" \
     BUNDLE_WITHOUT="development" \
     LD_PRELOAD="/usr/local/lib/libjemalloc.so"
 
-# Throw-away build stage to reduce size of final image
+# ── jellyfin-ffmpeg ───────────────────────────────────────────────────────
+# Download the portable jellyfin-ffmpeg build that matches the target arch
+# of THIS image (not the build host). When using buildx with --platform,
+# Docker sets TARGETARCH automatically (amd64 | arm64). The version and
+# layout mirror server/bin/setup-ffmpeg so the Rails initializer at
+# config/initializers/jellyfin.rb finds it at vendor/ffmpeg/<dir>/ffmpeg.
+FROM base AS ffmpeg
+ARG TARGETARCH
+ARG JELLYFIN_FFMPEG_VERSION=7.1.3-6
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) asset="linux64-gpl";     dir="linux-x64" ;; \
+      arm64) asset="linuxarm64-gpl";  dir="linux-arm64" ;; \
+      *) echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg_${JELLYFIN_FFMPEG_VERSION}_portable_${asset}.tar.xz"; \
+    mkdir -p "/ffmpeg/${dir}"; \
+    echo "Downloading ${url}"; \
+    curl -fsSL "${url}" -o /tmp/ffmpeg.tar.xz; \
+    tar -xJf /tmp/ffmpeg.tar.xz -C "/ffmpeg/${dir}"; \
+    rm /tmp/ffmpeg.tar.xz; \
+    inner=$(ls "/ffmpeg/${dir}"); \
+    if [ "$(echo "$inner" | wc -l)" = "1" ] && [ -d "/ffmpeg/${dir}/${inner}" ]; then \
+      mv "/ffmpeg/${dir}/${inner}"/* "/ffmpeg/${dir}/"; \
+      rmdir "/ffmpeg/${dir}/${inner}"; \
+    fi; \
+    test -x "/ffmpeg/${dir}/ffmpeg"; \
+    test -x "/ffmpeg/${dir}/ffprobe"; \
+    "/ffmpeg/${dir}/ffmpeg" -version
+
+# ── Gem build stage ───────────────────────────────────────────────────────
 FROM base AS build
 
-# Install packages needed to build gems
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y build-essential git libyaml-dev pkg-config && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
-# Install application gems
 COPY vendor/* ./vendor/
 COPY Gemfile Gemfile.lock ./
 
 RUN bundle install && \
     rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git && \
-    # -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
     bundle exec bootsnap precompile -j 1 --gemfile
 
-# Copy application code
 COPY . .
 
-# Precompile bootsnap code for faster boot times.
-# -j 1 disable parallel compilation to avoid a QEMU bug: https://github.com/rails/bootsnap/issues/495
 RUN bundle exec bootsnap precompile -j 1 app/ lib/
-
-# Precompiling assets for production without requiring secret RAILS_MASTER_KEY
 RUN SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile
 
-
-
-
-# Final stage for app image
+# ── Final image ───────────────────────────────────────────────────────────
 FROM base
 
-# Run and own only the runtime files as a non-root user for security
+# Non-root user. The render/video GIDs vary per host kernel, so the user is
+# joined to the in-container `render` group at runtime via `group_add` in
+# docker-compose.yml (UGREEN NAS uses GID 989 for /dev/dri/renderD128).
 RUN groupadd --system --gid 1000 rails && \
-    useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash
-USER 1000:1000
+    useradd rails --uid 1000 --gid 1000 --create-home --shell /bin/bash && \
+    usermod -aG video,render rails 2>/dev/null || true
 
-# Copy built artifacts: gems, application
 COPY --chown=rails:rails --from=build "${BUNDLE_PATH}" "${BUNDLE_PATH}"
 COPY --chown=rails:rails --from=build /rails /rails
+# Drop the platform-matched jellyfin-ffmpeg into the path the initializer
+# expects. The setup-ffmpeg script (used in dev) lays it out the same way.
+COPY --chown=rails:rails --from=ffmpeg /ffmpeg /rails/vendor/ffmpeg
 
-# Entrypoint prepares the database.
+USER 1000:1000
+
 ENTRYPOINT ["/rails/bin/docker-entrypoint"]
 
-# Start server via Thruster by default, this can be overwritten at runtime
 EXPOSE 80
 CMD ["./bin/thrust", "./bin/rails", "server"]

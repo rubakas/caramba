@@ -1,30 +1,41 @@
 #!/usr/bin/env bash
 #
-# Build all Caramba apps (desktop + android-tv).
+# Build all Caramba apps (desktop + android-tv + server docker image).
 #
-# Usage: bin/build                # Build both
-#        bin/build --publish      # Build both + publish to GitHub
+# Usage: bin/build                # Build all three
+#        bin/build --publish      # Build all + publish to GitHub (Releases + ghcr.io)
 #        bin/build --android-tv   # Build only Android TV
 #        bin/build --desktop      # Build only Desktop
+#        bin/build --server       # Build only the server Docker image
 #
+# Filter flags are additive — e.g. `--desktop --server` builds those two.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 PUBLISH=""
-BUILD_DESKTOP=true
-BUILD_ANDROID_TV=true
+BUILD_DESKTOP=""
+BUILD_ANDROID_TV=""
+BUILD_SERVER=""
 
 for arg in "$@"; do
   case "$arg" in
     --publish) PUBLISH="--publish" ;;
-    --android-tv) BUILD_DESKTOP=false ;;
-    --desktop) BUILD_ANDROID_TV=false ;;
+    --desktop) BUILD_DESKTOP=true ;;
+    --android-tv) BUILD_ANDROID_TV=true ;;
+    --server) BUILD_SERVER=true ;;
     *) echo "Unknown flag: $arg"; exit 1 ;;
   esac
 done
 
-if $BUILD_DESKTOP; then
+# If no target flag was passed, build everything.
+if [ -z "$BUILD_DESKTOP$BUILD_ANDROID_TV$BUILD_SERVER" ]; then
+  BUILD_DESKTOP=true
+  BUILD_ANDROID_TV=true
+  BUILD_SERVER=true
+fi
+
+if [ "${BUILD_DESKTOP:-}" = true ]; then
   echo "═══════════════════════════════════════════════════════════════"
   echo "Building Desktop app..."
   echo "═══════════════════════════════════════════════════════════════"
@@ -33,12 +44,20 @@ if $BUILD_DESKTOP; then
   desktop/bin/build $PUBLISH
 fi
 
-if $BUILD_ANDROID_TV; then
+if [ "${BUILD_ANDROID_TV:-}" = true ]; then
   echo ""
   echo "═══════════════════════════════════════════════════════════════"
   echo "Building Android TV app..."
   echo "═══════════════════════════════════════════════════════════════"
   android-tv/bin/build $PUBLISH
+fi
+
+if [ "${BUILD_SERVER:-}" = true ]; then
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "Building server Docker image..."
+  echo "═══════════════════════════════════════════════════════════════"
+  server/bin/build $PUBLISH
 fi
 
 echo ""

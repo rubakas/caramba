@@ -50,7 +50,17 @@ Rails.application.config.after_initialize do
     c.transcode_dir = Rails.root.join("tmp/transcodes")
     c.token_secret  = ENV.fetch("CARAMBA_TOKEN_SECRET") { Rails.application.secret_key_base }
     c.allowed_paths = MediaFolder.enabled.pluck(:path)
-    c.hwaccel = :videotoolbox
+    # Default hwaccel by OS, overridable via CARAMBA_HWACCEL env (qsv, vaapi,
+    # videotoolbox, none). Linux deployments (Docker on a NAS) pick qsv when
+    # /dev/dri is mounted; macOS dev uses VideoToolbox.
+    default_hwaccel =
+      case RbConfig::CONFIG["host_os"]
+      when /darwin/ then :videotoolbox
+      when /linux/  then :qsv
+      else :none
+      end
+    c.hwaccel = ENV.fetch("CARAMBA_HWACCEL", default_hwaccel.to_s).to_sym
+    c.vaapi_device = ENV["CARAMBA_VAAPI_DEVICE"] if ENV["CARAMBA_VAAPI_DEVICE"]
     c.segment_length = 6
     # 60s matches upstream Jellyfin's PingTimeout for HLS jobs
     # (TranscodeManager.cs:157). The reaper kills any job whose last

@@ -1,0 +1,65 @@
+# Caramba server — UGREEN DXP4800 Pro (UGOS Pro).
+#
+# Hardware on this box:
+#   CPU:  Intel Core i3-1315U (Raptor Lake-U, 13th gen, 2P + 4E = 6 cores
+#         / 8 threads, up to 4.5 GHz). Plenty of headroom for several
+#         simultaneous transcodes alongside Rails + library scans.
+#   iGPU: Intel UHD Graphics (64 EU, Xe-LP) — QSV decode covers H.264,
+#         HEVC, VP9, AV1 (incl. 10/12-bit); encode covers H.264 + HEVC.
+#   RAM:  8 GB DDR5-4800 stock, slots take up to 96 GB.
+#
+# UGOS Pro Docker UI flow (Container Manager → Compose):
+#   1. Create a new project, paste this YAML.
+#   2. Fill the env vars in the UI:
+#        RAILS_MASTER_KEY  – contents of server/config/master.key from your dev box
+#        MEDIA_PATH        – e.g. /volume1/Media (or wherever your library lives)
+#        RENDER_GID        – ssh into the NAS, run: stat -c '%g' /dev/dri/renderD128
+#   3. Pre-create the data dir so the container (uid 1000) can write to it:
+#        ssh <nas>
+#        sudo mkdir -p /volume1/docker/caramba/storage /volume1/docker/caramba/transcodes
+#        sudo chown -R 1000:1000 /volume1/docker/caramba
+#   4. Start the stack. Web UI reaches the box at http://<nas>:3001.
+#
+# Transcode segments are written hot — if you have an NVMe volume (the
+# DXP4800 Pro has two M.2 slots), point DATA_PATH there to spare the HDDs.
+
+services:
+  caramba-server:
+    image: ${CARAMBA_IMAGE:-ghcr.io/rubakas/caramba-server:latest}
+    container_name: caramba-server
+    restart: unless-stopped
+    ports:
+      - "${CARAMBA_PORT:-3001}:80"
+    environment:
+      RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:?paste server/config/master.key contents}
+      CARAMBA_TOKEN_SECRET: ${CARAMBA_TOKEN_SECRET:-}
+      CARAMBA_HWACCEL: ${CARAMBA_HWACCEL:-qsv}
+      CARAMBA_VAAPI_DEVICE: ${CARAMBA_VAAPI_DEVICE:-/dev/dri/renderD128}
+      RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+      # i3-1315U has 8 threads and QSV offloads decode/encode to the iGPU,
+      # so 3 concurrent transcodes is comfortable. Bump higher if you've
+      # added RAM and all your streams are direct-play / QSV-only.
+      JELLYFIN_MAX_CONCURRENT_TRANSCODES: ${JELLYFIN_MAX_CONCURRENT_TRANSCODES:-3}
+    devices:
+      - /dev/dri:/dev/dri
+    # The container's `rails` user (uid 1000) must be in the host's render
+    # group to open /dev/dri/renderD128. RENDER_GID = stat -c '%g' /dev/dri/renderD128
+    # on the NAS — UGOS Pro typically reports 989, but verify, it can drift
+    # between firmware versions.
+    group_add:
+      - "${RENDER_GID:-989}"
+      - "video"
+    volumes:
+      # SQLite + Active Storage. Keep on a stable volume (HDD pool is fine).
+      - ${DATA_PATH:-/volume1/docker/caramba}/storage:/rails/storage
+      # HLS transcode segments — hot path. Put on NVMe if you have one.
+      - ${DATA_PATH:-/volume1/docker/caramba}/transcodes:/rails/tmp/transcodes
+      # Your media library, read-only. Path inside the container is what
+      # you'll register as a MediaFolder in Caramba's web UI.
+      - ${MEDIA_PATH:?set MEDIA_PATH, e.g. /volume1/Media}:/media:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/up || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

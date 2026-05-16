@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# Build the Caramba server Docker image.
+#
+# Version is read from the root package.json (shared with desktop / android-tv).
+# Does NOT auto-increment — use desktop/bin/build for that.
+#
+# Usage: bin/build                # Build for the current host platform, load into local docker
+#        bin/build --publish      # Multi-arch (linux/amd64 + linux/arm64) push to ghcr.io
+#
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT_DIR="$(cd .. && pwd)"
+ROOT_PACKAGE_JSON="$ROOT_DIR/package.json"
+
+PUBLISH=false
+for arg in "$@"; do
+  case "$arg" in
+    --publish) PUBLISH=true ;;
+    *) echo "Unknown flag: $arg (use --publish)"; exit 1 ;;
+  esac
+done
+
+# ── 1. Pre-flight ───────────────────────────────────────────────────
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "Warning: You have uncommitted changes. Build will use the current working tree state."
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is required (and 'docker buildx' for multi-arch publish)." >&2
+  exit 1
+fi
+if ! docker buildx version >/dev/null 2>&1; then
+  echo "docker buildx not available. Install Docker Desktop or buildx plugin." >&2
+  exit 1
+fi
+
+# ── 2. Version + image refs ─────────────────────────────────────────
+CURRENT_VERSION=$(node -e "console.log(require('$ROOT_PACKAGE_JSON').version)")
+VERSION_NUM="${CURRENT_VERSION#v}"
+echo "Version: $CURRENT_VERSION"
+
+IMAGE="${CARAMBA_SERVER_IMAGE:-ghcr.io/rubakas/caramba-server}"
+TAG_VERSION="${IMAGE}:${VERSION_NUM}"
+TAG_LATEST="${IMAGE}:latest"
+
+# ── 3. Buildx builder ───────────────────────────────────────────────
+# Reuse a named builder so caching survives between builds.
+BUILDER_NAME="caramba-builder"
+if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
+  echo "Creating buildx builder '$BUILDER_NAME'..."
+  docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap >/dev/null
+fi
+docker buildx use "$BUILDER_NAME"
+
+# ── 4. Build ────────────────────────────────────────────────────────
+if $PUBLISH; then
+  if ! grep -q "ghcr.io" "$HOME/.docker/config.json" 2>/dev/null && [ -z "${GITHUB_TOKEN:-}${CR_PAT:-}" ]; then
+    echo "Note: no ghcr.io credentials detected in ~/.docker/config.json." >&2
+    echo "      If push fails, run: gh auth token | docker login ghcr.io -u <github-user> --password-stdin" >&2
+  fi
+
+  echo ""
+  echo "Building + pushing multi-arch (linux/amd64, linux/arm64) → $TAG_VERSION + :latest"
+  docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --tag "$TAG_VERSION" \
+    --tag "$TAG_LATEST" \
+    --push \
+    .
+  echo ""
+  echo "Pushed: $TAG_VERSION"
+  echo "Pushed: $TAG_LATEST"
+else
+  # Local-only build: current host arch, --load into local docker.
+  HOST_ARCH=$(uname -m)
+  case "$HOST_ARCH" in
+    x86_64|amd64) PLATFORM="linux/amd64" ;;
+    arm64|aarch64) PLATFORM="linux/arm64" ;;
+    *) echo "Unsupported host arch: $HOST_ARCH" >&2; exit 1 ;;
+  esac
+
+  echo ""
+  echo "Building $PLATFORM image $TAG_VERSION (use --publish for multi-arch + push)"
+  docker buildx build \
+    --platform "$PLATFORM" \
+    --tag "$TAG_VERSION" \
+    --tag "$TAG_LATEST" \
+    --load \
+    .
+  echo ""
+  echo "Built local image: $TAG_VERSION"
+  docker images "$IMAGE" --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}'
+fi

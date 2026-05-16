@@ -49,3 +49,7 @@
 # Ignore Docker-related files
 /.dockerignore
 /Dockerfile*
+
+# Host-side jellyfin-ffmpeg binaries — the Docker build downloads the
+# Linux variant inside the image, never the developer's macOS/Windows one.
+/vendor/ffmpeg/
