@@ -168,6 +168,24 @@ class Api::PlaybackController < Api::BaseController
       # win because the audio path doesn't run through any video filter.)
       transcode_token_params[:video_codec] = "copy" unless is_bitmap
       transcode_token_params[:audio_codec] = "copy"
+    elsif !is_bitmap && client_can_directplay_video?(info, client_profile)
+      # **The audio-only-transcode fast path.** When the file's VIDEO
+      # codec is in the client's DirectPlay profile but the AUDIO
+      # codec isn't (Iron Giant: H.264 OK + DTS-HD not OK, an
+      # extremely common BluRay / WEB-DL shape), the engine should
+      # stream-copy video and only re-encode audio. Without this
+      # branch we re-encoded video too — that's ~30 s of encoder
+      # cold-start on a 4K source AND every seek pays the same cost,
+      # which is exactly the "loads for a minute, every seek the
+      # same" symptom the user reported (and why installing real
+      # Jellyfin on the same NAS feels instant: Jellyfin takes this
+      # path). Mirrors upstream Jellyfin's StreamBuilder logic that
+      # decouples per-stream stream-copy decisions from the
+      # overall direct-stream/transcode mode.
+      transcode_token_params[:video_codec] = "copy"
+      # Leave audio_codec unset so the engine transcodes audio to
+      # the configured target (AAC by default), which is the whole
+      # point of taking the transcode path.
     end
 
     # Pick the segment container from the client's TranscodingProfiles.
@@ -400,6 +418,61 @@ class Api::PlaybackController < Api::BaseController
     Set.new(Array(device_profile&.dig("DirectPlayProfiles")).flat_map { |entry|
       entry["AudioCodec"].to_s.split(/\s*,\s*/).map(&:downcase)
     })
+  end
+
+  # Does THIS source's video stream satisfy the client's direct-play
+  # video constraints (codec, resolution, HDR/10-bit, bitrate, etc.)?
+  # If yes, we can `-c:v copy` even when the audio still needs
+  # transcoding — that's the fast "audio_transcode" path that real
+  # Jellyfin and the pre-port Caramba transcoder both use. If no
+  # (4K HEVC HDR on a browser that lacks HEVC, anamorphic, profile
+  # mismatch, etc.) the video must transcode.
+  #
+  # Mirrors the codec/level/HDR/bitrate gates in
+  # `Jellyfin::Playback::Decision#video_compatible?` — we just call it
+  # against an audio-less source view so a real audio incompatibility
+  # doesn't mask a green light for video.
+  def client_can_directplay_video?(info, client_profile)
+    v = info[:video]
+    return false unless v
+    video_stream = Jellyfin::Probing::MediaStream.new(
+      index:             0,
+      type:              :video,
+      codec:             v[:codec],
+      width:             v[:width],
+      height:            v[:height],
+      frame_rate:        parse_frame_rate(v[:r_frame_rate] || v[:avg_frame_rate]),
+      profile:           v[:profile],
+      level:             v[:level],
+      bit_rate:          info[:bitrate],
+      pix_fmt:           v[:pix_fmt],
+      color_transfer:    v[:color_transfer],
+      color_primaries:   v[:color_primaries],
+      color_space:       v[:color_space]
+    )
+    source = Jellyfin::Probing::MediaSourceInfo.new(
+      path: info[:filePath].to_s, streams: [ video_stream ]
+    )
+    decision = Jellyfin::Playback::Decision.call(
+      media_source: source,
+      profile:      client_profile,
+      requested:    { audio_track: nil, subtitle_track: nil,
+                      max_bitrate: client_profile.max_video_bitrate }
+    )
+    decision.direct_play? || decision.direct_stream?
+  rescue StandardError
+    false
+  end
+
+  def parse_frame_rate(rate)
+    return nil if rate.blank?
+    if rate.is_a?(String) && rate.include?('/')
+      num, den = rate.split('/', 2).map(&:to_f)
+      return nil if den.zero?
+      num / den
+    else
+      rate.to_f
+    end
   end
 
   # Walks the client's TranscodingProfiles (in declaration order) and

@@ -250,6 +250,73 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Regression: when the source's VIDEO codec is OK for the client but
+  # the AUDIO codec isn't (Iron Giant: H.264 OK + DTS-HD not OK, the
+  # entire BluRay / WEB-DL rip universe), the engine MUST stream-copy
+  # video and only transcode audio. Without `video_codec=copy` we
+  # re-encoded video too — 30+ s of encoder cold-start on every play
+  # AND on every seek, which is exactly the "loads for a minute, every
+  # seek pays the same cost" symptom the user reported against real
+  # Jellyfin on the same NAS hardware. Real Jellyfin takes this path;
+  # we did not. This test pins the behaviour.
+  class AudioOnlyTranscodeStreamCopyTest < ActiveSupport::TestCase
+    setup do
+      @controller = Api::PlaybackController.new
+    end
+
+    def browser_profile_raw
+      {
+        "DirectPlayProfiles" => [
+          { "Container" => "mp4,m4v,mov", "Type" => "Video",
+            "VideoCodec" => "h264,hevc", "AudioCodec" => "aac,ac3,eac3" }
+        ],
+        "TranscodingProfiles" => [
+          { "Container" => "mp4", "Type" => "Video", "Protocol" => "hls",
+            "VideoCodec" => "h264", "AudioCodec" => "aac", "MaxAudioChannels" => "6" }
+        ],
+        "SubtitleProfiles" => [ { "Format" => "vtt", "Method" => "External" } ],
+        "CodecProfiles" => []
+      }
+    end
+
+    def info_for(video_codec:, audio_codec: "aac", width: 1920, height: 1080)
+      {
+        filePath: "/x.mkv",
+        formatName: "matroska,webm",
+        bitrate: 10_000_000,
+        video: {
+          codec: video_codec, width: width, height: height,
+          r_frame_rate: "24/1", profile: "High", level: 41,
+          pix_fmt: "yuv420p", color_transfer: "bt709",
+          color_primaries: "bt709", color_space: "bt709"
+        },
+        audioStreams: [
+          { index: 1, codec: audio_codec, channels: 6, language: "eng" }
+        ],
+        subtitleStreams: []
+      }
+    end
+
+    test "h264 video + dts-hd audio in MKV → video copy, audio transcoded" do
+      info = info_for(video_codec: "h264", audio_codec: "dts")
+      profile_raw = @controller.send(:parse_device_profile, browser_profile_raw)
+      profile = CarambaClientProfile.build(profile_raw)
+      direct_playable = @controller.send(:client_can_directplay_video?, info, profile)
+      assert direct_playable, "expected H.264 1080p to be eligible for video stream-copy on browser profile"
+    end
+
+    test "hevc video on a browser without HEVC → video must transcode" do
+      info = info_for(video_codec: "hevc", audio_codec: "aac")
+      # Strip hevc from the profile to simulate a browser that lacks HEVC.
+      raw = browser_profile_raw
+      raw["DirectPlayProfiles"][0]["VideoCodec"] = "h264"
+      profile_raw = @controller.send(:parse_device_profile, raw)
+      profile = CarambaClientProfile.build(profile_raw)
+      direct_playable = @controller.send(:client_can_directplay_video?, info, profile)
+      assert_not direct_playable, "HEVC source must not stream-copy on an H.264-only profile"
+    end
+  end
+
   # Regression for the Safari "spinner forever then unsupported toast" bug.
   # The transcoding engine's master playlist used to ALWAYS emit
   # EXT-X-MEDIA:TYPE=SUBTITLES rendition groups. Safari fetches every
