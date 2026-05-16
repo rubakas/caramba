@@ -184,6 +184,7 @@ ENTRYPOINT ["/rails/bin/docker-entrypoint"]
 # enough for an API + small SPA. RAILS_SERVE_STATIC_FILES=1 lets Rails
 # serve the built React assets from public/.
 ENV PORT=3000 \
-    RAILS_SERVE_STATIC_FILES=1
+    RAILS_SERVE_STATIC_FILES=1 \
+    SOLID_QUEUE_IN_PUMA=1
 EXPOSE 3000
 CMD ["./bin/rails", "server"]
