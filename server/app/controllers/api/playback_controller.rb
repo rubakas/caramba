@@ -374,7 +374,15 @@ class Api::PlaybackController < Api::BaseController
     method = subtitle_method_for(device_profile, picked[:codec])
     return [ picked[:index], false ] if method
     return [ picked[:index], false ] if picked[:isText]
-    [ picked[:index], true ]
+    # Auto-pick landed on a bitmap (PGS/DVB/DVD) track that the client can't
+    # render natively. Burning it in requires full SW transcode (the HW
+    # overlay graph in jellyfin-rails isn't ported yet, so resolve_hwaccel
+    # refuses the HW backend for graphical burn-in). Rather than silently
+    # downgrade the entire title to CPU encoding just because the user has
+    # a saved language preference, drop the subtitle. The user can still
+    # explicitly pick the PGS track from the player UI when they actually
+    # want subs burned in for that title.
+    [ nil, false ]
   end
 
   def pick_subtitle_track(streams, prefs)

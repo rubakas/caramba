@@ -88,6 +88,23 @@ module Jellyfin
         # (system-memory yuv420p) with a HW encoder fails format
         # negotiation in ffmpeg. Falls back to all-SW (libx264 + tonemapx).
         return nil if job.hdr_input? && !backend.full_chain_supported?(@caps)
+        # Graphical (bitmap) subtitle burn-in needs a dual-input filter
+        # graph: the sub stream gets its own pre-processing chain
+        # (scale + format=bgra + hwupload=derive_device=<backend>) and is
+        # then fed as a second input to overlay_<backend>. Upstream
+        # EncodingHelper.cs:4893-4929 builds that via separate subFilters
+        # + overlayFilters lists. The port currently only emits a single-
+        # input main chain and appends `overlay_<backend>=...` to it;
+        # ffmpeg auto-inserts a phantom `hwupload` for the missing sub
+        # input and explodes with "Impossible to convert between the
+        # formats supported by the filter 'Parsed_hwupload_1' and the
+        # filter 'auto_scale_0'", the encoder never opens, segments never
+        # appear, init-segment requests loop on 504s — the "Iron Giant
+        # full-transcode buffers forever" symptom. Until the HW overlay
+        # graph is ported, fall back to all-SW so PgsOverlay can do the
+        # burn-in in system memory. Non-burn-in playback (subs off, or
+        # text subs, or video without burn) stays on the HW path.
+        return nil if graphical_burn_in_filter?(job)
         backend
       end
 

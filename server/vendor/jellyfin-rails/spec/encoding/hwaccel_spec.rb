@@ -182,6 +182,75 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     end
   end
 
+  describe Jellyfin::Encoding::EncodingHelper, 'graphical-subtitle burn-in HW fallback' do
+    # Regression: when a graphical (PGS/DVB/DVD) subtitle is being burned
+    # into the video, the HW backend MUST be refused. `HwSubtitleOverlay`
+    # emits a single overlay filter (overlay_qsv / overlay_vaapi /
+    # overlay_cuda) which is a 2-input filter; the sub-stream
+    # pre-processing chain that feeds its second input isn't built yet.
+    # If we still pick a HW backend, ffmpeg auto-inserts a phantom
+    # `hwupload` for the missing input and the chain dies with
+    # "Impossible to convert between the formats supported by the filter
+    # 'Parsed_hwupload_1' and the filter 'auto_scale_0'". User-visible
+    # symptom: every full_transcode title with graphical subs loops on
+    # init-segment 504s. Refusing HW here keeps the SW PgsOverlay path
+    # alive — slower but functionally correct. Drop this gate once the
+    # dual-graph upload chain (upstream EncodingHelper.cs:4893-4929) is
+    # ported.
+    it 'refuses the HW backend when graphical subtitle burn-in is required' do
+      caps = Class.new do
+        def supports_encoder?(name); %w[libx264 h264_qsv h264_vaapi aac].include?(name); end
+        def supports_filter?(name);  %w[scale scale_qsv scale_vaapi hwupload overlay_qsv overlay_vaapi].include?(name); end
+        def supports_hwaccel?(name); %w[qsv vaapi].include?(name); end
+        def supports_decoder?(_);    true; end
+      end.new
+      v = Jellyfin::Probing::MediaStream.new(
+        index: 0, type: :video, codec: 'h264',
+        width: 1920, height: 1080, frame_rate: 24.0,
+        video_range: 'SDR', video_range_type: 'SDR'
+      )
+      s = Jellyfin::Probing::MediaStream.new(
+        index: 1, type: :subtitle, codec: 'pgssub'
+      )
+      source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v, s ])
+      options = Jellyfin::Encoding::EncodingOptions.new
+      options.enable_hardware_encoding = true
+      options.hardware_acceleration_type = :qsv
+      job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: source,
+        options: options,
+        output_video_codec: 'h264',
+        subtitle_stream: s,
+        subtitle_method: :encode
+      )
+      helper = described_class.new(caps)
+      expect(helper.send(:resolve_hwaccel, job)).to be_nil
+    end
+
+    it 'keeps the HW backend when no subtitle burn-in is needed' do
+      caps = Class.new do
+        def supports_encoder?(name); %w[libx264 h264_qsv aac].include?(name); end
+        def supports_filter?(name);  %w[scale scale_qsv hwupload].include?(name); end
+        def supports_hwaccel?(name); name == 'qsv'; end
+        def supports_decoder?(_);    true; end
+      end.new
+      v = Jellyfin::Probing::MediaStream.new(
+        index: 0, type: :video, codec: 'h264',
+        width: 1920, height: 1080, frame_rate: 24.0,
+        video_range: 'SDR', video_range_type: 'SDR'
+      )
+      source = Jellyfin::Probing::MediaSourceInfo.new(path: '/x.mkv', streams: [ v ])
+      options = Jellyfin::Encoding::EncodingOptions.new
+      options.enable_hardware_encoding = true
+      options.hardware_acceleration_type = :qsv
+      job = Jellyfin::Encoding::EncodingJobInfo.new(
+        media_source: source, options: options, output_video_codec: 'h264'
+      )
+      helper = described_class.new(caps)
+      expect(helper.send(:resolve_hwaccel, job)).to eq(Jellyfin::Encoding::Hwaccel::Qsv)
+    end
+  end
+
   describe Jellyfin::Encoding::EncodingHelper, 'with HW accel' do
     it 'uses h264_videotoolbox when HW accel is enabled and available' do
       caps = Class.new do

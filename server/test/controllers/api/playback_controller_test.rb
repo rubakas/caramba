@@ -216,11 +216,21 @@ class Api::PlaybackControllerTest < ActionDispatch::IntegrationTest
       assert_equal [ 3, false ], select(streams, nil, native_profile)
     end
 
-    test "saved bitmap preference + browser profile → bitmap selected, burn_required=true" do
+    # Regression: a saved English language preference used to auto-pick a
+    # PGS track on every BluRay rip and flip burn_required=true, which
+    # forced full SW transcode (HW overlay graph isn't ported yet, so
+    # jellyfin-rails' resolve_hwaccel refuses the HW backend for any
+    # graphical burn-in job). The user's symptom: "I didn't enable
+    # subtitles but every title is still pegging the CPU at 97%".
+    # Policy now: when the auto-pick lands on a bitmap track the client
+    # can't render natively, drop the subtitle entirely. The user can
+    # still pick the PGS track manually from the player UI when they
+    # actually want it.
+    test "saved bitmap preference + browser profile → subtitle dropped, no burn" do
       streams = [
         { index: 4, codec: "hdmv_pgs_subtitle", language: "eng", isText: false }
       ]
-      assert_equal [ 4, true ], select(streams, { subtitleLanguage: "eng" })
+      assert_equal [ nil, false ], select(streams, { subtitleLanguage: "eng" })
     end
 
     test "saved bitmap preference + native profile (PGSSUB Embed) → bitmap selected, burn_required=false" do
