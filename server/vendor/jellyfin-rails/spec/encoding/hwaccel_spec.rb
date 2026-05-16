@@ -201,10 +201,14 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     # filter that does scale + format + tonemap) — no hwupload needed
     # since frames are already on the iGPU. Mirrors hwScalePrefix="vpp"
     # in upstream EncodingHelper.cs:4785.
-    it 'uses vpp_qsv for the HW-decode filter chain' do
-      job = make_job(output_height: 720)
+    #
+    # Width/height MUST be concrete integers; vpp_qsv's parser silently
+    # stalls the pipeline if you hand it ffmpeg expressions like
+    # `-2` or `min(N,ih)`. Mirrors `GetFixedOutputSize` (cs:3255).
+    it 'uses vpp_qsv with concrete dims for the HW-decode filter chain' do
+      job = make_job(src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, hw_caps)
-      expect(chain).to eq("vpp_qsv=w=-2:h='min(720,ih)':format=nv12")
+      expect(chain).to eq('vpp_qsv=w=1920:h=1080:format=nv12')
     end
 
     it 'uses vpp_qsv=format=nv12 when no resize is needed (HW decode)' do
@@ -221,9 +225,9 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     # 'auto_scale_0'"). Mirrors EncodingHelper.cs:4750 which ends the
     # SW branch with `format=nv12` and lets the HW encoder do the upload.
     it 'uses SW scale + format=nv12 for the SW-decode filter chain (no hwupload)' do
-      job = make_job(output_height: 1080)
+      job = make_job(src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, sw_caps)
-      expect(chain).to eq("scale=-2:'min(1080,ih)':flags=lanczos,format=nv12")
+      expect(chain).to eq('scale=1920:1080:flags=lanczos,format=nv12')
       expect(chain).not_to include('hwupload')
       expect(chain).not_to include('vpp_qsv')
     end
@@ -243,9 +247,9 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
     # conversion in the same VPL pass. Without it, the encoder gets
     # garbage.
     it 'appends :tonemap=1 to vpp_qsv when input is HDR (HW decode)' do
-      job = make_job(codec: 'hevc', hdr: true, output_height: 1080)
+      job = make_job(codec: 'hevc', hdr: true, src_width: 3840, src_height: 2160, output_height: 1080)
       chain = described_class.filter_chain(job, hw_caps)
-      expect(chain).to eq("vpp_qsv=w=-2:h='min(1080,ih)':format=nv12:tonemap=1")
+      expect(chain).to eq('vpp_qsv=w=1920:h=1080:format=nv12:tonemap=1')
     end
 
     it 'omits :tonemap=1 on SDR sources (HW decode)' do
@@ -264,10 +268,10 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(chain).to end_with('format=nv12')
     end
 
-    def make_job(output_height: nil, codec: 'h264', hdr: false)
+    def make_job(output_height: nil, codec: 'h264', hdr: false, src_width: 1920, src_height: 1080)
       v = Jellyfin::Probing::MediaStream.new(
         index: 0, type: :video, codec: codec,
-        width: 1920, height: 1080, frame_rate: 24.0,
+        width: src_width, height: src_height, frame_rate: 24.0,
         video_range: hdr ? 'HDR' : 'SDR',
         video_range_type: hdr ? 'HDR10' : 'SDR'
       )
@@ -278,6 +282,26 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       ).tap do |job|
         job.define_singleton_method(:output_height) { output_height }
       end
+    end
+
+    # Regression: h264_qsv ignores `-crf` (rate_control_args emits that
+    # for libx264 compatibility), defaulting to CQP ~25-26 which produces
+    # visibly blocky output even on high-bitrate sources. encoder_args
+    # MUST emit `-global_quality` (ICQ mode) so QSV picks a quality
+    # target equivalent to the SW `-crf` value. User-visible symptom:
+    # "Aladdin plays but the picture is heavily pixelated".
+    it 'emits -global_quality so h264_qsv runs in ICQ (CRF-equivalent) mode' do
+      job = make_job
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-global_quality', '23' ])
+    end
+
+    it 'uses the configured h265_crf for hevc_qsv targets' do
+      job = make_job
+      job.output_video_codec = 'hevc'
+      job.options.h265_crf = 28
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-global_quality', '28' ])
     end
   end
 

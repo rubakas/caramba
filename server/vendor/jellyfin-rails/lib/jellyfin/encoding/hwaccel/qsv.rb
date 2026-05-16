@@ -67,8 +67,34 @@ module Jellyfin
           end
         end
 
-        def encoder_args(_job)
-          [ '-preset', 'medium', '-look_ahead', '0' ]
+        # Encoder args for h264_qsv / hevc_qsv. The generic
+        # `rate_control_args` emits `-crf N` which h264_qsv does NOT
+        # understand — without `-global_quality` the encoder silently
+        # falls back to default CQP (~QP 25-26), producing visibly
+        # blocky/pixelated output even though the source is high-bitrate.
+        # ICQ mode (Intel Constant Quality) is the QSV equivalent of CRF;
+        # passing the same numeric value (e.g. 23) gives roughly
+        # comparable visual quality. Mirrors upstream Jellyfin (which
+        # always emits `-global_quality` for QSV encoders).
+        def encoder_args(job)
+          [
+            '-preset', 'medium',
+            '-look_ahead', '0',
+            '-global_quality', quality_for(job).to_s
+          ]
+        end
+
+        # CRF-equivalent value for the configured target codec. Reads the
+        # same EncodingOptions field the SW `rate_control_args` uses for
+        # libx264 / libx265 so QSV quality stays in lockstep with the SW
+        # path — switching `CARAMBA_HWACCEL` from qsv to none shouldn't
+        # change the perceived quality.
+        def quality_for(job)
+          case job.output_video_codec.to_s.downcase
+          when 'h265', 'hevc' then job.options.h265_crf
+          when 'av1'          then job.options.av1_crf
+          else                     job.options.h264_crf
+          end
         end
 
         # ── helpers ────────────────────────────────────────────────────
@@ -94,24 +120,32 @@ module Jellyfin
         # already a QSV surface; vpp_qsv handles scale + format in one
         # GPU-side pass. h264_qsv consumes the QSV surface directly.
         #
-        # HDR sources need `:tonemap=1` (upstream EncodingHelper.cs:4537),
-        # which iHD's VPL runtime evaluates on the iGPU — single-pass
-        # HDR-PQ → SDR-Rec.709 conversion. Without it, vpp_qsv produces
-        # nv12 frames that still carry HDR signaling, h264_qsv (an 8-bit
-        # encoder that can't pass HDR through) silently stalls, no
-        # segments are written, init-segment 504s. Symptom: 4K HEVC HDR
-        # rips (Aladdin, etc.) buffer forever even though the SDR equivalent
-        # works. Gen11+ iGPUs support vpp_qsv tonemap; older silicon would
-        # need the OpenCL bridge upstream uses (not ported).
+        # IMPORTANT: width/height must be concrete integers. vpp_qsv's
+        # argument parser doesn't evaluate ffmpeg's expression DSL
+        # (`-2`, `min(…,ih)`) the way the generic `scale` filter does —
+        # passing them silently stalls the filter graph (no error, no
+        # frames produced, init-segment requests loop on 504s). Upstream
+        # `GetHwScaleFilter` (EncodingHelper.cs:3255) always computes
+        # concrete integers via `GetFixedOutputSize`; we mirror that
+        # here. Symptom seen: Iron Giant (1080p → 1080p, scale was a
+        # no-op) worked, Aladdin (4K → 1080p, scale actually invoked)
+        # silently stalled.
+        #
+        # HDR sources also need `:tonemap=1` (upstream cs:4537) so iHD's
+        # VPL runtime converts HDR-PQ → SDR-Rec.709 in the same pass —
+        # without it, h264_qsv (8-bit, no HDR support) silently stalls.
         def hw_decode_chain(job)
-          out_h = job.output_height
-          vpp = if out_h
-            "vpp_qsv=w=-2:h='min(#{out_h},ih)':format=nv12"
-          else
-            'vpp_qsv=format=nv12'
-          end
-          vpp += ':tonemap=1' if job.hdr_input?
-          vpp
+          parts = [ 'vpp_qsv' ]
+          out_w, out_h = fixed_output_size(job)
+          dims_set = out_w && out_h
+          format_set = true  # always force format=nv12 for the h264_qsv encoder
+
+          arg_pairs = []
+          arg_pairs << "w=#{out_w}" << "h=#{out_h}" if dims_set
+          arg_pairs << 'format=nv12' if format_set
+          arg_pairs << 'tonemap=1' if job.hdr_input?
+
+          dims_set ? "vpp_qsv=#{arg_pairs.join(':')}" : "vpp_qsv=#{arg_pairs.join(':')}"
         end
 
         # SW-decode branch (mirrors EncodingHelper.cs:4730-4757). Input is
@@ -121,7 +155,7 @@ module Jellyfin
         #
         # HDR sources get an extra `zscale,tonemap` leg before format=nv12
         # so the HDR-PQ pixels are converted to SDR-Rec.709 in software.
-        # Mirrors upstream EncodingHelper's swTonemap path (cs:4099-ish).
+        # Mirrors upstream EncodingHelper's swTonemap path.
         def sw_decode_chain(job)
           parts = []
           if job.hdr_input?
@@ -131,9 +165,29 @@ module Jellyfin
             parts << "tonemap=hable:desat=0:peak=#{tonemap_peak(job)}"
             parts << 'zscale=t=bt709:m=bt709:r=tv'
           end
-          parts << "scale=-2:'min(#{job.output_height},ih)':flags=lanczos" if job.output_height
+          out_w, out_h = fixed_output_size(job)
+          parts << "scale=#{out_w}:#{out_h}:flags=lanczos" if out_w && out_h
           parts << 'format=nv12'
           parts.join(',')
+        end
+
+        # Compute concrete output dimensions for the scaler. Returns
+        # [width, height] or [nil, nil] when no resize is needed (source
+        # already at or below the requested height). Mirrors upstream
+        # `GetFixedOutputSize` — preserves aspect ratio, even integers.
+        def fixed_output_size(job)
+          return [ nil, nil ] unless job.output_height
+          src_w = job.video_stream&.width
+          src_h = job.video_stream&.height
+          return [ nil, nil ] unless src_w && src_h && src_h.positive?
+          # Never upscale.
+          return [ nil, nil ] if src_h <= job.output_height
+          target_h = job.output_height
+          ratio = target_h.to_f / src_h
+          target_w = (src_w * ratio).round
+          target_w -= 1 if target_w.odd?
+          target_h -= 1 if target_h.odd?
+          [ target_w, target_h ]
         end
 
         def tonemap_peak(job)
