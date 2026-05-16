@@ -2,9 +2,15 @@ package com.caramba.tv;
 
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioFormat;
 import android.os.Build;
 import android.util.Log;
 
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.exoplayer.audio.AudioCapabilities;
+
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -63,6 +69,68 @@ public class CarambaPlayerPlugin extends Plugin {
     }
 
     /**
+     * Probes Media3's AudioCapabilities to discover which audio encodings
+     * the device's full pipeline (HDMI / built-in DAC / connected AVR via
+     * EDID) can actually accept. Sources whose audio codec isn't in this
+     * list MUST be audio-transcoded by the server — Chromecast with Google
+     * TV, for instance, never advertises DTS in EDID, so direct-playing a
+     * DTS source resulted in ExoPlayer's AudioSink rejecting the format
+     * (NO_UNSUPPORTED_TYPE) and silently selecting whatever fallback audio
+     * the file happened to carry (e.g. AC3 commentary instead of DTS main).
+     *
+     * JS calls this once at app start (alongside isAvailable) and feeds
+     * the result into buildAndroidTvProfile so the server's strategy is
+     * grounded in real hardware state, not a static codec wishlist.
+     */
+    @PluginMethod
+    public void getAudioCapabilities(PluginCall call) {
+        try {
+            AudioCapabilities caps = AudioCapabilities.getCapabilities(
+                    getContext(),
+                    new AudioAttributes.Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .build(),
+                    /* routedDevice */ null);
+
+            JSArray encodings = new JSArray();
+            // PCM is always supported (it's the fallback). Listed for completeness.
+            encodings.put("pcm_s16le");
+            encodings.put("aac");
+            encodings.put("mp3");
+            encodings.put("flac");
+            encodings.put("opus");
+            encodings.put("vorbis");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_AC3))         encodings.put("ac3");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_E_AC3))       encodings.put("eac3");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_E_AC3_JOC))   encodings.put("eac3_joc");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_DTS))         encodings.put("dts");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_DTS_HD))      encodings.put("dtshd");
+            if (caps.supportsEncoding(AudioFormat.ENCODING_DOLBY_TRUEHD)) {
+                encodings.put("truehd");
+                encodings.put("mlp");
+            }
+
+            JSObject result = new JSObject();
+            result.put("supportedEncodings", encodings);
+            result.put("maxChannelCount", caps.getMaxChannelCount());
+            Log.i(TAG, "getAudioCapabilities: encodings=" + encodings.toString()
+                    + " maxChannels=" + caps.getMaxChannelCount());
+            call.resolve(result);
+        } catch (Throwable t) {
+            Log.w(TAG, "getAudioCapabilities failed; reporting conservative defaults", t);
+            JSArray fallback = new JSArray();
+            fallback.put("pcm_s16le");
+            fallback.put("aac");
+            fallback.put("mp3");
+            JSObject result = new JSObject();
+            result.put("supportedEncodings", fallback);
+            result.put("maxChannelCount", 2);
+            call.resolve(result);
+        }
+    }
+
+    /**
      * Open the full-screen player. Stages the payload in
      * {@link CarambaPlayerSession#pendingPayload} and launches
      * {@link PlayerActivity}. Resolves immediately — playback is async.
@@ -97,13 +165,23 @@ public class CarambaPlayerPlugin extends Plugin {
      */
     @PluginMethod
     public void updateStream(PluginCall call) {
-        PlayerActivity activity = CarambaPlayerSession.current;
-        if (activity == null) {
-            call.resolve();
-            return;
-        }
         try {
             final JSObject payload = mergeData(call);
+            PlayerActivity activity = CarambaPlayerSession.current;
+            if (activity == null) {
+                // Race: JS sends present(stub) + updateStream(real) in quick
+                // succession (typically <1s apart on a warm cache). On a
+                // physical Chromecast the Activity's onCreate can take longer
+                // than that gap to assign CarambaPlayerSession.current, so a
+                // dropped updateStream left ExoPlayer idle with a 0:00 UI and
+                // the title never started. Stash the latest payload so
+                // PlayerActivity.onCreate picks it up via pendingPayload,
+                // skips the pending:true branch, and loads the real media on
+                // first try.
+                CarambaPlayerSession.pendingPayload = payload;
+                call.resolve();
+                return;
+            }
             activity.runOnUiThread(() -> activity.applyUpdate(payload));
             call.resolve();
         } catch (Exception e) {

@@ -70,10 +70,31 @@ async function probeNativePlayer() {
   }
 }
 
+// Probe the device's actual audio output capabilities — HDMI EDID +
+// hardware decoders — so the device profile we send the server reflects
+// what the Chromecast can really play. Without this, our static AudioCodec
+// list claimed DTS support and the server happily direct-played DTS
+// sources that the chip then silently refused, falling back to whatever
+// other audio track was in the file (e.g. the commentary instead of the
+// main 5.1).
+async function probeAudioCapabilities() {
+  const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
+  if (!plugin?.getAudioCapabilities) return null
+  try {
+    const caps = await plugin.getAudioCapabilities()
+    console.log('[CarambaPlayer probe] audio caps =', caps)
+    return caps
+  } catch (err) {
+    console.warn('[CarambaPlayer probe] getAudioCapabilities threw:', err?.message || err)
+    return null
+  }
+}
+
 export default function App() {
   const [apiUrl, setApiUrl] = useState(null)
   const [isLoading, setIsLoading] = useState(isAndroidTV)
   const [hasNativePlayer, setHasNativePlayer] = useState(false)
+  const [audioCaps, setAudioCaps] = useState(null)
 
   // Load configurable API URL on Android TV
   useEffect(() => {
@@ -84,6 +105,7 @@ export default function App() {
 
     loadApiUrl()
     probeNativePlayer().then(setHasNativePlayer)
+    probeAudioCapabilities().then(setAudioCaps)
   }, [])
 
   const loadApiUrl = async () => {
@@ -133,9 +155,11 @@ export default function App() {
   const apiBase = isAndroidTV && apiUrl ? apiUrl : (import.meta.env.VITE_API_BASE || '')
   
   const adapter = useMemo(() => {
-    const buildProfile = isAndroidTV ? buildAndroidTvProfile : buildBrowserProfile
+    const buildProfile = isAndroidTV
+      ? () => buildAndroidTvProfile({ audioCaps })
+      : buildBrowserProfile
     return createHttpAdapter(apiBase, { buildProfile })
-  }, [apiBase, isAndroidTV])
+  }, [apiBase, isAndroidTV, audioCaps])
   const capabilities = useMemo(
     () => isAndroidTV
       ? { ...androidTvCapabilitiesBase, hasNativePlayer }

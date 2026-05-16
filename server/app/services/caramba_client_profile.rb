@@ -78,7 +78,12 @@ class CarambaClientProfile
 
     def apply_codec_constraints!(profile, codec_profiles)
       codec_profiles.each do |cp|
-        next unless cp["Type"].to_s.downcase == "video"
+        # `Video`, `VideoAudio` (audio in video container), and `Audio`
+        # all carry conditions our profile cares about. Mirrors upstream's
+        # CodecProfile.Type enum — the matchers below decide which fields
+        # to update per condition Property.
+        type = cp["Type"].to_s.downcase
+        next unless %w[video videoaudio audio].include?(type)
         codecs = split_csv(cp["Codec"]).map(&:downcase)
         Array(cp["Conditions"]).each do |cond|
           apply_condition!(profile, codecs, cond)
@@ -110,20 +115,41 @@ class CarambaClientProfile
           profile.max_video_fps = fps if profile.max_video_fps.nil? || fps < profile.max_video_fps
         end
       when "VideoRangeType"
+        # Upstream uses `EqualsAny` with a `|`-separated value list to
+        # declare HDR/HLG/Dolby Vision support — Jellyfin's androidtv,
+        # appletv, and tizen profiles all advertise like this. Without
+        # this branch, the AndroidTV / Chromecast profile had no path to
+        # turn `supports_hdr` ON, so every HDR10 source fell through to
+        # full_transcode + tonemap even though the hardware decoder can
+        # render HDR10 natively. Mirrors
+        # Jellyfin.Server.Implementations.Library.DeviceProfile parsing
+        # of ConditionType.EqualsAny on VideoRangeType.
         if op == "Equals" && value.casecmp?("SDR")
           profile.supports_hdr = false
           profile.supports_dovi = false
+        elsif op == "EqualsAny"
+          values = value.split("|").map(&:upcase)
+          profile.supports_hdr  = values.any? { |v| %w[HDR10 HLG DOVI].include?(v) }
+          profile.supports_dovi = values.include?("DOVI")
         end
       when "Height"
-        if op == "LessThanEqual"
-          h = value.to_i
-          profile.max_video_height = h if profile.max_video_height.nil? || h < profile.max_video_height
-        end
+        # Always override: the client's declared cap is authoritative.
+        # Previously this only tightened the cap, so the
+        # `modern_browser` default of 1080 silently blocked AndroidTV /
+        # Chromecast (4K-capable HW) from direct_play on 2160p sources
+        # even when the device profile declared Height <= 2160.
+        profile.max_video_height = value.to_i if op == "LessThanEqual"
       when "Width"
-        if op == "LessThanEqual"
-          w = value.to_i
-          profile.max_video_width = w if profile.max_video_width.nil? || w < profile.max_video_width
-        end
+        profile.max_video_width  = value.to_i if op == "LessThanEqual"
+      when "AudioChannels"
+        # Lets AndroidTV / Chromecast declare 8ch passthrough so 7.1
+        # TrueHD/DTS-HD MA sources direct-play instead of being audio-
+        # transcoded down to 6ch (which on these clients also drags
+        # video into a full_transcode for the muxer to stay coherent).
+        # ExoPlayer's AudioCapabilities auto-downmixes when the actual
+        # output sink is stereo, so declaring 8 doesn't break low-channel
+        # devices.
+        profile.max_audio_channels = value.to_i if op == "LessThanEqual"
       end
     end
 

@@ -436,7 +436,31 @@ export function buildDesktopProfile() {
  * container lists, plus per-codec HDR conditions matching what
  * ExoPlayer's renderers handle natively on Android TV hardware.
  */
-export function buildAndroidTvProfile() {
+// Default audio codec list — used when AudioCapabilities probe hasn't run
+// (or failed). Mirrors the historical static list. The probe-driven path
+// (passing `audioCaps`) overrides this with what the device's HDMI/decoder
+// pipeline ACTUALLY supports.
+const ANDROID_TV_DEFAULT_AUDIO_CODECS =
+  'aac,ac3,eac3,flac,mp3,opus,truehd,dts,dtshd,mlp,vorbis,pcm_s16le,pcm_s24le,pcm_s16be,pcm_s24be,pcm_f32le'
+
+function androidTvAudioCodecList(audioCaps) {
+  const probed = audioCaps?.supportedEncodings
+  if (!Array.isArray(probed) || probed.length === 0) return ANDROID_TV_DEFAULT_AUDIO_CODECS
+  // Deduplicate, lowercase, preserve a stable order roughly matching the
+  // historical list so server-side audio-codec preference ordering doesn't
+  // change for codecs that ARE supported.
+  const order = [
+    'aac', 'ac3', 'eac3', 'eac3_joc', 'flac', 'mp3', 'opus',
+    'truehd', 'dts', 'dtshd', 'mlp', 'vorbis',
+    'pcm_s16le', 'pcm_s24le', 'pcm_s16be', 'pcm_s24be', 'pcm_f32le',
+  ]
+  const supported = new Set(probed.map(c => String(c).toLowerCase()))
+  return order.filter(c => supported.has(c)).join(',') || ANDROID_TV_DEFAULT_AUDIO_CODECS
+}
+
+export function buildAndroidTvProfile({ audioCaps } = {}) {
+  const audioCodecs = androidTvAudioCodecList(audioCaps)
+  const maxChannels = Math.max(2, Number(audioCaps?.maxChannelCount) || 8)
   return {
     Name: 'caramba-android-tv',
     MaxStaticBitrate: 1_000_000_000,
@@ -449,12 +473,14 @@ export function buildAndroidTvProfile() {
         // h265 alias for hevc; vc1 widely supported on Android TV
         // chipsets; mpeg/mpeg1video for legacy content.
         VideoCodec: 'h264,hevc,h265,vp8,vp9,av1,mpeg4,mpeg2video,mpeg1video,mpeg,vc1',
-        // Lossless / passthrough audio (truehd, dts, dts-hd, mlp,
-        // dolby-atmos via E-AC3 JOC) plays via HDMI bitstream when the
-        // attached receiver supports it. AudioOffloadPreferences is
-        // handled by ExoPlayer when wrapped via a native plugin —
-        // declaring the codec here lets the server skip transcode.
-        AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,truehd,dts,dtshd,mlp,vorbis,pcm_s16le,pcm_s24le,pcm_s16be,pcm_s24be,pcm_f32le' },
+        // Audio codec list is built from Media3's AudioCapabilities probe
+        // (passed in from AppAndroid.jsx). On a Chromecast → TV without an
+        // AVR this drops DTS/TrueHD entirely; on a setup with an AVR that
+        // advertises DTS/TrueHD in EDID those stay in. The previous static
+        // list lied about DTS and the chip silently fell back to whatever
+        // backup audio the file had (e.g. AC3 commentary instead of DTS
+        // main).
+        AudioCodec: audioCodecs },
       { Container: 'mp4,m4v,mp3,flac,ogg,m4a,aac,wav',
         Type: 'Audio',
         AudioCodec: 'aac,ac3,eac3,flac,mp3,opus,vorbis' },
@@ -485,14 +511,23 @@ export function buildAndroidTvProfile() {
       { Format: 'dvb_subtitle', Method: 'Embed' },
     ],
     CodecProfiles: [
-      // HEVC level cap — Android TV hardware decoders typically max at
-      // Level 5.1 (4K60 10-bit HDR). Sources above that need transcode.
-      // 153 == HEVC level_idc 5.1.
+      // HEVC: level cap + HDR10/HLG support declared so the server doesn't
+      // force-transcode HDR sources for tonemapping. Chromecast with Google
+      // TV and modern AndroidTV chipsets decode HEVC Main 10 HDR10 / HLG in
+      // hardware — no need to remap. Mirrors the upstream Jellyfin
+      // androidtv DeviceProfile pattern (EqualsAny on VideoRangeType).
+      // Level 153 == HEVC level_idc 5.1 (4K60 10-bit HDR), above which the
+      // chipset can't decode in hardware.
+      // Height/Width 2160/3840 raise the default 1080p cap inherited from
+      // the engine's modern_browser baseline — required for 4K direct play.
       {
         Type: 'Video',
         Codec: 'hevc,h265',
         Conditions: [
           { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: '153', IsRequired: false },
+          { Property: 'VideoRangeType', Condition: 'EqualsAny', Value: 'SDR|HDR10|HLG', IsRequired: false },
+          { Property: 'Height', Condition: 'LessThanEqual', Value: '2160', IsRequired: false },
+          { Property: 'Width',  Condition: 'LessThanEqual', Value: '3840', IsRequired: false },
         ],
       },
       // H.264 level cap — Level 5.2 (51) covers 4K30 / 1080p120, beyond
@@ -502,6 +537,19 @@ export function buildAndroidTvProfile() {
         Codec: 'h264',
         Conditions: [
           { Property: 'VideoLevel', Condition: 'LessThanEqual', Value: '51', IsRequired: false },
+          { Property: 'Height', Condition: 'LessThanEqual', Value: '2160', IsRequired: false },
+          { Property: 'Width',  Condition: 'LessThanEqual', Value: '3840', IsRequired: false },
+        ],
+      },
+      // Max audio channels — set from Media3's AudioCapabilities probe so a
+      // Chromecast → stereo TV reports 2, a Chromecast → 5.1 AVR reports 6,
+      // and a 7.1 AVR reports 8. Without the probe we lied with 8 by
+      // default, which forced ExoPlayer's AudioSink to downmix in a path
+      // that occasionally tripped track-selection edge cases.
+      {
+        Type: 'VideoAudio',
+        Conditions: [
+          { Property: 'AudioChannels', Condition: 'LessThanEqual', Value: String(maxChannels), IsRequired: false },
         ],
       },
     ],

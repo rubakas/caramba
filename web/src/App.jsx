@@ -59,16 +59,37 @@ async function probeNativePlayer() {
   }
 }
 
+// Asks the native plugin which audio encodings the device's HDMI / AVR
+// pipeline can actually accept (via Media3 AudioCapabilities + EDID).
+// Without this, the static AudioCodec list claimed DTS / TrueHD support
+// and the server happily direct-played sources the chip then silently
+// refused — falling back to whatever backup audio the file had (e.g.
+// commentary instead of main 5.1 on The Iron Giant).
+async function probeAudioCapabilities() {
+  const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
+  if (!plugin?.getAudioCapabilities) return null
+  try {
+    const caps = await plugin.getAudioCapabilities()
+    console.log('[CarambaPlayer probe] audio caps =', JSON.stringify(caps))
+    return caps
+  } catch (err) {
+    console.warn('[CarambaPlayer probe] getAudioCapabilities threw:', err?.message || err)
+    return null
+  }
+}
+
 export default function App() {
   const [apiUrl, setApiUrl] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isNativeApp, setIsNativeApp] = useState(false)
   const [hasNativePlayer, setHasNativePlayer] = useState(false)
+  const [audioCaps, setAudioCaps] = useState(null)
 
   // Load configurable API URL
   useEffect(() => {
     checkPlatformAndLoadUrl()
     probeNativePlayer().then(setHasNativePlayer)
+    probeAudioCapabilities().then(setAudioCaps)
   }, [])
 
   // Add tv-mode class to body when running on Android TV
@@ -158,15 +179,17 @@ export default function App() {
   // tonemap-transcoding them — those codecs hit ExoPlayer's hardware
   // decoder directly via the native PlayerActivity.
   const adapter = useMemo(() => {
-    console.log('Creating HTTP adapter with base URL:', apiUrl, 'nativePlayer:', hasNativePlayer)
-    const buildProfile = hasNativePlayer ? buildAndroidTvProfile : buildBrowserProfile
+    console.log('Creating HTTP adapter with base URL:', apiUrl, 'nativePlayer:', hasNativePlayer, 'audioCaps:', !!audioCaps)
+    const buildProfile = hasNativePlayer
+      ? () => buildAndroidTvProfile({ audioCaps })
+      : buildBrowserProfile
     const httpAdapter = createHttpAdapter(apiUrl || '', { buildProfile })
     // Expose adapter as window.api for components that access it directly (e.g., UpdatePrompt)
     if (isNativeApp) {
       window.api = httpAdapter
     }
     return httpAdapter
-  }, [apiUrl, isNativeApp, hasNativePlayer])
+  }, [apiUrl, isNativeApp, hasNativePlayer, audioCaps])
 
   if (isLoading) {
     // For native apps, show minimal loading state (no text to avoid double loading)

@@ -33,3 +33,15 @@ describe('http adapter test-mode header', () => {
     expect(headers['X-Test-Run']).toBe('1')
   })
 })
+
+describe('http adapter shape', () => {
+  // Regression: NativeVideoPlayer used `api.baseUrl?.()` (wrong name AND
+  // treated it as a function), so the Android TV CarambaPlayer Activity
+  // received `apiBase: ''` and never started playback. Lock the name
+  // and shape so any future rename trips the test instead of the user.
+  test('exposes server URL as the string property `apiBase`', () => {
+    const adapter = createHttpAdapter('http://10.0.0.200:3001/')
+    expect(adapter.apiBase).toBe('http://10.0.0.200:3001')
+    expect(typeof adapter.apiBase).toBe('string')
+  })
+})

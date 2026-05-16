@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext'
 import { formatTime } from '../utils'
 import { useGlassConfig } from '../config/useGlassConfig'
 import { useDebugPlayback } from '../hooks/useDebugPlayback'
+import { subscribeCapacitorListener } from '../lib/capacitor-listener'
 
 // Human-readable language names for common ISO 639 codes
 const LANG_NAMES = {
@@ -138,7 +139,7 @@ function DevPlaybackInfo({ strategy, video, bitrate, audioStream }) {
 // (Android TV native build) we skip the Player JS runtime entirely and let
 // the plugin's full-screen ExoPlayer Activity render playback.
 function NativeVideoPlayer() {
-  const { playerState, launching, closePlayer, playNextEpisode, seekPlayback, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
+  const { playerState, launching, closePlayer, playNextEpisode, seekPlayback, requestServerSeek, switchAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance } = usePlayer()
   const api = useApi()
   const lastRef = useRef({ open: false, hlsUrl: null, streamUrl: null, subtitleUrl: null, seekBase: 0, activeAudioIndex: null, activeSubtitleIndex: null })
   const presentedRef = useRef(false)
@@ -149,11 +150,22 @@ function NativeVideoPlayer() {
     const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
     if (!plugin) return
 
-    const apiBase = api.baseUrl?.() || ''
+    const apiBase = api.apiBase || ''
 
     if (playerState.open && !lastRef.current.open) {
       if (launching && !presentedRef.current) {
-        plugin.present?.({ apiBase, episodeId: playerState.episodeId || 0, movieId: playerState.movieId || 0 }).catch(() => {})
+        // `pending: true` is the contract with PlayerActivity.loadFromPayload:
+        // it short-circuits the URL-building path and pins the spinner until
+        // the matching updateStream() arrives with the real hlsUrl. Without
+        // it the Activity treats the stub as a real payload, logs
+        // "loadFromPayload: no URL", and leaves ExoPlayer wedged in a state
+        // the subsequent updateStream can't always recover from.
+        plugin.present?.({
+          pending: true,
+          apiBase,
+          episodeId: playerState.episodeId || 0,
+          movieId: playerState.movieId || 0,
+        }).catch(() => {})
         presentedRef.current = true
       }
       lastRef.current = { open: true }
@@ -202,21 +214,58 @@ function NativeVideoPlayer() {
     const plugin = window?.Capacitor?.Plugins?.CarambaPlayer
     if (!plugin) return
 
-    const onClosed = plugin.addListener?.('playerClosed', () => {
+    // Event names MUST match what PlayerActivity emits — `dismissed` when the
+    // user backs out (PlayerActivity.java:265), `ended` when playback reaches
+    // EOF (PlayerActivity.java:1231). Mismatched names mean closePlayer never
+    // fires, JS state stays "open", and the next Play tap calls updateStream
+    // against a dead Activity → no player ever opens again until app restart.
+    const unsubClosed = subscribeCapacitorListener(plugin, 'dismissed', (payload) => {
       const cur = stateRef.current
-      closePlayer(cur.currentTime || 0, cur.duration || 0)
+      const position = payload?.position ?? cur.currentTime ?? 0
+      const duration = payload?.duration ?? cur.duration ?? 0
+      closePlayer(position, duration)
     })
-    const onEnded = plugin.addListener?.('playbackEnded', () => {
+    const unsubEnded = subscribeCapacitorListener(plugin, 'ended', (payload) => {
       const cur = stateRef.current
       if (cur.type === 'episode') playNextEpisode()
-      else closePlayer(cur.currentTime || 0, cur.duration || 0)
+      else {
+        const position = payload?.position ?? cur.currentTime ?? 0
+        const duration = payload?.duration ?? cur.duration ?? 0
+        closePlayer(position, duration)
+      }
+    })
+
+    // PlayerActivity emits these for HLS-transcode sources only. For
+    // direct_play it handles seek/track-switch locally because the source
+    // is the whole file. For transcode each session is signed against a
+    // specific -ss start + audio/subtitle index, so JS must round-trip to
+    // the server to get a fresh stream URL; the resulting state update
+    // flows back through this same effect as plugin.updateStream().
+    const unsubSeek = subscribeCapacitorListener(plugin, 'requestSeek', (payload) => {
+      const absoluteTime = Number(payload?.absoluteTime) || 0
+      requestServerSeek(absoluteTime)
+    })
+    const unsubAudio = subscribeCapacitorListener(plugin, 'requestAudioSwitch', (payload) => {
+      const idx = Number(payload?.audioStreamIndex)
+      if (!Number.isFinite(idx) || idx < 0) return
+      switchAudio(idx, Number(payload?.currentVideoTime) || 0)
+    })
+    const unsubSub = subscribeCapacitorListener(plugin, 'requestSubtitleSwitch', (payload) => {
+      const raw = payload?.subtitleStreamIndex
+      const idx = raw == null || raw === -1 ? null : Number(raw)
+      const time = Number(payload?.currentVideoTime) || 0
+      if (payload?.isBitmap) switchBitmapSubtitle(idx, time)
+      else switchSubtitle(idx, time)
     })
 
     return () => {
-      onClosed?.then(h => h.remove?.())
-      onEnded?.then(h => h.remove?.())
+      unsubClosed()
+      unsubEnded()
+      unsubSeek()
+      unsubAudio()
+      unsubSub()
     }
-  }, [closePlayer, playNextEpisode])
+  }, [closePlayer, playNextEpisode, requestServerSeek, switchAudio, switchSubtitle, switchBitmapSubtitle])
 
   return null
 }

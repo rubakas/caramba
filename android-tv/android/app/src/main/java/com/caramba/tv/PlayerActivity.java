@@ -170,6 +170,13 @@ public class PlayerActivity extends Activity {
      *  ffmpeg session to round-trip through. */
     private Tracks lastTracks;
 
+    /** Snapshot of TrackSelectionParameters before the last local audio
+     *  override — used to roll back when the override triggers a renderer
+     *  init failure (DTS/TrueHD on chips that only bitstream-passthrough
+     *  these formats, never decode). */
+    private TrackSelectionParameters priorAudioParams;
+    private String lastAudioOverrideMime;
+
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -416,6 +423,31 @@ public class PlayerActivity extends Activity {
             @Override
             public void onPlayerError(@NonNull PlaybackException error) {
                 Log.e(TAG, "ExoPlayer error", error);
+                // Audio decoder init failure right after a local audio
+                // override = the user picked a track whose codec has no
+                // MediaCodec on this chipset. The track might have been
+                // playing fine via bitstream passthrough beforehand; the
+                // override forced a renderer re-init that bypassed the
+                // passthrough probe. Roll back to the prior selection and
+                // recover instead of killing the session.
+                boolean isAudioDecoderInit =
+                        error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED &&
+                        lastAudioOverrideMime != null &&
+                        lastAudioOverrideMime.startsWith("audio/");
+                if (isAudioDecoderInit && priorAudioParams != null && player != null) {
+                    Log.w(TAG, "audio decoder init failed for " + lastAudioOverrideMime
+                            + "; rolling back to previous track selection");
+                    player.setTrackSelectionParameters(priorAudioParams);
+                    priorAudioParams = null;
+                    lastAudioOverrideMime = null;
+                    try {
+                        player.prepare();
+                        player.play();
+                    } catch (Exception e) {
+                        Log.e(TAG, "rollback prepare/play failed", e);
+                    }
+                    return;
+                }
                 JSObject ev = new JSObject();
                 ev.put("sessionId", sessionId);
                 ev.put("code", error.errorCode);
@@ -613,12 +645,44 @@ public class PlayerActivity extends Activity {
             player.replaceMediaItem(0, item);
             // Position preserved; if the player was paused, keep it paused.
         } else {
+            // Bias the track selector toward the active audio's mime BEFORE
+            // prepare(). For direct_play this matters: the source has
+            // multiple audio tracks and ExoPlayer's default selection runs
+            // during prepare. If we don't hint, post-prepare overrides may
+            // not re-probe AudioCapabilities for passthrough (DTS/TrueHD
+            // on Chromecast die with NO_UNSUPPORTED_TYPE) — the override
+            // path bypasses the AudioSink check the renderer normally does
+            // on first init. Setting the preferred mime here ensures
+            // AudioSink probes the right format from the start.
+            String activeAudioMime = activeAudioMime(payload);
+            TrackSelectionParameters.Builder pre = player.getTrackSelectionParameters().buildUpon();
+            if (activeAudioMime != null) {
+                pre.setPreferredAudioMimeTypes(activeAudioMime);
+                Log.i(TAG, "loadFromPayload: preferredAudioMime=" + activeAudioMime);
+            }
+            player.setTrackSelectionParameters(pre.build());
+
             DefaultDataSource.Factory dsf = new DefaultDataSource.Factory(this);
             MediaSource ms = isDirectPlay
                     ? new ProgressiveMediaSource.Factory(dsf).createMediaSource(item)
                     : new HlsMediaSource.Factory(dsf).setAllowChunklessPreparation(true).createMediaSource(item);
 
-            player.setMediaSource(ms, /* resetPosition */ true);
+            // For HLS-transcoded sources the playlist is full-length (server
+            // does NOT bake `-ss start_time` into the transcode token —
+            // playback_controller.rb intentionally keeps the playlist
+            // timeline aligned with source so per-segment seeks work). We
+            // must seek the player to the absolute startTime ourselves; the
+            // direct_play branch above uses ClippingConfiguration.startMs
+            // instead. Without this seek, every server-roundtrip (initial
+            // resume + every seek thereafter) restarted from playlist 0
+            // and the position UI showed 0:00.
+            double startTime = payload.optDouble("startTime", 0d);
+            long startMs = startTime > 0d ? (long) (startTime * 1000d) : 0L;
+            if (!isDirectPlay && startMs > 0L) {
+                player.setMediaSource(ms, /* startPositionMs */ startMs);
+            } else {
+                player.setMediaSource(ms, /* resetPosition */ true);
+            }
             player.prepare();
             player.play();
         }
@@ -644,6 +708,43 @@ public class PlayerActivity extends Activity {
     private static boolean equalsNullable(String a, String b) {
         if (a == null) return b == null;
         return a.equals(b);
+    }
+
+    /** Look up the active audio stream's codec in the payload and map it
+     *  to a Media3 sample MIME type. Used to bias the track selector before
+     *  prepare() so AudioSink probes passthrough for the right format
+     *  (DTS/TrueHD/etc.) the user actually picked. */
+    private String activeAudioMime(JSObject payload) {
+        if (payload.isNull("activeAudioIndex")) return null;
+        int idx = payload.optInt("activeAudioIndex", -1);
+        if (idx < 0) return null;
+        JSONArray streams = optArray(payload, "audioStreams");
+        if (streams == null) return null;
+        for (int i = 0; i < streams.length(); i++) {
+            try {
+                JSONObject s = streams.getJSONObject(i);
+                if (s.optInt("index", -2) != idx) continue;
+                String codec = s.optString("codec", "").toLowerCase();
+                switch (codec) {
+                    case "dts":
+                    case "dca":           return MimeTypes.AUDIO_DTS;
+                    case "dtshd":
+                    case "dts-hd":        return MimeTypes.AUDIO_DTS_HD;
+                    case "ac3":           return MimeTypes.AUDIO_AC3;
+                    case "eac3":
+                    case "eac3-joc":      return MimeTypes.AUDIO_E_AC3;
+                    case "truehd":
+                    case "mlp":           return MimeTypes.AUDIO_TRUEHD;
+                    case "aac":           return MimeTypes.AUDIO_AAC;
+                    case "mp3":           return MimeTypes.AUDIO_MPEG;
+                    case "flac":          return MimeTypes.AUDIO_FLAC;
+                    case "opus":          return MimeTypes.AUDIO_OPUS;
+                    case "vorbis":        return MimeTypes.AUDIO_VORBIS;
+                    default:              return null;
+                }
+            } catch (JSONException ignored) {}
+        }
+        return null;
     }
 
     /** Look up the language of the active subtitle in the payload. */
@@ -826,7 +927,18 @@ public class PlayerActivity extends Activity {
     }
 
     private void populateAudioListFromTracks() {
+        // Map ExoPlayer's audio tracks to the source audioStreams[].index from
+        // the payload so onAudioPicked can route the switch through the
+        // server. The local TrackSelectionOverride path was lethal for
+        // passthrough-only formats (DTS / TrueHD on Chromecast without a
+        // software decoder): selecting them post-prepare bypassed the
+        // AudioSink passthrough probe and ExoPlayer died with
+        // NO_UNSUPPORTED_TYPE. Server roundtrip rebuilds the media source,
+        // and loadFromPayload's setPreferredAudioMimeTypes(...) hint runs
+        // before prepare() so AudioCapabilities picks the right route.
+        JSONArray streams = lastPayload != null ? optArray(lastPayload, "audioStreams") : null;
         int rendered = 0;
+        int sourceIdx = 0;
         for (Tracks.Group group : lastTracks.getGroups()) {
             if (group.getType() != C.TRACK_TYPE_AUDIO) continue;
             TrackGroup tg = group.getMediaTrackGroup();
@@ -834,15 +946,29 @@ public class PlayerActivity extends Activity {
                 androidx.media3.common.Format f = tg.getFormat(t);
                 String label = formatAudioLabel(f);
                 boolean isActive = group.isTrackSelected(t);
-                final TrackGroup finalGroup = tg;
-                final int finalTrack = t;
-                View row = buildTrackRow(isActive ? "✓" : "", label,
-                        () -> applyLocalAudioOverride(finalGroup, finalTrack));
+                int sourceAudioIndex = -1;
+                if (streams != null && sourceIdx < streams.length()) {
+                    JSONObject s = streams.optJSONObject(sourceIdx);
+                    if (s != null) sourceAudioIndex = s.optInt("index", -1);
+                }
+                final int finalAudioIndex = sourceAudioIndex;
+                final boolean finalActive = isActive;
+                View row = buildTrackRow(isActive ? "✓" : "", label, () -> {
+                    // No-op when the user re-taps the already-active track —
+                    // avoids a pointless server roundtrip + re-prepare.
+                    if (finalActive) { setTvMode(TvMode.SEEK); return; }
+                    if (finalAudioIndex < 0) {
+                        Log.w(TAG, "populateAudioListFromTracks: could not map ExoPlayer track to source audio index");
+                        return;
+                    }
+                    onAudioPicked(finalAudioIndex);
+                });
                 audioList.addView(row);
                 rendered++;
+                sourceIdx++;
             }
         }
-        Log.i(TAG, "populateAudioListFromTracks: rendered " + rendered + " audio tracks from ExoPlayer");
+        Log.i(TAG, "populateAudioListFromTracks: rendered " + rendered + " audio tracks from ExoPlayer (server-routed)");
     }
 
     private static String formatAudioLabel(androidx.media3.common.Format f) {
@@ -864,13 +990,21 @@ public class PlayerActivity extends Activity {
         return lbl.toString();
     }
 
-    private void applyLocalAudioOverride(TrackGroup group, int trackIndex) {
+    private void applyLocalAudioOverride(TrackGroup group, int trackIndex, String mime) {
         if (player == null) return;
-        TrackSelectionParameters.Builder b = player.getTrackSelectionParameters().buildUpon()
+        // Save the prior override + selected track so onPlayerError can
+        // restore them if the renderer init blows up (typical when
+        // switching TO a track whose codec has no software decoder on this
+        // chipset, e.g. DTS on Chromecast — works initially via bitstream
+        // passthrough, but a TrackSelectionOverride re-init falls back to
+        // MediaCodec and fails with NO_UNSUPPORTED_TYPE).
+        priorAudioParams = player.getTrackSelectionParameters();
+        lastAudioOverrideMime = mime;
+        TrackSelectionParameters.Builder b = priorAudioParams.buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                 .setOverrideForType(new TrackSelectionOverride(group, trackIndex));
         player.setTrackSelectionParameters(b.build());
-        Log.i(TAG, "applyLocalAudioOverride: switched to track " + trackIndex);
+        Log.i(TAG, "applyLocalAudioOverride: switched to track " + trackIndex + " (mime=" + mime + ")");
         setTvMode(TvMode.SEEK);
         // The Tracks listener will repopulate the picker with the new active.
     }

@@ -78,4 +78,124 @@ class CarambaClientProfileTest < ActiveSupport::TestCase
     )
     assert_equal :direct_stream, decision.mode
   end
+
+  # Regression: every AndroidTV HDR10 title (Aladdin / Ratatouille /
+  # Devil Wears Prada) was full-transcoding because the translator had
+  # no path to flip `supports_hdr` to true. The profile defaults
+  # supports_hdr=false; only an upstream `VideoRangeType EqualsAny
+  # SDR|HDR10|HLG` condition can turn it on.
+  test "VideoRangeType EqualsAny SDR|HDR10|HLG declares HDR support" do
+    profile = CarambaClientProfile.build({
+      "DirectPlayProfiles" => [],
+      "CodecProfiles" => [
+        {
+          "Type" => "Video",
+          "Codec" => "hevc,h265",
+          "Conditions" => [
+            { "Property" => "VideoRangeType", "Condition" => "EqualsAny",
+              "Value" => "SDR|HDR10|HLG" }
+          ]
+        }
+      ]
+    })
+    assert profile.supports_hdr
+    refute profile.supports_dovi
+  end
+
+  test "VideoRangeType EqualsAny with DOVI also flips supports_dovi" do
+    profile = CarambaClientProfile.build({
+      "DirectPlayProfiles" => [],
+      "CodecProfiles" => [
+        {
+          "Type" => "Video",
+          "Codec" => "hevc,h265",
+          "Conditions" => [
+            { "Property" => "VideoRangeType", "Condition" => "EqualsAny",
+              "Value" => "SDR|HDR10|HLG|DOVI" }
+          ]
+        }
+      ]
+    })
+    assert profile.supports_hdr
+    assert profile.supports_dovi
+  end
+
+  test "VideoAudio AudioChannels <= 8 raises the 6-channel default" do
+    profile = CarambaClientProfile.build({
+      "DirectPlayProfiles" => [],
+      "CodecProfiles" => [
+        {
+          "Type" => "VideoAudio",
+          "Conditions" => [
+            { "Property" => "AudioChannels", "Condition" => "LessThanEqual", "Value" => "8" }
+          ]
+        }
+      ]
+    })
+    assert_equal 8, profile.max_audio_channels
+  end
+
+  test "VideoRangeType Equals SDR still disables HDR (legacy single-value path)" do
+    profile = CarambaClientProfile.build({
+      "DirectPlayProfiles" => [],
+      "CodecProfiles" => [
+        {
+          "Type" => "Video",
+          "Codec" => "hevc,h265",
+          "Conditions" => [
+            { "Property" => "VideoRangeType", "Condition" => "Equals", "Value" => "SDR" }
+          ]
+        }
+      ]
+    })
+    refute profile.supports_hdr
+    refute profile.supports_dovi
+  end
+
+  # The end-to-end win this enables: HDR10 HEVC source against the
+  # AndroidTV profile (HEVC level 5.1 + EqualsAny SDR|HDR10|HLG)
+  # should resolve to direct_play instead of full_transcode.
+  test "HDR10 HEVC source + AndroidTV-style profile resolves to :direct_play" do
+    device_profile = {
+      "DirectPlayProfiles" => [
+        { "Container" => "mkv,mp4", "Type" => "Video",
+          "VideoCodec" => "h264,hevc,h265", "AudioCodec" => "aac,ac3,eac3,truehd" }
+      ],
+      "TranscodingProfiles" => [],
+      "SubtitleProfiles" => [],
+      "CodecProfiles" => [
+        {
+          "Type" => "Video", "Codec" => "hevc,h265",
+          "Conditions" => [
+            { "Property" => "VideoLevel", "Condition" => "LessThanEqual", "Value" => "153" },
+            { "Property" => "VideoRangeType", "Condition" => "EqualsAny",
+              "Value" => "SDR|HDR10|HLG" },
+            { "Property" => "Height", "Condition" => "LessThanEqual", "Value" => "2160" },
+            { "Property" => "Width",  "Condition" => "LessThanEqual", "Value" => "3840" }
+          ]
+        }
+      ],
+      "MaxStaticBitrate" => 1_000_000_000
+    }
+    profile = CarambaClientProfile.build(device_profile)
+
+    video = Jellyfin::Probing::MediaStream.new(
+      index: 0, type: :video, codec: "hevc", profile: "Main 10",
+      width: 3840, height: 2160, frame_rate: 23.976,
+      pixel_format: "yuv420p10le", bit_depth: 10,
+      sample_aspect_ratio: "1:1", is_interlaced: false,
+      video_range_type: "HDR10", level: 153, bit_rate: 20_000_000
+    )
+    audio = Jellyfin::Probing::MediaStream.new(
+      index: 1, type: :audio, codec: "ac3", channels: 6
+    )
+    media_source = Jellyfin::Probing::MediaSourceInfo.new(
+      path: "/hdr.mkv", container: "mkv", streams: [ video, audio ]
+    )
+
+    decision = Jellyfin::Playback::Decision.call(
+      media_source: media_source, profile: profile
+    )
+    assert_equal :direct_play, decision.mode
+  end
 end

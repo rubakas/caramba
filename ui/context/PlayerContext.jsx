@@ -340,6 +340,27 @@ export function PlayerProvider({ children }) {
     return null
   }, [])
 
+  // Transcoded HLS seek: the server needs to re-issue ffmpeg from the new
+  // offset because each session is tied to a `-ss` start. Re-runs
+  // /api/playback/start with current track prefs and the new absolute time,
+  // and the resulting `streamUrl`/`hlsUrl` update propagates into the
+  // native player via VideoPlayer's effect → plugin.updateStream(). For
+  // direct_play the Activity seeks locally and never calls this path.
+  const requestServerSeek = useCallback(async (absoluteTime) => {
+    const cur = stateRef.current
+    const audioStream = cur.audioStreams.find(s => (s.id ?? s.index) === cur.activeAudioIndex)
+    const subtitleStream = cur.activeSubtitleIndex != null
+      ? cur.subtitleStreams.find(s => (s.id ?? s.index) === cur.activeSubtitleIndex)
+      : null
+    return relaunchWithPrefs({
+      audioLanguage: audioStream?.language,
+      audioCodec: audioStream?.codec,
+      audioChannels: audioStream?.channels,
+      subtitleLanguage: subtitleStream?.language,
+      subtitleOff: cur.activeSubtitleIndex == null,
+    }, absoluteTime)
+  }, [relaunchWithPrefs])
+
   const setSubtitleAppearance = useCallback(({ subtitleSize, subtitleStyle }) => {
     setPlayerState(prev => {
       const next = { ...prev }
@@ -352,8 +373,8 @@ export function PlayerProvider({ children }) {
 
   const contextValue = useMemo(() => ({
     playerState, launching, openPlayer, closePlayer, playNextEpisode,
-    seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance,
-  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
+    seekPlayback, requestServerSeek, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance,
+  }), [playerState, launching, openPlayer, closePlayer, playNextEpisode, seekPlayback, requestServerSeek, switchAudio, applyDirectPlayAudio, switchSubtitle, switchBitmapSubtitle, setSubtitleAppearance])
 
   return (
     <PlayerContext.Provider value={contextValue}>
