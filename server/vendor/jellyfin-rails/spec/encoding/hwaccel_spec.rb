@@ -284,24 +284,38 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       end
     end
 
-    # Regression: h264_qsv ignores `-crf` (rate_control_args emits that
-    # for libx264 compatibility), defaulting to CQP ~25-26 which produces
-    # visibly blocky output even on high-bitrate sources. encoder_args
-    # MUST emit `-global_quality` (ICQ mode) so QSV picks a quality
-    # target equivalent to the SW `-crf` value. User-visible symptom:
-    # "Aladdin plays but the picture is heavily pixelated".
-    it 'emits -global_quality so h264_qsv runs in ICQ (CRF-equivalent) mode' do
+    # Regression: ICQ mode (`-global_quality N`) on h264_qsv produces
+    # visibly worse output than the source on complex scenes — the
+    # quality target lets the encoder drop bitrate aggressively. The
+    # pre-jellyfin-rails transcoder targeted SOURCE bitrate (so a
+    # 12 Mbps BluRay rip stays at ~12 Mbps after transcode = looks
+    # original), and that's also what upstream Jellyfin does for QSV
+    # (EncodingHelper.cs:1644). User-visible symptom: "old Caramba on
+    # a 10-year-old Mac looks better than new Caramba on the NAS".
+    it 'emits bitrate-targeted VBR args (-b:v / -maxrate / -bufsize)' do
       job = make_job
+      job.output_video_bitrate = 10_000_000
       args = described_class.encoder_args(job)
-      expect(args.each_cons(2).to_a).to include([ '-global_quality', '23' ])
+      pairs = args.each_cons(2).to_a
+      expect(pairs).to include([ '-b:v', '10000000' ])
+      expect(pairs).to include([ '-maxrate', '10000001' ])
+      expect(pairs).to include([ '-rc_init_occupancy', /\A\d+\z/ ].map(&:to_s).then { |p| pairs.find { |x| x[0] == p[0] } })
+      expect(args).to include('-bufsize')
     end
 
-    it 'uses the configured h265_crf for hevc_qsv targets' do
+    it 'omits -global_quality (mutually exclusive with -b:v VBR)' do
       job = make_job
-      job.output_video_codec = 'hevc'
-      job.options.h265_crf = 28
       args = described_class.encoder_args(job)
-      expect(args.each_cons(2).to_a).to include([ '-global_quality', '28' ])
+      expect(args).not_to include('-global_quality')
+    end
+
+    it 'scales target bitrate down for HEVC output (60% of H.264)' do
+      job = make_job
+      job.output_video_bitrate = 10_000_000
+      job.output_video_codec = 'hevc'
+      args = described_class.encoder_args(job)
+      # Bitrate.video_bitrate_for applies the 0.6 codec scale for hevc.
+      expect(args.each_cons(2).to_a).to include([ '-b:v', '6000000' ])
     end
 
     # Regression: `-preset medium` produced 30-60s first-segment latency
@@ -318,14 +332,17 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(args.each_cons(2).to_a).to include([ '-preset', 'veryfast' ])
     end
 
-    # Regression: `-low_power 1` switches QSV from the GPGPU encoder
-    # path to Intel's VDEnc fixed-function block. Faster init AND lower
-    # CPU usage on the host (frees cycles for the SW filter chain when
-    # PGS burn-in forces SW fallback). Upstream cs:2092-2107.
-    it 'enables -low_power 1 for Intel VDEnc' do
+    # Regression (negative): `-low_power 1` switches QSV to Intel's
+    # VDEnc fixed-function encoder. It's FASTER but visibly LOWER quality
+    # at the same -global_quality target, AND it runs on a separate
+    # engine that standard GPU monitors don't surface (so the iGPU looks
+    # idle when it isn't). Upstream defaults it OFF behind
+    # EnableIntelLowPowerH264HwEncoder. We do the same — until the option
+    # is wired up explicitly, low_power stays absent.
+    it 'does NOT enable -low_power by default (preserves quality)' do
       job = make_job
       args = described_class.encoder_args(job)
-      expect(args.each_cons(2).to_a).to include([ '-low_power', '1' ])
+      expect(args).not_to include('-low_power')
     end
 
     # Regression: `-mbbrc 1` (MacroBlock-level bitrate control) is the

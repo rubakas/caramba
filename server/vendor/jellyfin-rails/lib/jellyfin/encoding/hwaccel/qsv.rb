@@ -1,5 +1,6 @@
 require 'jellyfin/encoding/hwaccel/base'
 require 'jellyfin/encoding/hwaccel/decoder'
+require 'jellyfin/encoding/bitrate'
 
 module Jellyfin
   module Encoding
@@ -68,53 +69,79 @@ module Jellyfin
         end
 
         # Encoder args for h264_qsv / hevc_qsv. Mirrors upstream Jellyfin's
-        # GetVideoQualityParam (EncodingHelper.cs:2037-2117) and
-        # GetVideoBitrateParam (cs:1609-1644) for the QSV branch.
+        # default QSV path (EncodingHelper.cs:1761 + cs:1609-1644).
         #
-        # Key choices and why:
+        # **Rate-control mode: bitrate-targeted VBR, not ICQ.** This is
+        # the most important quality knob. ICQ (`-global_quality`) is
+        # quality-targeted — on complex scenes it drops bitrate
+        # aggressively, producing visibly worse output than the source.
+        # VBR with `-b:v` = source bitrate produces output that's
+        # perceptually indistinguishable from the original. The old
+        # pre-port h264_videotoolbox transcoder on Mac did exactly this,
+        # which is why "old Caramba on a 10-year-old Mac" looks better
+        # than ICQ-mode QSV. Upstream Jellyfin's GetVideoBitrateParam
+        # (cs:1609-1644) takes the same approach for QSV.
         #
-        # `-preset veryfast` — upstream's default for QSV (cs:1761). With
-        # `medium` the encoder pipeline takes ~30-60 s to produce its
-        # first segment on a 4K source, manifesting as a long blank-screen
-        # delay at play AND on every seek (HLS restarts ffmpeg per seek).
-        # `veryfast` drops first-segment latency to ~2-3 s on the same
-        # source — the hardware encoder is the bottleneck, not the
-        # software preset, so faster preset = lower CPU + lower latency.
+        # The target bitrate comes from `Bitrate.video_bitrate_for(job)`
+        # — which `TranscodeManager#resolve_video_bitrate` clamps to the
+        # source's actual bitrate. So a 12 Mbps BluRay rip stays at
+        # 12 Mbps; a 2 Mbps webrip stays at 2 Mbps; client max_bitrate
+        # caps the top end.
         #
-        # `-look_ahead 0` — disables encoder-side rate-control look-ahead.
-        # Cuts the encoder's internal queue depth, which directly trims
-        # the startup latency. We don't need rate-control look-ahead
-        # because we're in ICQ (constant-quality) mode.
+        # `-preset veryfast` — upstream's QSV default (cs:1761). On the
+        # HW encoder, preset is a speed/CPU trade-off; visual quality
+        # is dominated by the rate-control settings above. Slower
+        # presets (`medium`/`slow`) take 30-60 s to flush the first
+        # HLS segment on a 4K source; `veryfast` brings that to
+        # ~2-3 s — the right call for HLS where first-segment latency
+        # is the user-perceived "time to play".
         #
-        # `-low_power 1` — turns on Intel's VDEnc fixed-function encoder.
-        # Lower CPU usage AND faster init than the GPGPU encoder path
-        # (upstream cs:2092-2107 / EnableIntelLowPowerH264HwEncoder).
-        # Available on all Gen11+ Intel iGPUs (your i3-1315U is Gen13).
+        # `-mbbrc 1` — MacroBlock-level bitrate control (upstream
+        # cs:1621). Inside the target bitrate envelope, allocates more
+        # bits to busy regions of each frame. Visibly cleaner edges
+        # and motion at the same average bitrate.
         #
-        # `-mbbrc 1` — MacroBlock-level bitrate control. Same average
-        # bitrate but distributes bits to busy regions, giving a
-        # visibly cleaner image at the same numeric quality target.
-        # Upstream cs:1621.
+        # `-rc_init_occupancy` and `-bufsize` follow upstream's
+        # heuristic: `init_occupancy = bitrate * factor` (factor=2 for
+        # Level 5+ profiles, 1 otherwise), `bufsize = 2 * init_occupancy`.
+        # Factor 2 gives headroom for I-frame spikes; 1 keeps strict CPB
+        # for lower-level decoders.
         #
-        # `-async_depth 4` — encoder's async queue. 4 is upstream's
-        # balance between throughput and latency (deeper queues encode
-        # faster but stall the first-segment flush).
+        # NOT emitted on purpose (vs. earlier draft):
         #
-        # `-global_quality N` — Intel Constant Quality (ICQ) mode. This
-        # is QSV's equivalent of libx264's `-crf`. Without it, h264_qsv
-        # silently falls back to default CQP ~25-26 and produces visibly
-        # blocky output. The numeric value mirrors what the SW path uses
-        # for the same target codec, so quality stays consistent when
-        # the user flips CARAMBA_HWACCEL between qsv and none.
+        # `-global_quality` — replaced by `-b:v` (see above). Mixing
+        # both confuses h264_qsv's rate-control selection.
+        #
+        # `-low_power 1` — upstream gates this behind
+        # EnableIntelLowPowerH264HwEncoder (default OFF). VDEnc is
+        # faster but visibly LOWER quality at the same bitrate, AND
+        # runs on an engine standard GPU monitors don't surface ("13%
+        # GPU but picture is trash" was the symptom).
+        #
+        # `-look_ahead 0`, `-async_depth N` — ffmpeg already picks
+        # sane defaults; no need to override.
         def encoder_args(job)
-          [
-            '-preset',         'veryfast',
-            '-look_ahead',     '0',
-            '-low_power',      '1',
-            '-mbbrc',          '1',
-            '-async_depth',    '4',
-            '-global_quality', quality_for(job).to_s
-          ]
+          bitrate = Bitrate.video_bitrate_for(job)
+          factor  = high_level_profile?(job) ? 2 : 1
+          init_occ = bitrate * factor
+          bufsize  = init_occ * 2
+
+          args = [ '-preset', 'veryfast', '-mbbrc', '1' ]
+          args.concat([
+            '-b:v',                bitrate.to_s,
+            '-maxrate',            (bitrate + 1).to_s,
+            '-rc_init_occupancy',  init_occ.to_s,
+            '-bufsize',            bufsize.to_s
+          ])
+          args
+        end
+
+        # Larger CPB window for high-Level profiles (5.0+). Mirrors
+        # upstream's heuristic at cs:1626-1634.
+        def high_level_profile?(job)
+          level = job.options.respond_to?(:video_level) ? job.options.video_level : nil
+          return true if level.nil?
+          level.to_f >= 5.0
         end
 
         # CRF-equivalent value for the configured target codec. Reads the
