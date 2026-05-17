@@ -339,6 +339,43 @@ RSpec.describe Jellyfin::Encoding::Hwaccel do
       expect(args.each_cons(2).to_a).to include([ '-b:v', '6000000' ])
     end
 
+    # Regression: a 4K HEVC HDR source rip at 60 Mbps used to flow
+    # straight through into a 1080p H.264 transcode targeted at 60 Mbps —
+    # visually indistinguishable from 20 Mbps at 1080p but producing 4×
+    # larger HLS segments, slow first-segment latency, and 97 MB "first
+    # segment after seek" responses. Mirrors the pre-jellyfin-rails
+    # `video_bitrate_cap_bps` policy: target output width 1080p → 20 Mbps,
+    # 4K → 40 Mbps, 720p → 12 Mbps, smaller → 6 Mbps.
+    it 'caps output bitrate by target resolution (1080p → 20 Mbps)' do
+      job = make_job(src_width: 1920, src_height: 1080)
+      job.output_video_bitrate = 60_000_000  # high-bitrate source
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-b:v', '20000000' ])
+    end
+
+    it 'caps a 4K source at 40 Mbps even when the requested bitrate is higher' do
+      job = make_job(src_width: 3840, src_height: 2160)
+      job.output_video_bitrate = 100_000_000
+      args = described_class.encoder_args(job)
+      expect(args.each_cons(2).to_a).to include([ '-b:v', '40000000' ])
+    end
+
+    # Regression: `factor=2` (giving `bufsize = 4 × bitrate`) was the
+    # default — it lets the encoder spike to 4× target on the first
+    # segment after seek, which is what produced the 97 MB Aladdin first
+    # segment. Upstream defaults `factor=1` for H.264 Level <5.1 (i.e.
+    # the typical 1080p / 4K case). With factor=1, bufsize = 2 × bitrate,
+    # spike capped at ~2× target → segments stay close to steady-state.
+    it 'uses bufsize = 2 * bitrate by default (factor=1) so first segments do not spike' do
+      job = make_job
+      job.output_video_bitrate = 10_000_000
+      args = described_class.encoder_args(job)
+      pairs = args.each_cons(2).to_a
+      # factor=1 → rc_init_occupancy = bitrate, bufsize = 2 * bitrate
+      expect(pairs).to include([ '-rc_init_occupancy', '10000000' ])
+      expect(pairs).to include([ '-bufsize',           '20000000' ])
+    end
+
     # Regression: `-preset medium` produced 30-60s first-segment latency
     # on 4K sources (encoder pipeline takes ~6s of source frames to flush
     # the init segment at ~0.1× realtime; medium is way too slow on a

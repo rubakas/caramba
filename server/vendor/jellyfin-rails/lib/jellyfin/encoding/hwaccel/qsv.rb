@@ -136,12 +136,17 @@ module Jellyfin
           args
         end
 
-        # Larger CPB window for high-Level profiles (5.0+). Mirrors
-        # upstream's heuristic at cs:1626-1634.
+        # Upstream's CPB-size heuristic (EncodingHelper.cs:1626-1634):
+        # `factor=2` (large buffer, ~4× bitrate peak) ONLY for H.264
+        # Level 5.1+ jobs (i.e. above 4K). Default `factor=1`
+        # (~2× bitrate peak) for the typical 1080p / 4K H.264 Level 4-5.0
+        # range. Earlier draft defaulted to factor=2 which let the encoder
+        # spike to 4× target on the first segment after seek — 97 MB
+        # first segment vs ~15 MB steady state.
         def high_level_profile?(job)
           level = job.options.respond_to?(:video_level) ? job.options.video_level : nil
-          return true if level.nil?
-          level.to_f >= 5.0
+          return false if level.nil?
+          level.to_f >= 5.1
         end
 
         # CRF-equivalent value for the configured target codec. Reads the
