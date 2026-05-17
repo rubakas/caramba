@@ -2001,6 +2001,16 @@ body {
   cursor: default;
 }
 
+/* Player JS forces `position: relative` on root so its slot overlays anchor
+   correctly (player/src/player.ts:304), which overrides our React `position:
+   absolute; inset: 0` inline style and leaves the mount with no width/height —
+   it collapses to the <video>'s native pixel size, so a 640×352 DVDRip never
+   scales up. Width/height here aren't touched by the player JS. */
+.video-player-mount {
+  width: 100%;
+  height: 100%;
+}
+
 .video-player-video {
   width: 100%;
   height: 100%;

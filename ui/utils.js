@@ -44,9 +44,12 @@ export function premiereYear(premiered) {
   return premiered.slice(0, 4)
 }
 
-export function runtimeDisplay(runtimeSeconds) {
-  if (!runtimeSeconds) return null
-  const mins = Math.round(runtimeSeconds / 60)
+// `runtime` from Rails is stored in MINUTES (IMDB service divides
+// runtimeSeconds by 60; TVmaze returns minutes natively), so this
+// formatter takes minutes — not seconds.
+export function runtimeDisplay(runtimeMinutes) {
+  if (!runtimeMinutes) return null
+  const mins = Math.round(runtimeMinutes)
   if (mins >= 60) {
     const h = Math.floor(mins / 60)
     const m = mins % 60
