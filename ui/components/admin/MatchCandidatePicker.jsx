@@ -1,9 +1,13 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useToast } from '../../context/ToastContext'
 
 export default function MatchCandidatePicker({ api, pendingImport, onChange, onError }) {
-  const navigate = useNavigate()
+  const { showToast } = useToast()
   const [busy, setBusy] = useState(null) // 'confirm' | 'ignore' | 'research' | 'switch' | null
+  const defaultQuery = pendingImport.parsedYear
+    ? `${pendingImport.parsedName || ''} ${pendingImport.parsedYear}`.trim()
+    : (pendingImport.parsedName || '')
+  const [query, setQuery] = useState(defaultQuery)
   const otherKind = pendingImport.kind === 'shows' ? 'movies' : 'shows'
   const switchLabel = `Search as ${otherKind === 'movies' ? 'movie' : 'show'} instead`
 
@@ -13,11 +17,9 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
     setBusy('confirm')
     try {
       const result = await api.confirmPendingImport(pendingImport.id, externalId)
+      const name = result?.show?.name || result?.movie?.title || 'match'
+      showToast(`Matched "${name}"`, { type: 'success', duration: 4000 })
       onChange()
-      const slug = result?.show?.slug || result?.movie?.slug
-      if (slug) {
-        navigate(pendingImport.kind === 'movies' ? `/movies/${slug}` : `/shows/${slug}`)
-      }
     } catch (err) {
       onError(err.message || 'Failed to confirm match')
     } finally {
@@ -41,7 +43,9 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
   const handleResearch = async () => {
     setBusy('research')
     try {
-      await api.researchPendingImport(pendingImport.id)
+      const trimmed = query.trim()
+      const override = trimmed && trimmed !== defaultQuery.trim() ? trimmed : null
+      await api.researchPendingImport(pendingImport.id, override)
       onChange()
     } catch (err) {
       onError(err.message || 'Failed to re-search')
@@ -83,13 +87,35 @@ export default function MatchCandidatePicker({ api, pendingImport, onChange, onE
         <button type="button" className="topnav-btn" onClick={handleSwitchKind} disabled={!!busy}>
           {busy === 'switch' ? 'Switching…' : switchLabel}
         </button>
-        <button type="button" className="topnav-btn" onClick={handleResearch} disabled={!!busy}>
-          {busy === 'research' ? 'Searching…' : 'Re-search'}
-        </button>
         <button type="button" className="topnav-btn topnav-btn--danger" onClick={handleIgnore} disabled={!!busy}>
           {busy === 'ignore' ? 'Ignoring…' : 'Ignore'}
         </button>
       </header>
+
+      <form
+        onSubmit={(e) => { e.preventDefault(); handleResearch() }}
+        style={{ display: 'flex', gap: 8, marginBottom: 12 }}
+      >
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={pendingImport.kind === 'shows' ? 'Search query (e.g. show title)' : 'Search query (e.g. movie title and year)'}
+          disabled={!!busy}
+          style={{
+            flex: 1,
+            background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 8,
+            padding: '8px 12px',
+            color: 'inherit',
+            font: 'inherit',
+          }}
+        />
+        <button type="submit" className="topnav-btn" disabled={!!busy || !query.trim()}>
+          {busy === 'research' ? 'Searching…' : 'Re-search'}
+        </button>
+      </form>
 
       {pendingImport.error && (
         <div className="alert" style={{ marginBottom: 12 }}>

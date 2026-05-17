@@ -38,14 +38,18 @@ class LibraryWatcherService
     end
 
     # Re-query the external API for a given pending import and return the
-    # fresh candidate list. Used by the "Re-search" button.
-    def candidates_for(pending_import)
+    # fresh candidate list. Used by the "Re-search" button. When `query` is
+    # given (user typed a custom search string), it overrides the
+    # filename-derived query — useful when the filename is transliterated
+    # or otherwise unsearchable.
+    def candidates_for(pending_import, query: nil)
+      override = query.to_s.strip.presence
       case pending_import.kind
       when "shows"
-        tvmaze_candidates(pending_import.parsed_name.to_s)
+        tvmaze_candidates(override || pending_import.parsed_name.to_s)
       when "movies"
-        query = pending_import.parsed_year.present? ? "#{pending_import.parsed_name} #{pending_import.parsed_year}" : pending_import.parsed_name.to_s
-        imdb_candidates(query)
+        default = pending_import.parsed_year.present? ? "#{pending_import.parsed_name} #{pending_import.parsed_year}" : pending_import.parsed_name.to_s
+        imdb_candidates(override || default)
       else
         []
       end

@@ -1,10 +1,13 @@
 class Api::Admin::PendingImportsController < Api::Admin::BaseController
-  before_action :set_pending_import, only: [ :confirm, :ignore, :research, :switch_kind ]
+  before_action :set_pending_import, only: [ :confirm, :ignore, :research, :switch_kind, :rematch ]
 
   def index
     scope = PendingImport.all
     scope = scope.where(status: params[:status]) if params[:status].present?
-    render json: scope.order(created_at: :desc).map { |pi| serialize(pi) }
+    order = params[:status] == "confirmed" ? { updated_at: :desc } : { created_at: :desc }
+    scope = scope.order(order)
+    scope = scope.limit(params[:limit].to_i) if params[:limit].present? && params[:limit].to_i.positive?
+    render json: scope.map { |pi| serialize(pi) }
   end
 
   def confirm
@@ -30,9 +33,20 @@ class Api::Admin::PendingImportsController < Api::Admin::BaseController
   end
 
   def research
-    candidates = LibraryWatcherService.candidates_for(@pending_import)
+    candidates = LibraryWatcherService.candidates_for(@pending_import, query: params[:query])
     @pending_import.update!(candidates: candidates, status: "pending", error: nil)
     render json: serialize(@pending_import)
+  end
+
+  # Undo a confirmed match: destroy the resulting Show/Movie (cascades to
+  # episodes/playback_preferences/downloads) and re-open the import for
+  # matching with a fresh candidate list. Used when the admin picked the
+  # wrong candidate.
+  def rematch
+    PendingImportRematcher.rematch(@pending_import)
+    render json: serialize(@pending_import.reload)
+  rescue ActiveRecord::RecordInvalid => e
+    render json: { error: e.message }, status: :unprocessable_entity
   end
 
   # Flip a misclassified import between "shows" and "movies" and re-fetch

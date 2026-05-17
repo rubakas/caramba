@@ -224,14 +224,16 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
       if (path) qs.set('path', path)
       return get(`/api/admin/browse${qs.toString() ? `?${qs}` : ''}`)
     },
-    listPendingImports: (status) => {
+    listPendingImports: (status, { limit } = {}) => {
       const qs = new URLSearchParams()
       if (status) qs.set('status', status)
+      if (limit) qs.set('limit', String(limit))
       return get(`/api/admin/pending_imports${qs.toString() ? `?${qs}` : ''}`)
     },
     confirmPendingImport: (id, externalId) => post(`/api/admin/pending_imports/${id}/confirm`, { externalId }),
     ignorePendingImport: (id) => post(`/api/admin/pending_imports/${id}/ignore`),
-    researchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/research`),
+    researchPendingImport: (id, query) => post(`/api/admin/pending_imports/${id}/research`, query ? { query } : undefined),
+    rematchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/rematch`),
     switchPendingImportKind: (id, kind) => post(`/api/admin/pending_imports/${id}/switch_kind`, { kind }),
     triggerAdminScan: () => post('/api/admin/scan'),
   }

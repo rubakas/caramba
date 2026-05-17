@@ -3,24 +3,28 @@ import { useApi, useCapabilities } from '../context/ApiContext'
 import Navbar from '../components/Navbar'
 import FoldersManager from '../components/admin/FoldersManager'
 import PendingMatchesQueue from '../components/admin/PendingMatchesQueue'
+import RecentlyMatchedList from '../components/admin/RecentlyMatchedList'
 
 export default function Admin() {
   const api = useApi()
   const { canAdmin } = useCapabilities()
   const [folders, setFolders] = useState([])
   const [pendingImports, setPendingImports] = useState([])
+  const [confirmedImports, setConfirmedImports] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [scanning, setScanning] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      const [f, p] = await Promise.all([
+      const [f, p, c] = await Promise.all([
         api.listMediaFolders(),
         api.listPendingImports('pending'),
+        api.listPendingImports('confirmed', { limit: 10 }),
       ])
       setFolders(f || [])
       setPendingImports(p || [])
+      setConfirmedImports(c || [])
       setError(null)
     } catch (err) {
       setError(err.message || 'Failed to load admin data')
@@ -93,6 +97,12 @@ export default function Admin() {
               <PendingMatchesQueue
                 api={api}
                 imports={pendingImports}
+                onChange={refresh}
+                onError={setError}
+              />
+              <RecentlyMatchedList
+                api={api}
+                imports={confirmedImports}
                 onChange={refresh}
                 onError={setError}
               />

@@ -54,6 +54,7 @@ Rails.application.routes.draw do
           post :confirm
           post :ignore
           post :research
+          post :rematch
           post :switch_kind
         end
       end

@@ -117,4 +117,91 @@ class Api::Admin::PendingImportsControllerTest < ActionDispatch::IntegrationTest
     assert_nil body["error"]
     assert_equal 169, body["candidates"].first["externalId"]
   end
+
+  test "rematch destroys the linked Show and re-opens the import as pending" do
+    show_dir = File.join(@dir, "Wrong Show")
+    Dir.mkdir(show_dir)
+    show = Show.create!(name: "Wrong Show", media_path: show_dir, tvmaze_id: 999, imdb_id: "tt9999999")
+    pi = PendingImport.create!(
+      media_folder: @folder,
+      folder_path: show_dir,
+      kind: "shows",
+      parsed_name: "Wrong Show",
+      candidates: [ { "externalId" => 999, "name" => "Wrong Show" } ],
+      status: "confirmed",
+      chosen_external_id: "999"
+    )
+    stub_request(:get, %r{api\.tvmaze\.com/search/shows}).to_return(
+      status: 200,
+      body: [].to_json,
+      headers: { "Content-Type" => "application/json" }
+    )
+
+    assert_difference("Show.count", -1) do
+      post "/api/admin/pending_imports/#{pi.id}/rematch"
+    end
+    assert_response :success
+    body = JSON.parse(response.body)
+    assert_equal "pending", body["status"]
+    assert_nil body["chosenExternalId"]
+    refute Show.exists?(show.id)
+  end
+
+  test "rematch without a linked Show still resets the import" do
+    pi = PendingImport.create!(
+      media_folder: @folder,
+      folder_path: "#{@dir}/Orphan",
+      kind: "shows",
+      parsed_name: "Orphan",
+      status: "confirmed",
+      chosen_external_id: "1"
+    )
+    stub_request(:get, %r{api\.tvmaze\.com/search/shows}).to_return(status: 200, body: [].to_json, headers: { "Content-Type" => "application/json" })
+
+    post "/api/admin/pending_imports/#{pi.id}/rematch"
+    assert_response :success
+    assert_equal "pending", pi.reload.status
+    assert_nil pi.chosen_external_id
+  end
+
+  test "index confirmed orders by updated_at desc and respects limit" do
+    PendingImport.where(status: "confirmed").destroy_all
+    older = PendingImport.create!(media_folder: @folder, folder_path: "#{@dir}/A", kind: "shows", status: "confirmed")
+    middle = PendingImport.create!(media_folder: @folder, folder_path: "#{@dir}/B", kind: "shows", status: "confirmed")
+    newer = PendingImport.create!(media_folder: @folder, folder_path: "#{@dir}/C", kind: "shows", status: "confirmed")
+    older.update_columns(updated_at: 2.days.ago)
+    middle.update_columns(updated_at: 1.day.ago)
+    newer.update_columns(updated_at: 1.hour.ago)
+
+    get "/api/admin/pending_imports", params: { status: "confirmed", limit: 2 }
+    body = JSON.parse(response.body)
+    ids = body.map { |e| e["id"] }
+    assert_equal 2, ids.size
+    assert_equal newer.id, ids.first
+    assert_equal middle.id, ids.last
+    refute_includes ids, older.id
+  end
+
+  test "research with custom query searches that query instead of parsed_name" do
+    pi = PendingImport.create!(
+      media_folder: @folder,
+      folder_path: "#{@dir}/Priyatel nebizhchika (1997)",
+      kind: "shows",
+      parsed_name: "Priyatel nebizhchika",
+      candidates: []
+    )
+    stub = stub_request(:get, %r{api\.tvmaze\.com/search/shows})
+      .with(query: { q: "A Friend of the Deceased" })
+      .to_return(
+        status: 200,
+        body: [ { score: 9.0, show: { id: 42, name: "A Friend of the Deceased", image: nil, summary: "", genres: [], rating: { average: nil }, premiered: "1997-01-01", status: "Ended", externals: { imdb: "tt0119223" } } } ].to_json,
+        headers: { "Content-Type" => "application/json" }
+      )
+
+    post "/api/admin/pending_imports/#{pi.id}/research", params: { query: "A Friend of the Deceased" }
+    assert_response :success
+    body = JSON.parse(response.body)
+    assert_equal 42, body["candidates"].first["externalId"]
+    assert_requested(stub)
+  end
 end
