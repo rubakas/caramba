@@ -130,6 +130,9 @@ class TvmazeServiceTest < ActiveSupport::TestCase
     assert_equal 1, ep1.tvmaze_id
     assert_equal "2008-01-20", ep1.air_date
     assert_equal 58, ep1.runtime
+    # Regression: episode title must come from TVmaze, not be left as
+    # whatever the scanner derived from the filename (e.g. "mkv" or "S01E01").
+    assert_equal "Pilot", ep1.title
   end
 
   test "fetch_for_show returns false on API failure" do

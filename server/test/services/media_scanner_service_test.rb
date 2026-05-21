@@ -49,6 +49,15 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
     assert_equal "S02E05", result[:code]
   end
 
+  test "parse_episode falls back to code when filename has no title after code" do
+    # Regression: filenames like "Sex and the City - S01E01.mkv" used to
+    # produce title="mkv" because the extension wasn't stripped first.
+    result = MediaScannerService.parse_episode("Sex and the City - S01E01.mkv")
+    assert_equal 1, result[:season]
+    assert_equal 1, result[:episode]
+    assert_equal "S01E01", result[:title]
+  end
+
   test "scan creates episodes from filesystem" do
     s = shows(:no_metadata)
 
@@ -110,6 +119,26 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
     end
   end
 
+  test "scan preserves TVmaze-set title on re-scan" do
+    # Regression: after PendingImportConfirmer matches a show on TVmaze,
+    # episodes get real titles from the API. A subsequent re-scan must
+    # not clobber those with filename-derived junk like "mkv" or the code.
+    s = shows(:no_metadata)
+
+    Dir.mktmpdir do |dir|
+      s.update!(media_path: dir)
+      FileUtils.touch(File.join(dir, "Sex and the City - S01E01.mkv"))
+
+      MediaScannerService.scan(s)
+      ep = s.episodes.first
+      # Simulate the TVmaze sync that runs right after the scanner during confirm.
+      ep.update!(title: "Sex and the City", tvmaze_id: 12345)
+
+      MediaScannerService.scan(s)
+      assert_equal "Sex and the City", s.episodes.first.title
+    end
+  end
+
   test "collect_mkv_files handles release folder nesting" do
     Dir.mktmpdir do |dir|
       # No season dirs at root — but a release folder one level deep
@@ -121,6 +150,32 @@ class MediaScannerServiceTest < ActiveSupport::TestCase
       files = MediaScannerService.collect_mkv_files(dir)
       assert_equal 1, files.size
       assert files.first[1].end_with?("S01E01.mkv")
+    end
+  end
+
+  test "collect_mkv_files aggregates per-season release folders" do
+    # Regression: when each season is its own release folder (e.g.
+    # "Show.S01.1080p.WEBRip.[Ukr,Eng].x265-GROUP") none of them match
+    # the strict season-folder regex, so they're all treated as generic
+    # release folders. We must scan ALL of them, not stop at the first.
+    Dir.mktmpdir do |dir|
+      s1 = File.join(dir, "Show.S01.1080p.WEBRip.[Ukr,Eng].x265-GROUP")
+      s2 = File.join(dir, "Show.S02.1080p.WEBRip.[Ukr,Eng].x265-GROUP")
+      s3 = File.join(dir, "Show.S03.1080p.BDRip.[Ukr,Eng].x265-GROUP")
+      [ s1, s2, s3 ].each { |d| FileUtils.mkdir_p(d) }
+      FileUtils.touch(File.join(s1, "Show.S01E01.mkv"))
+      FileUtils.touch(File.join(s1, "Show.S01E02.mkv"))
+      FileUtils.touch(File.join(s2, "Show.S02E01.mkv"))
+      FileUtils.touch(File.join(s3, "Show.S03E01.mkv"))
+
+      files = MediaScannerService.collect_mkv_files(dir)
+      filenames = files.map { |_, f| f }.sort
+      assert_equal [
+        "Show.S01E01.mkv",
+        "Show.S01E02.mkv",
+        "Show.S02E01.mkv",
+        "Show.S03E01.mkv"
+      ], filenames
     end
   end
 end

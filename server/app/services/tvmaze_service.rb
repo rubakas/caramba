@@ -144,6 +144,7 @@ class TvmazeService
           next unless api_ep
 
           attrs = {}
+          attrs[:title] = api_ep["name"] if api_ep["name"].present?
           ep_summary = strip_html(api_ep["summary"])
           attrs[:description] = ep_summary if ep_summary.present?
           attrs[:air_date] = api_ep["airdate"] if api_ep["airdate"].present?

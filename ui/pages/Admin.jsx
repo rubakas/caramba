@@ -17,13 +17,14 @@ export default function Admin() {
 
   const refresh = useCallback(async () => {
     try {
-      const [f, p, c] = await Promise.all([
+      const [f, p, fail, c] = await Promise.all([
         api.listMediaFolders(),
         api.listPendingImports('pending'),
+        api.listPendingImports('failed'),
         api.listPendingImports('confirmed', { limit: 10 }),
       ])
       setFolders(f || [])
-      setPendingImports(p || [])
+      setPendingImports([...(fail || []), ...(p || [])])
       setConfirmedImports(c || [])
       setError(null)
     } catch (err) {

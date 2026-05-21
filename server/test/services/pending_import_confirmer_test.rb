@@ -114,6 +114,49 @@ class PendingImportConfirmerTest < ActiveSupport::TestCase
     assert_equal 2, show.episodes.count
   end
 
+  test "confirm shows succeeds when NFO title is non-Latin (Cyrillic)" do
+    # Regression: PendingImportConfirmer prefers nfo[:title] over the
+    # candidate name. When the NFO carries a Cyrillic title like
+    # "Секс і місто", the show's slug used to come out empty and
+    # `validates :slug, presence: true` flipped the import to "failed".
+    show_dir = File.join(@root, "Sex and the City (1998)")
+    Dir.mkdir(show_dir)
+    File.write(File.join(show_dir, "tvshow.nfo"), <<~XML)
+      <?xml version="1.0" encoding="utf-8" standalone="yes"?>
+      <tvshow>
+        <title>Секс і місто</title>
+        <originaltitle>Sex and the City</originaltitle>
+        <imdb_id>tt0159206</imdb_id>
+      </tvshow>
+    XML
+
+    stub_request(:get, %r{api\.tvmaze\.com/shows/676}).to_return(
+      status: 200,
+      body: { id: 676, name: "Sex and the City", externals: { imdb: "tt0159206" }, _embedded: { episodes: [] } }.to_json,
+      headers: { "Content-Type" => "application/json" }
+    )
+    stub_request(:get, %r{api\.tvmaze\.com/lookup/shows\?imdb=tt0159206}).to_return(
+      status: 200,
+      body: { id: 676, name: "Sex and the City", externals: { imdb: "tt0159206" }, _embedded: { episodes: [] } }.to_json,
+      headers: { "Content-Type" => "application/json" }
+    )
+
+    pi = PendingImport.create!(
+      media_folder: @folder,
+      folder_path: show_dir,
+      kind: "shows",
+      parsed_name: "Sex and the City",
+      candidates: [ { "externalId" => 676, "name" => "Sex and the City", "source" => "tvmaze" } ]
+    )
+
+    show = PendingImportConfirmer.confirm(pi, 676)
+
+    assert show.is_a?(Show)
+    assert_equal "Секс і місто", show.name
+    assert_equal "sex-and-the-city-1998", show.slug
+    assert_equal "confirmed", pi.reload.status
+  end
+
   test "confirm raises on blank external_id" do
     pi = PendingImport.create!(
       media_folder: @folder,

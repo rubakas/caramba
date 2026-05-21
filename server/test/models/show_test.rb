@@ -17,6 +17,16 @@ class ShowTest < ActiveSupport::TestCase
     assert_equal "the-wire", s.slug
   end
 
+  test "falls back to media_path basename when name has no slug-friendly chars" do
+    s = Show.create!(name: "Секс і місто", media_path: "/media/shows/Sex and the City (1998)")
+    assert_equal "sex-and-the-city-1998", s.slug
+  end
+
+  test "falls back to random slug when both name and media_path basename are unslugfiable" do
+    s = Show.create!(name: "Секс і місто", media_path: "/媒体/Секс")
+    assert_match(/\Ashow-[a-f0-9]{8}\z/, s.slug)
+  end
+
   test "generates unique slug when collision" do
     Show.create!(name: "Breaking Bad", media_path: "/media/bb2")
     s2 = Show.create!(name: "Breaking Bad", media_path: "/media/bb3")

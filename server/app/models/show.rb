@@ -25,7 +25,10 @@ class Show < ApplicationRecord
     return if slug.present?
     return unless name.present?
 
-    base = self.class.slugify(name)
+    base = self.class.slugify(name).presence ||
+      self.class.slugify(File.basename(media_path.to_s)).presence ||
+      "show-#{SecureRandom.hex(4)}"
+
     candidate = base
     counter = 1
     while self.class.exists?(slug: candidate)
@@ -36,6 +39,6 @@ class Show < ApplicationRecord
   end
 
   def self.slugify(text)
-    text.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-\z/, "")
+    text.to_s.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-|-\z/, "")
   end
 end

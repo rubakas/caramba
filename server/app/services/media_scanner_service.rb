@@ -39,15 +39,14 @@ class MediaScannerService
         season = parsed[:season] || season_from_path(full_path) || 1
         episode_num = parsed[:episode]
         code = format("S%02dE%02d", season, episode_num)
-        title = extract_title_after_code(filename) || code
 
         episode = Episode.find_or_initialize_by(show_id: show.id, code: code)
-        episode.assign_attributes(
-          title: title,
-          season_number: season,
-          episode_number: episode_num,
-          file_path: full_path
-        )
+        episode.season_number = season
+        episode.episode_number = episode_num
+        episode.file_path = full_path
+        if episode.tvmaze_id.blank? || episode.title.blank? || episode.title == code
+          episode.title = extract_title_after_code(filename) || code
+        end
         episode.save!
         TechProbeJob.perform_later(episode) if defined?(TechProbeJob)
         count += 1
@@ -83,11 +82,7 @@ class MediaScannerService
           next unless File.directory?(subdir)
           next if season_dir?(entry)
 
-          nested = collect_from_dir(subdir)
-          if nested.any?
-            files = nested
-            break
-          end
+          files.concat(collect_from_dir(subdir))
         end
       end
 
@@ -149,20 +144,19 @@ class MediaScannerService
     # the SxxExx code. Independent of FilenameParserService — that one
     # parses identifiers, this one extracts the episode title for display.
     def extract_title_after_code(filename)
-      m = filename.match(/S(\d{1,3})E(\d{1,3})/i)
+      base = filename.sub(/\.\w+\z/, "")
+      m = base.match(/S(\d{1,3})E(\d{1,3})/i)
       return nil unless m
-      after_code = filename[m.end(0)..]
+      after_code = base[m.end(0)..]
 
       if after_code.match?(/\A\s*-\s*/)
         title = after_code.sub(/\A\s*-\s*/, "")
-        title = title.sub(/\s*\([^)]*\)\s*\.\w+\z/i, "")
-        title = title.sub(/\.\w+\z/i, "")
+        title = title.sub(/\s*\([^)]*\)\s*\z/, "")
         return title.strip.presence
       end
 
       if after_code.match?(/\A\./)
         title = after_code.sub(/\A\./, "")
-        title = title.sub(/\.\w+\z/i, "")
         title = title.sub(/\.(?:\d{3,4}p|WEB[-.]?DL|WEBRip|BluRay|BDRip|BDRemux|HDTV|DVDRip|AMZN|REPACK).*\z/i, "")
         title = title.tr(".", " ").strip
         return nil if title.match?(/\A\d{3,4}p\z/i)
