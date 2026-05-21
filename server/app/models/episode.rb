@@ -5,6 +5,7 @@ class Episode < ApplicationRecord
   has_many :watch_histories, dependent: :destroy
   has_many :downloads, dependent: :destroy
   has_many :learning_subtitles, as: :media, dependent: :destroy
+  has_many :lessons, dependent: :destroy
 
   validates :code, presence: true, uniqueness: { scope: :show_id }
 

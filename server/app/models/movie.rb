@@ -5,6 +5,7 @@ class Movie < ApplicationRecord
   has_many :playback_preferences, dependent: :destroy
   has_many :downloads, dependent: :destroy
   has_many :learning_subtitles, as: :media, dependent: :destroy
+  has_many :lessons, dependent: :destroy
 
   validates :title, presence: true
   validates :slug, presence: true, uniqueness: true

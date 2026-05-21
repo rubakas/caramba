@@ -61,6 +61,30 @@ class Api::Learning::EpisodesControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1234, row["subtitle"]["byteSize"]
   end
 
+  test "exposes existing lessons on the episode row, most recent first" do
+    ep = episodes(:bb_s01e01)
+    ep.update_column(:tech_metadata, {
+      "subtitleStreams" => [
+        { "index" => 2, "codec" => "subrip", "language" => "eng", "isText" => true }
+      ]
+    }.to_json)
+    sub = LearningSubtitle.create!(
+      media: ep, stream_index: 2, language: "eng", format: "srt",
+      path: "/tmp/x.srt", byte_size: 100, extracted_at: Time.current
+    )
+    older = Lesson.create!(episode: ep, source_subtitle: sub, status: "ready", created_at: 1.day.ago)
+    Phrase.create!(lesson: older, position: 1, phrase: "a", start_ms: 0, end_ms: 1000)
+    newer = Lesson.create!(episode: ep, source_subtitle: sub, status: "ready", created_at: 1.minute.ago)
+    Phrase.create!(lesson: newer, position: 1, phrase: "b", start_ms: 0, end_ms: 1000)
+    Phrase.create!(lesson: newer, position: 2, phrase: "c", start_ms: 2000, end_ms: 3000)
+
+    get "/api/learning/episodes"
+    row = JSON.parse(response.body).find { |e| e["id"] == ep.id }
+    assert_equal [ newer.id, older.id ], row["lessons"].map { |l| l["id"] }
+    assert_equal 2, row["lessons"].first["phraseCount"]
+    assert_equal "ready", row["lessons"].first["status"]
+  end
+
   test "response shape uses camelCase" do
     ep = episodes(:bb_s01e01)
     ep.update_column(:tech_metadata, {

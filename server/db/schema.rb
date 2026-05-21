@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_21_182546) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_21_184724) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -89,6 +89,25 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_21_182546) do
     t.index ["media_type", "media_id"], name: "index_learning_subtitles_on_media"
   end
 
+  create_table "lessons", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.integer "episode_id"
+    t.text "error"
+    t.string "model"
+    t.integer "movie_id"
+    t.integer "prompt_version", default: 1, null: false
+    t.string "provider", default: "manual", null: false
+    t.string "source_language", default: "en", null: false
+    t.integer "source_subtitle_id", null: false
+    t.string "status", default: "pending", null: false
+    t.string "target_language", default: "uk", null: false
+    t.datetime "updated_at", null: false
+    t.index ["episode_id"], name: "index_lessons_on_episode_id"
+    t.index ["movie_id"], name: "index_lessons_on_movie_id"
+    t.index ["source_subtitle_id"], name: "index_lessons_on_source_subtitle_id"
+    t.index ["status"], name: "index_lessons_on_status"
+  end
+
   create_table "media_folders", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.boolean "enabled", default: true, null: false
@@ -137,6 +156,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_21_182546) do
     t.index ["folder_path"], name: "index_pending_imports_on_folder_path", unique: true
     t.index ["media_folder_id"], name: "index_pending_imports_on_media_folder_id"
     t.index ["status"], name: "index_pending_imports_on_status"
+  end
+
+  create_table "phrases", force: :cascade do |t|
+    t.text "clip_error"
+    t.string "clip_path"
+    t.string "clip_status", default: "pending", null: false
+    t.datetime "created_at", null: false
+    t.integer "end_ms", null: false
+    t.integer "lesson_id", null: false
+    t.text "meaning"
+    t.text "phrase", null: false
+    t.integer "position", null: false
+    t.integer "start_ms", null: false
+    t.text "translation"
+    t.datetime "updated_at", null: false
+    t.index ["lesson_id", "position"], name: "index_phrases_on_lesson_id_and_position", unique: true
+    t.index ["lesson_id"], name: "index_phrases_on_lesson_id"
   end
 
   create_table "playback_preferences", force: :cascade do |t|
@@ -330,7 +366,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_21_182546) do
   add_foreign_key "downloads", "episodes", on_delete: :cascade
   add_foreign_key "downloads", "movies", on_delete: :cascade
   add_foreign_key "episodes", "shows", on_delete: :cascade
+  add_foreign_key "lessons", "episodes", on_delete: :cascade
+  add_foreign_key "lessons", "learning_subtitles", column: "source_subtitle_id", on_delete: :cascade
+  add_foreign_key "lessons", "movies", on_delete: :cascade
   add_foreign_key "pending_imports", "media_folders", on_delete: :cascade
+  add_foreign_key "phrases", "lessons", on_delete: :cascade
   add_foreign_key "playback_preferences", "movies", on_delete: :cascade
   add_foreign_key "playback_preferences", "shows", on_delete: :cascade
   add_foreign_key "solid_queue_blocked_executions", "solid_queue_jobs", column: "job_id", on_delete: :cascade

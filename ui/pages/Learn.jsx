@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Navbar from '../components/Navbar'
 import { useApi } from '../context/ApiContext'
 
 export default function Learn() {
   const api = useApi()
+  const navigate = useNavigate()
   const [episodes, setEpisodes] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -72,6 +74,8 @@ export default function Learn() {
                   episode={ep}
                   busy={busyId === ep.id}
                   onPrepare={() => handlePrepare(ep)}
+                  onOpen={() => navigate(`/learn/new/${ep.id}`)}
+                  onOpenLesson={(lessonId) => navigate(`/learn/lessons/${lessonId}`)}
                 />
               ))}
             </section>
@@ -82,8 +86,9 @@ export default function Learn() {
   )
 }
 
-function EpisodeRow({ episode, busy, onPrepare }) {
+function EpisodeRow({ episode, busy, onPrepare, onOpen, onOpenLesson }) {
   const subReady = !!episode.subtitle
+  const lessons = episode.lessons || []
   return (
     <article
       style={{
@@ -92,45 +97,70 @@ function EpisodeRow({ episode, busy, onPrepare }) {
         borderRadius: 'var(--radius, 12px)',
         padding: '12px 16px',
         display: 'flex',
-        alignItems: 'center',
-        gap: 16,
+        flexDirection: 'column',
+        gap: 12,
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, color: 'var(--text-secondary, #a1a1a6)' }}>
-          {episode.showName} · {episode.code}
-          {episode.watched && (
-            <span style={{ marginLeft: 8, color: 'var(--green, #30D158)' }}>· watched</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, color: 'var(--text-secondary, #a1a1a6)' }}>
+            {episode.showName} · {episode.code}
+            {episode.watched && (
+              <span style={{ marginLeft: 8, color: 'var(--green, #30D158)' }}>· watched</span>
+            )}
+          </div>
+          <div style={{ fontSize: 16, marginTop: 2 }}>{episode.title || episode.code}</div>
+          {subReady && (
+            <div style={{ fontSize: 12, color: 'var(--text-tertiary, #888)', marginTop: 4 }}>
+              Subtitle ready · {(episode.subtitle.byteSize / 1024).toFixed(1)} KB · {episode.subtitle.language}
+            </div>
           )}
         </div>
-        <div style={{ fontSize: 16, marginTop: 2 }}>{episode.title || episode.code}</div>
-        {subReady && (
-          <div style={{ fontSize: 12, color: 'var(--text-tertiary, #888)', marginTop: 4 }}>
-            Subtitle ready · {(episode.subtitle.byteSize / 1024).toFixed(1)} KB · {episode.subtitle.language}
-          </div>
+        {subReady ? (
+          <button
+            type="button"
+            className="btn-choose-folder"
+            onClick={onOpen}
+            style={{ padding: '8px 16px' }}
+          >
+            {lessons.length > 0 ? 'New lesson' : 'Open lesson form'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="topnav-btn"
+            onClick={onPrepare}
+            disabled={busy}
+          >
+            {busy ? 'Preparing…' : 'Prepare lesson'}
+          </button>
         )}
       </div>
-      {subReady ? (
-        <span
-          style={{
-            fontSize: 13,
-            padding: '6px 12px',
-            borderRadius: 8,
-            background: 'rgba(48, 209, 88, 0.15)',
-            color: 'var(--green, #30D158)',
-          }}
-        >
-          Subtitle ready
-        </span>
-      ) : (
-        <button
-          type="button"
-          className="topnav-btn"
-          onClick={onPrepare}
-          disabled={busy}
-        >
-          {busy ? 'Preparing…' : 'Prepare lesson'}
-        </button>
+
+      {lessons.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 2 }}>
+          {lessons.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              onClick={() => onOpenLesson(l.id)}
+              style={{
+                background: 'rgba(10, 132, 255, 0.12)',
+                color: 'var(--accent, #0A84FF)',
+                border: '1px solid rgba(10, 132, 255, 0.25)',
+                borderRadius: 16,
+                padding: '4px 12px',
+                fontSize: 12,
+                cursor: 'pointer',
+                font: 'inherit',
+              }}
+              title={new Date(l.createdAt).toLocaleString()}
+            >
+              Lesson #{l.id} · {l.phraseCount} phrase{l.phraseCount === 1 ? '' : 's'}
+              {l.status !== 'ready' && ` · ${l.status}`}
+            </button>
+          ))}
+        </div>
       )}
     </article>
   )

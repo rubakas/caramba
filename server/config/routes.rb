@@ -62,8 +62,9 @@ Rails.application.routes.draw do
     end
 
     namespace :learning do
-      resources :episodes, only: [ :index ]
+      resources :episodes,  only: [ :index ]
       resources :subtitles, only: [ :create, :show ]
+      resources :lessons,   only: [ :create, :show ]
     end
   end
 

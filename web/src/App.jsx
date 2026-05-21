@@ -14,6 +14,8 @@ import MovieShow from '@caramba/ui/pages/MovieShow'
 import Settings from '@caramba/ui/pages/Settings'
 import Admin from '@caramba/ui/pages/Admin'
 import Learn from '@caramba/ui/pages/Learn'
+import LessonNew from '@caramba/ui/pages/LessonNew'
+import Lesson from '@caramba/ui/pages/Lesson'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 // Check if running in Capacitor (Android/iOS native app)
@@ -268,6 +270,8 @@ export default function App() {
               } />
               <Route path="/admin" element={<Admin />} />
               <Route path="/learn" element={<Learn />} />
+              <Route path="/learn/new/:episodeId" element={<LessonNew />} />
+              <Route path="/learn/lessons/:id" element={<Lesson />} />
             </Routes>
           </BrowserRouter>
           <VideoPlayer />

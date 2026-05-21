@@ -241,6 +241,8 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
     listLearningEpisodes: () => get('/api/learning/episodes'),
     prepareSubtitle: (episodeId) => post('/api/learning/subtitles', { episodeId }),
     getSubtitle: (id) => get(`/api/learning/subtitles/${id}`),
+    createLesson: (payload) => post('/api/learning/lessons', payload),
+    getLesson: (id) => get(`/api/learning/lessons/${id}`),
   }
 }
 

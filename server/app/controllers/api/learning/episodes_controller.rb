@@ -6,7 +6,7 @@ class Api::Learning::EpisodesController < Api::Learning::BaseController
   def index
     scope = Episode
       .where.not(file_path: nil)
-      .includes(:show, :learning_subtitles)
+      .includes(:show, :learning_subtitles, lessons: :phrases)
       .order(watched: :desc, last_watched_at: :desc, season_number: :asc, episode_number: :asc)
 
     payload = []
@@ -59,7 +59,18 @@ class Api::Learning::EpisodesController < Api::Learning::BaseController
         format: eng_sub.format,
         byteSize: eng_sub.byte_size,
         extractedAt: eng_sub.extracted_at
-      }
+      },
+      lessons: ep.lessons.sort_by(&:created_at).reverse.map { |l| serialize_lesson(l) }
+    }
+  end
+
+  def serialize_lesson(lesson)
+    {
+      id: lesson.id,
+      status: lesson.status,
+      provider: lesson.provider,
+      phraseCount: lesson.phrases.size,
+      createdAt: lesson.created_at
     }
   end
 end
