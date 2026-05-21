@@ -13,6 +13,7 @@ import Movies from '@caramba/ui/pages/Movies'
 import MovieShow from '@caramba/ui/pages/MovieShow'
 import Settings from '@caramba/ui/pages/Settings'
 import Admin from '@caramba/ui/pages/Admin'
+import Learn from '@caramba/ui/pages/Learn'
 import UpdatePrompt from '@caramba/ui/components/UpdatePrompt'
 
 const Playground = import.meta.env.DEV ? lazy(() => import('@caramba/ui/pages/Playground')) : null
@@ -131,6 +132,7 @@ export default function App() {
                 />
               } />
               <Route path="/admin" element={<Admin />} />
+              <Route path="/learn" element={<Learn />} />
               {import.meta.env.DEV && Playground && (
                 <Route path="/playground" element={<Suspense fallback={null}><Playground /></Suspense>} />
               )}

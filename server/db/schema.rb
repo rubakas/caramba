@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_05_03_160001) do
+ActiveRecord::Schema[8.1].define(version: 2026_05_21_182546) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -72,6 +72,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_05_03_160001) do
     t.integer "watched", default: 0, null: false
     t.index ["show_id", "code"], name: "index_episodes_on_show_id_and_code", unique: true
     t.index ["show_id"], name: "index_episodes_on_show_id"
+  end
+
+  create_table "learning_subtitles", force: :cascade do |t|
+    t.integer "byte_size", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "extracted_at", null: false
+    t.string "format", null: false
+    t.string "language"
+    t.integer "media_id", null: false
+    t.string "media_type", null: false
+    t.string "path", null: false
+    t.integer "stream_index", null: false
+    t.datetime "updated_at", null: false
+    t.index ["media_type", "media_id", "stream_index"], name: "index_learning_subtitles_on_media_and_stream", unique: true
+    t.index ["media_type", "media_id"], name: "index_learning_subtitles_on_media"
   end
 
   create_table "media_folders", force: :cascade do |t|

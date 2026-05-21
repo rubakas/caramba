@@ -60,6 +60,11 @@ Rails.application.routes.draw do
       end
       post "scan", to: "scans#create"
     end
+
+    namespace :learning do
+      resources :episodes, only: [ :index ]
+      resources :subtitles, only: [ :create, :show ]
+    end
   end
 
   # SPA catch-all: serve React index.html for all non-API routes.

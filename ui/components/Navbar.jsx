@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { refractive } from '../config/refractive'
 import { useGlassConfig } from '../config/useGlassConfig'
 import { useCapabilities } from '../context/ApiContext'
+import { useLearningMode } from '../hooks/useLearningMode'
 
 const PlayIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -15,10 +16,12 @@ export default function Navbar({ active, actions, rightContent }) {
   const location = useLocation()
   const navbarGlass = useGlassConfig('navbar')
   const { hasSettings, hasPlayground, canAdmin } = useCapabilities()
+  const [learningModeEnabled] = useLearningMode()
 
   const links = [
     { label: 'Shows', path: '/' },
     { label: 'Movies', path: '/movies' },
+    ...(learningModeEnabled ? [{ label: 'Learn', path: '/learn' }] : []),
     ...(canAdmin ? [{ label: 'Admin', path: '/admin' }] : []),
     ...(hasSettings ? [{ label: 'Settings', path: '/settings' }] : []),
     ...(import.meta.env.DEV && hasPlayground ? [{ label: 'Playground', path: '/playground' }] : []),

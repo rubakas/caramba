@@ -4,6 +4,7 @@ import ServerDiscovery from '../components/ServerDiscovery'
 import { defaultDiscover } from '../lib/discovery'
 import { useApi, useCapabilities } from '../context/ApiContext'
 import { useDebugPlayback } from '../hooks/useDebugPlayback'
+import { useLearningMode } from '../hooks/useLearningMode'
 
 /**
  * Settings page. Shared between three runtimes:
@@ -37,6 +38,7 @@ export default function Settings({
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
   const [debugPlaybackEnabled, setDebugPlaybackEnabled] = useDebugPlayback()
+  const [learningModeEnabled, setLearningModeEnabled] = useLearningMode()
 
   // Android TV API URL state
   const [androidApiUrlInput, setAndroidApiUrlInput] = useState(apiUrl || 'http://localhost:3001')
@@ -177,6 +179,28 @@ export default function Settings({
             </div>
           </section>
         )}
+
+        {/* Learning mode: surface /learn route in Navbar */}
+        <section className="settings-section">
+          <h2 className="settings-section-title">Learning mode</h2>
+          <p className="settings-help">
+            Turn watched episodes into English-language lessons with phrase translations and short video clips. Adds a "Learn" tab to the navigation.
+          </p>
+          <div className="settings-form">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+              <span style={{ flex: 1 }}>Enable learning mode</span>
+              <span className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={learningModeEnabled}
+                  onChange={(e) => setLearningModeEnabled(e.target.checked)}
+                />
+                <span className="toggle-switch-track" />
+                <span className="toggle-switch-thumb" />
+              </span>
+            </label>
+          </div>
+        </section>
 
         {/* Debug: playback overlay toggle */}
         <section className="settings-section">

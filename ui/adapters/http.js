@@ -236,6 +236,11 @@ export function createHttpAdapter(baseUrl = 'http://localhost:3000', { buildProf
     rematchPendingImport: (id) => post(`/api/admin/pending_imports/${id}/rematch`),
     switchPendingImportKind: (id, kind) => post(`/api/admin/pending_imports/${id}/switch_kind`, { kind }),
     triggerAdminScan: () => post('/api/admin/scan'),
+
+    // Learning mode
+    listLearningEpisodes: () => get('/api/learning/episodes'),
+    prepareSubtitle: (episodeId) => post('/api/learning/subtitles', { episodeId }),
+    getSubtitle: (id) => get(`/api/learning/subtitles/${id}`),
   }
 }
 
